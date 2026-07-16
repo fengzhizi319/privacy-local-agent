@@ -1,0 +1,136 @@
+# 自定义 Helm values 示例
+# 用途：在默认 values 基础上启用监控、调整资源、指定镜像仓库，并保留 TLS/认证由外部 Secret 注入。
+
+replicaCount: 2
+
+namespace:
+  create: false
+
+# 选择 core 轻量镜像；如需完整分类可改为 ml
+flavor: core
+
+image:
+  repository: myregistry.example.com/privacy-local-agent
+  pullPolicy: IfNotPresent
+  # 留空时默认使用 Chart.appVersion
+  tag: ""
+
+imagePullSecrets:
+  - name: regcred
+
+nameOverride: ""
+fullnameOverride: "pla"
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+podAnnotations:
+  prometheus.io/scrape: "true"
+  prometheus.io/port: "8079"
+  prometheus.io/path: "/metrics"
+
+service:
+  type: ClusterIP
+  restPort: 8079
+  grpcPort: 50051
+  exposeGrpc: true
+  annotations: {}
+
+agent:
+  logLevel: info
+  logFormat: json
+  profile: |
+    server:
+      rest_host: "0.0.0.0"
+      rest_port: 8079
+      grpc_host: "0.0.0.0"
+      grpc_port: 50051
+    privacy:
+      default_epsilon: 1.0
+      default_delta: 1e-6
+      default_k: 5
+
+# 安全开关：启用安全模块，但 TLS 与 Auth Secret 由外部管理
+security:
+  enabled: true
+  tls:
+    enabled: true
+    existingSecret: pla-tls
+    certFile: /certs/tls.crt
+    keyFile: /certs/tls.key
+  auth:
+    enabled: true
+    # Secret 中需包含 key 为 api-keys.json 的数据
+    apiKeysSecret: pla-apikeys
+  publicPaths:
+    - /health
+
+resources:
+  limits:
+    cpu: 2000m
+    memory: 2Gi
+  requests:
+    cpu: 500m
+    memory: 512Mi
+
+probes:
+  liveness:
+    path: /health
+    port: http
+    initialDelaySeconds: 10
+    periodSeconds: 10
+    failureThreshold: 3
+  readiness:
+    path: /health
+    port: http
+    initialDelaySeconds: 5
+    periodSeconds: 5
+    failureThreshold: 3
+
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 70
+  targetMemoryUtilizationPercentage: 80
+  behavior: {}
+
+ingress:
+  enabled: false
+  className: nginx
+  annotations:
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+  hosts:
+    - host: pla.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    - secretName: pla-tls
+      hosts:
+        - pla.example.com
+
+networkPolicy:
+  enabled: true
+  ingress:
+    from:
+      - podSelector:
+          matchLabels:
+            app.kubernetes.io/part-of: privacy-local-agent
+
+serviceMonitor:
+  enabled: true
+  namespace: ""
+  interval: 30s
+  scrapeTimeout: 10s
+  labels: {}
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+extraEnv: []
+extraVolumes: []
+extraVolumeMounts: []

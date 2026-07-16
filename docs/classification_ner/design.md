@@ -1,79 +1,132 @@
-# 本地轻量级 Small-NER 技术设计方案 (Technical Design)
+# 本地轻量级 Small-NER 分类定级设计文档
 
-## 1. 整体架构与模块接口 (Architecture & Interface)
+## 1. 概述
+
+本文档定义 `privacy-local-agent` 第二层分类引擎——本地轻量级命名实体识别（Small-NER）的技术架构、算法原理与实现细节。该引擎对半结构化医疗文本进行毫秒级实体抽取，作为规则引擎的补充层。
+
+## 2. 设计目标
+
+- 精准识别中文医学文本中的疾病/症状、药物、手术/操作、解剖部位等实体。
+- 提供 ONNX 极速模式与 ModelScope 官方管道模式两种运行方式。
+- 与规则引擎和 LLM 协同，形成递进式分类漏斗。
+- 实现联动定级升级机制。
+- 在极简环境下提供无外部依赖的纯 Python BERT Tokenizer。
+
+## 3. 算法原理
+
+### 3.1 命名实体识别（NER）
+
+NER 是从非结构化文本中定位并分类命名实体的任务。模型基于 Transformer 编码器，通过 token-level 分类预测每个 token 的 BIO 标签：
+
+- **B-XXX**：实体 XXX 的开始。
+- **I-XXX**：实体 XXX 的内部。
+- **O**：非实体。
+
+模型输出经 BIO 解析器合并为完整实体，并附带置信度分数。
+
+### 3.2 双运行模式
+
+| 模式 | 推理引擎 | 特点 |
+|---|---|---|
+| ONNX 极速模式 | `onnxruntime` + 纯 Python 分词器 | 轻量、低延迟、低显存 |
+| ModelScope 管道模式 | `modelscope` 官方 Transformers Pipeline | 官方高精度、开箱即用 |
+
+### 3.3 模型底座
+
+采用达摩院 RaNER 医疗实体识别微调模型 `iic/nlp_raner_named-entity-recognition_chinese-base-cmeee`（ModelScope），针对中文医学文本进行领域优化。
+
+### 3.4 联动定级升级
+
+NER 结果送回 `ClassificationAPI` 后触发升级策略：
+
+- 敏感病种（如 HIV、精神分裂）与 PII（姓名/身份证）同段落出现 → 升级为 **L4**。
+- 基因突变/检测实体出现 → 标记为 **L5**，并触发 `needs_human_review`。
+
+## 4. 架构设计
 
 ```mermaid
 flowchart TD
     Input[半结构化文本 text] --> Tokenizer[SimpleChineseBertTokenizer 分词]
     Tokenizer --> Encode[生成 input_ids, attention_mask, token_type_ids]
-    
+
     Encode --> Init{ort.InferenceSession 可用?}
     Init -->|Yes| ONNX[ONNX 模型推理]
     Init -->|No / Exception| Fallback[降级回 NoOpSmallNerEngine]
-    
+
     ONNX --> Argmax[Softmax 归一化并提取最可能标签与概率]
     Argmax --> Parse[BIO 实体解析器合并相邻 B- 与 I- 标记]
     Parse --> Map[映射到通用敏感标签类型]
-    
+
     Map --> Success[返回 entities 列表]
     Fallback --> Success
 ```
 
-## 2. 纯 Python BERT 分词器 (SimpleChineseBertTokenizer)
+## 5. 纯 Python BERT 分词器
 
-由于标准的 `transformers` 库极其沉重且难以在受限运行环境中直接拉起，为了实现毫秒级的纯 CPU/GPU 推理，我们需要自主实现纯 Python 的 BERT Tokenizer。
+`SimpleChineseBertTokenizer` 基于 `vocab.txt` 实现：
 
-### 2.1 算法设计
-1. **词表加载**：从 `vocab.txt` 中读取所有的 token（每行一个），建立字符串到索引 `token_to_id` 的 dict 字典。
-2. **字符级切分**：
-   - 对于中文字符，直接按字（Char-level）切分为单个字符。
-   - 对于英文字符或数字，执行 WordPiece 切分，未命中的词用 `[UNK]` 代替。
-3. **序列封装**：
-   - 前部自动拼接首标记 `[CLS]`（ID 通常为 101）。
-   - 尾部拼接截断/结束标记 `[SEP]`（ID 通常为 102）。
-   - 对不足 `max_length` 的序列进行 `[PAD]`（ID 为 0）填充，并同步生成 `attention_mask` (有内容处为 1，PAD 处为 0) 与 `token_type_ids`（全 0）。
+1. **词表加载**：建立字符串到索引 `token_to_id` 的字典。
+2. **字符级切分**：中文字符按字切分；英文/数字执行 WordPiece 切分，未命中词用 `[UNK]` 代替。
+3. **序列封装**：首部拼接 `[CLS]`，尾部拼接 `[SEP]`，不足 `max_length` 处用 `[PAD]` 填充，并生成 `attention_mask` 与 `token_type_ids`。
 
-## 3. ONNX 推理与 BIO 解析
+## 6. ONNX 推理与 BIO 解析
 
-### 3.1 推理输入输出
-- **Session 输入**：
-  - `input_ids`: 形状为 `[1, sequence_length]` 的整数张量。
-  - `attention_mask`: 形状为 `[1, sequence_length]` 的整数张量。
-  - `token_type_ids`: 形状为 `[1, sequence_length]` 的整数张量。
-- **Session 输出**：
-  - `logits`: 形状为 `[1, sequence_length, num_labels]` 的浮点张量。
+### 6.1 输入输出
 
-### 3.2 概率与预测计算
-使用 `numpy` 执行运算：
-1. **Softmax 归一化**：
-   $$P_{i,j} = \frac{e^{z_{i,j} - \max(z_i)}}{\sum e^{z_{i,k} - \max(z_i)}}$$
-2. **Argmax 选取**：取出每个 token 概率最高对应的 label 索引。
+- **输入**：`input_ids`、`attention_mask`、`token_type_ids`，形状 `[1, sequence_length]`。
+- **输出**：`logits`，形状 `[1, sequence_length, num_labels]`。
 
-### 3.3 BIO 实体合并算法 (BIO Entity Parser)
-遍历 token 序列，利用状态机根据 BIO（Begin, Inside, Outside）标签逻辑将字符序列合并为实体：
-- 遇到 `B-xxx`：如果当前有正在构建的实体，将其保存并结束。初始化一个类型为 `xxx` 的新实体，其文本为当前字符。
-- 遇到 `I-xxx`：如果当前有正在构建的实体且类型与 `xxx` 一致，将当前字符追加到该实体文本中，置信度取最小概率（以保证最保守评估）。如果类型不一致或当前无实体，结束前一实体。
-- 遇到 `O`：如果当前有正在构建的实体，将其保存并结束。
+### 6.2 概率计算
 
-## 4. 敏感标签映射 (Label Mapping)
+使用 numpy 执行 softmax：
 
-由于 CMEEE / 达摩院 RaNER 医疗实体类型为英文简称，我们在识别出实体后，会自动映射到统一的安全规则引擎可识别实体：
-- `dis` (疾病) / `sym` (症状) $\rightarrow$ `MEDICAL_DISEASE`
-- `dru` (药物) $\rightarrow$ `MEDICATION`
-- `pro` (手术/操作) $\rightarrow$ `SURGERY`
-- `bod` (解剖部位) $\rightarrow$ `BODY_PART`
+```
+P_{i,j} = exp(z_{i,j} - max(z_i)) / sum(exp(z_{i,k} - max(z_i)))
+```
 
-在 `ClassificationAPI` 执行 `_run_small_ner` 时，将 NER 结果送至打标判定：
-1. **同段落敏感病升级**：若某列或文本段落中抽取出姓名（PII）且同时命中特定敏感传染病/精神疾病标签，自动将定级提升至 **L4**。
-2. **基因暗示敏感病升级**：若抽取出基因突变或突变检测实体，定级提升至 **L5**，并触发 `needs_human_review = True` 送人人工审计队列。
+再通过 argmax 取出每个 token 的预测标签。
 
-## 6. ModelScope 官方推理管道模式设计 (ModelScope Pipeline Mode)
+### 6.3 BIO 实体合并
 
-除了超轻量、低延迟的 ONNX 推理模式，系统还提供了利用 ModelScope 官方 Transformers 管道加载并执行模型的方案：
-- **Inference Pipeline**：
-  - 初始化时，通过 `modelscope.pipelines.pipeline` 初始化 `Tasks.named_entity_recognition` 任务，自动识别系统中的 GPU 或 CPU 设备。
-  - **动态下载与加载**：如果指定的模型 ID 未加载，ModelScope SDK 会自动触发在魔搭社区高速同步文件到本地 `.models/raner_cmeee`，并就地加载权重。
-- **实体解析与标准化**：
-  - ModelScope 管道提取输出格式为结构化字典：`{'output': [{'type': 'dis', 'span': '急性心肌梗死'}]}`。
-  - 解析器自动迭代输出集合，利用相同的 CMEEE 简称到系统安全等级字典（`dis/sym -> MEDICAL_DISEASE` 等）进行映射，归一化输出字段列表，保持定级逻辑在两个推理引擎间 100% 对齐。
+遍历 token 序列，利用状态机合并实体：
 
+- `B-xxx`：结束当前实体，开启类型为 `xxx` 的新实体。
+- `I-xxx`：若当前实体类型与 `xxx` 一致，追加字符；否则结束当前实体。
+- `O`：结束当前实体。
+
+实体置信度取所含 token 概率的最小值（保守估计）。
+
+## 7. 敏感标签映射
+
+CMEEE / RaNER 实体类型映射到统一安全标签：
+
+| 原始类型 | 映射标签 |
+|---|---|
+| `dis`（疾病）/ `sym`（症状） | `MEDICAL_DISEASE` |
+| `dru`（药物） | `MEDICATION` |
+| `pro`（手术/操作） | `SURGERY` |
+| `bod`（解剖部位） | `BODY_PART` |
+
+## 8. ModelScope 管道模式
+
+- 通过 `modelscope.pipelines.pipeline` 初始化 `Tasks.named_entity_recognition` 任务。
+- 自动识别 GPU 或 CPU 设备。
+- 若模型未加载，自动同步到本地 `.models/raner_cmeee`。
+- 输出结构化字典后使用相同标签映射逻辑归一化。
+
+## 9. 非功能设计
+
+| 维度 | 要求 |
+|---|---|
+| 延迟 | 单次推理 ≤ 30ms |
+| 包体积 | ONNX 模型文件 ≤ 100MB |
+| 兼容性 | ONNX 模式无 `transformers` 依赖 |
+| 鲁棒性 | 缺失模型时优雅降级 |
+
+## 10. 测试策略
+
+- ONNX 与 ModelScope 模式实体提取测试。
+- BIO 解析器状态机测试。
+- 联动升级策略（L4/L5）测试。
+- 优雅降级路径测试。
+- 延迟与模型体积基准测试。

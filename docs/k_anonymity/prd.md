@@ -1,15 +1,16 @@
-# 数据集级 K-匿名（K-Anonymity）PRD
+# 数据集级 K-匿名（K-Anonymity）产品设计 PRD
 
-## 1. 背景
+## 1. 概述
 
-当前 `/v1/privacy/k_anonymize/record` 仅支持单记录启发式泛化，无法保证整张表的 K-匿名性。攻击者仍可能通过多条记录的组合重识别个体。因此需要新增数据集级 K-匿名接口，采用 Mondrian 多维分区算法。
+本文档定义 `privacy-local-agent` 数据集级 K-匿名模块的产品需求与验收标准。该模块通过泛化准标识符（QI）降低数据重识别风险，确保发布或共享的数据集中每个等价组至少包含 `k` 条记录。
 
-## 2. 目标
+## 2. 设计目标
 
-- 提供 REST `/v1/privacy/k_anonymize/table` 与 gRPC `KAnonymizeTable`。
-- 对输入表按准标识符（QI）进行 Mondrian 分区，确保每个等价组大小 ≥ k。
-- 对数值型 QI 输出区间泛化（如 `[25-30]`），对分类型 QI 输出取值集合。
+- 提供 REST `/v1/privacy/k_anonymize/table` 与 gRPC `KAnonymizeTable` 接口。
+- 对输入表按准标识符进行 Mondrian 多维分区，确保每个等价组大小 ≥ k。
+- 对数值型 QI 输出区间泛化，对分类型 QI 输出取值集合。
 - 保留非 QI 敏感字段不变，便于下游分析。
+- 同时保留单记录启发式泛化接口，用于轻量场景。
 
 ## 3. 功能需求
 
@@ -18,13 +19,14 @@
 | KANO-TABLE-1 | 输入为 `rows`（记录列表）、`qi_cols`（QI 列名）、`k`（匿名阈值）。 |
 | KANO-TABLE-2 | 支持数值型 QI 与分类型 QI 的混合。 |
 | KANO-TABLE-3 | 算法采用 Mondrian：递归按最大跨度维度中位数分区，直到每组大小 < 2k 或无法再分。 |
-| KANO-TABLE-4 | 输出等价组内 QI 泛化结果，当组内某一 QI 取值全部相同时，应保持原值以减少信息损失；非 QI 字段原样保留。 |
-| KANO-TABLE-5 | 提供 `max_depth` 参数限制递归深度，防止极端数据导致过泛化。 |
-| KANO-TABLE-6 | 当输入记录数 < k 时返回错误，避免无法 anonymize。 |
+| KANO-TABLE-4 | 输出等价组内 QI 泛化结果，当组内某一 QI 取值全部相同时保持原值；非 QI 字段原样保留。 |
+| KANO-TABLE-5 | 提供 `max_depth` 参数限制递归深度，防止过泛化。 |
+| KANO-TABLE-6 | 当输入记录数 < k 时返回错误，避免输出不满足 K-匿名条件的数据集。 |
+| KANO-RECORD-1 | 保留单记录启发式泛化接口，用于轻量场景。 |
 
 ## 4. 接口定义
 
-### REST
+### 4.1 REST
 
 ```http
 POST /v1/privacy/k_anonymize/table
@@ -41,7 +43,7 @@ Content-Type: application/json
 }
 ```
 
-### gRPC
+### 4.2 gRPC
 
 ```protobuf
 rpc KAnonymizeTable (KAnonymizeTableRequest) returns (KAnonymizeTableResponse);

@@ -1,24 +1,30 @@
-# privacy-local-agent 生产安全加固设计文档
+# 生产安全加固设计文档
 
 > Scope: P0 — TLS/mTLS、认证鉴权、速率限制。
-> 对应 PRD: `docs/production_security/prd.md`
 
----
+## 1. 概述
 
-## 1. 威胁模型
+本文档定义 `privacy-local-agent` 生产安全模块的技术架构、设计原理与实现细节。该模块为 REST 与 gRPC 双协议提供可选的传输安全、身份认证、权限鉴权与速率限制能力。
+
+## 2. 设计目标
+
+- 为 REST/gRPC 提供可选的服务器端 TLS，gRPC 额外支持可选的 mTLS。
+- 区分内部服务与外部服务两类身份，按最小权限原则控制接口访问。
+- 基于调用者身份与接口路径/方法进行速率限制。
+- 所有安全能力默认关闭，通过环境变量显式开启。
+
+## 3. 威胁模型与缓解措施
 
 | 威胁 | 缓解措施 |
 |---|---|
-| 链路上窃听隐私请求/响应 | REST/gRPC 服务端 TLS 加密。 |
-| 中间人篡改请求 | TLS + 客户端校验服务器证书；mTLS 模式下同时校验客户端证书。 |
-| 未授权调用消耗隐私预算 | API Key / mTLS 认证 + 接口级 scope 鉴权。 |
-| 凭证泄露后横向越权 | 外部服务使用最小 scope；内部服务使用独立内部 Key。 |
-| 暴力调用导致资源耗尽/预算耗尽 | 基于身份的速率限制。 |
-| K8s 探针因认证失败被误判为不健康 | `/health` 与 `Health` 默认匿名、不限速。 |
+| 链路上窃听隐私请求/响应 | REST/gRPC 服务端 TLS 加密 |
+| 中间人篡改请求 | TLS + 客户端校验服务器证书；mTLS 同时校验客户端证书 |
+| 未授权调用消耗隐私预算 | API Key / mTLS 认证 + 接口级 scope 鉴权 |
+| 凭证泄露后横向越权 | 外部服务使用最小 scope；内部服务使用独立内部 Key |
+| 暴力调用导致资源/预算耗尽 | 基于身份的速率限制 |
+| K8s 探针因认证失败被误判 | `/health` 与 `Health` 默认匿名、不限速 |
 
----
-
-## 2. 总体架构
+## 4. 总体架构
 
 ```text
 ┌─────────────────────────────────────────────────────────────┐
@@ -37,18 +43,16 @@
 安全层对 REST 与 gRPC 共享同一套配置与身份模型：
 
 - `SecuritySettings`：统一从环境变量加载。
-- `Identity`：表示调用者身份（internal/external + name + scopes）。
+- `Identity`：调用者身份（internal/external + name + scopes）。
 - `tls.py`：为 Uvicorn 与 gRPC server 构造 TLS 参数。
 - `auth.py`：FastAPI dependency + gRPC interceptor。
 - `ratelimit.py`：FastAPI dependency + gRPC interceptor。
 
----
+## 5. 模块设计
 
-## 3. 模块设计
+### 5.1 `security/config.py`
 
-### 3.1 `security/config.py`
-
-使用 Pydantic v2 `BaseModel` 手动解析环境变量（不引入额外 `pydantic-settings` 依赖）。
+使用 Pydantic v2 `BaseModel` 解析环境变量。
 
 核心字段：
 
@@ -76,14 +80,14 @@ class SecuritySettings(BaseModel):
     health_no_rate_limit: bool = True
 ```
 
-API Key 配置通过 JSON 环境变量注入：
+API Key 通过 JSON 环境变量注入：
 
 ```bash
 PRIVACY_AUTH_INTERNAL_KEYS_JSON='{"sk-internal-1":{"name":"secretpad","scopes":["*"]}}'
 PRIVACY_AUTH_EXTERNAL_KEYS_JSON='{"sk-external-1":{"name":"portal","scopes":["privacy:mask","classification:read"]}}'
 ```
 
-### 3.2 `security/tls.py`
+### 5.2 `security/tls.py`
 
 #### REST
 
@@ -124,7 +128,7 @@ def grpc_server_credentials(settings: SecuritySettings) -> grpc.ServerCredential
     return grpc.ssl_server_credentials(((private_key, certificate_chain),))
 ```
 
-### 3.3 `security/identity.py`
+### 5.3 `security/identity.py`
 
 ```python
 @dataclass(frozen=True)
@@ -161,7 +165,7 @@ class Identity:
 | `ObfuscateQuery` | `privacy:qol` |
 | `ClassifyField` / `ClassifyRecord` / `ClassifyTable` | `classification:read` |
 
-### 3.4 `security/auth.py`
+### 5.4 `security/auth.py`
 
 #### API Key 认证
 
@@ -171,11 +175,10 @@ class Identity:
 
 ```python
 auth_context = context.auth_context()
-if auth_context.get("ssl_session.reused"):  # 仅示例，真实取 x509_common_name / x509_subject_alternative_name
-    cn = auth_context.get("x509_common_name", [b""])[0].decode()
+cn = auth_context.get("x509_common_name", [b""])[0].decode()
 ```
 
-若 CN 匹配配置的 `internal_cn_allowlist`（或无条件信任 mTLS），返回 internal identity。
+若 CN 匹配配置的 `internal_cn_allowlist`，返回 internal identity。
 
 #### FastAPI Dependency
 
@@ -204,9 +207,9 @@ def require_permission(permission: str):
 
 #### gRPC Auth Interceptor
 
-Unary interceptor：在 `intercept_service` 中读取 metadata/auth_context，构造 identity 并校验权限；未通过则提前返回错误，不进入业务 servicer。
+Unary interceptor：在 `intercept_service` 中读取 metadata/auth_context，构造 identity 并校验权限；未通过则提前返回错误。
 
-### 3.5 `security/ratelimit.py`
+### 5.5 `security/ratelimit.py`
 
 依赖 `limits` 库：
 
@@ -217,49 +220,35 @@ storage = storage.MemoryStorage() if not redis_url else storage.RedisStorage(red
 limiter = strategies.MovingWindowRateLimiter(storage)
 ```
 
-限流键：`f"{identity.name}:{method_or_path}"`。
+- 限流键：`f"{identity.name}:{method_or_path}"`
+- 默认规则：`default_rps` requests/second，burst = `default_burst`
+- 每接口覆盖：`PRIVACY_RATE_LIMIT_PER_ENDPOINT_JSON`
 
-默认规则：`default_rps` requests / second，burst = `default_burst`。
+REST 超速：`HTTP 429 Too Many Requests`
+gRPC 超速：`grpc.StatusCode.RESOURCE_EXHAUSTED`
 
-每接口覆盖：`PRIVACY_RATE_LIMIT_PER_ENDPOINT_JSON` 映射路径/方法到 `{"rps": x, "burst": y}`。
+## 6. REST 与 gRPC 集成
 
-REST 超速：`raise HTTPException(status_code=429, detail="Rate limit exceeded")`。
-gRPC 超速：`context.abort(grpc.StatusCode.RESOURCE_EXHAUSTED, "Rate limit exceeded")`。
-
----
-
-## 4. REST 集成
-
-`main.py` 调整：
+### REST (`main.py`)
 
 ```python
 from fastapi import Depends
 from .security.auth import get_current_identity, require_permission
 from .security.ratelimit import rate_limit_dependency
-from .security.identity import permission_for_rest_path
 
-# /health 仍单独注册，不挂载依赖
 @app.get("/health")
 def health(): ...
 
-# 为所有业务路由统一挂载认证与限速
 app.include_router(
     classification_router,
     dependencies=[Depends(get_current_identity), Depends(rate_limit_dependency)],
 )
 
-# 在每个端点上增加权限依赖
 @app.post("/v1/privacy/mask", dependencies=[require_permission("privacy:mask")])
 def mask(req: MaskRequest): ...
 ```
 
-> 注意：由于分类路由在另一个文件中定义，可在 `classification_router` 的 `include_router` 上挂载认证/限速，端点自身保留权限依赖；或者为 `classification_router` 单独引入权限装饰器。
-
----
-
-## 5. gRPC 集成
-
-`grpc_server.py` 调整：
+### gRPC (`grpc_server.py`)
 
 ```python
 from .security.auth import AuthInterceptor
@@ -283,11 +272,7 @@ else:
     server.add_insecure_port(f"[::]:{port}")
 ```
 
----
-
-## 6. 统一启动器
-
-`server.py` 调整：
+### 统一启动器 (`server.py`)
 
 ```python
 from .security.config import settings
@@ -297,13 +282,11 @@ ssl_kwargs = uvicorn_ssl_kwargs(settings) if settings.tls_enabled else {}
 uvicorn.run(app, host=REST_HOST, port=REST_PORT, log_level="info", **ssl_kwargs)
 ```
 
----
-
 ## 7. 部署约定
 
 ### 7.1 证书管理
 
-- 服务器证书与私钥挂载到容器 `/certs/server.crt`、`/certs/server.key`。
+- 服务器证书与私钥挂载到 `/certs/server.crt`、`/certs/server.key`。
 - CA 证书挂载到 `/certs/ca.crt`（mTLS 模式必需）。
 - 私钥口令通过环境变量注入，生产建议通过 K8s Secret 管理。
 
@@ -314,20 +297,18 @@ livenessProbe:
   httpGet:
     path: /health
     port: 8079
-    scheme: HTTP   # 或 HTTPS 当 TLS 开启时
+    scheme: HTTP
 readinessProbe:
   httpGet:
     path: /health
     port: 8079
 ```
 
-保持 `PRIVACY_HEALTH_NO_AUTH=true` 与 `PRIVACY_HEALTH_NO_RATE_LIMIT=true`，探针无需凭证。
+保持 `PRIVACY_HEALTH_NO_AUTH=true` 与 `PRIVACY_HEALTH_NO_RATE_LIMIT=true`。
 
 ### 7.3 多副本限速
 
-单副本使用内存计数器；多副本时配置 `PRIVACY_RATE_LIMIT_REDIS_URL=redis://redis:6379/0`。
-
----
+单副本使用内存计数器；多副本时配置 `PRIVACY_RATE_LIMIT_REDIS_URL`。
 
 ## 8. 错误码
 
@@ -338,12 +319,10 @@ readinessProbe:
 | 超速 | 429 Too Many Requests | `RESOURCE_EXHAUSTED` |
 | TLS 握手失败 | SSL/TLS 连接断开 | `UNAVAILABLE` |
 
----
-
 ## 9. 测试策略
 
-- 使用 `cryptography` 在测试夹具中动态生成 CA/服务器/客户端证书链。
-- REST TLS 测试：使用 `httpx` 访问 HTTPS 端口，验证信任/不信任 CA 行为。
-- gRPC TLS/mTLS 测试：使用 `grpc.ssl_channel_credentials` + `grpc.metadata_call_credentials`。
-- 认证测试：FastAPI `TestClient` 设置 headers；gRPC `metadata=("authorization", "Bearer ...")`。
+- 使用 `cryptography` 动态生成 CA/服务器/客户端证书链。
+- REST TLS 测试：使用 `httpx` 访问 HTTPS 端口，验证信任/不信任 CA。
+- gRPC TLS/mTLS 测试：使用 `grpc.ssl_channel_credentials` + metadata。
+- 认证测试：FastAPI `TestClient` 设置 headers；gRPC metadata。
 - 限速测试：短时间连续调用直到触发限流。
