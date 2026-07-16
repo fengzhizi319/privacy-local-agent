@@ -57,8 +57,27 @@ result = dp.mean(
     delta=1e-6,
     clip_lower=0.0,
     clip_upper=120.0,
+    min_count=5.0,  # 低频保护阈值
 )
 print(f"带噪声平均年龄: {result}")
+```
+
+### 2.4 直方图查询（Histogram）
+
+```python
+from privacy_local_agent.privacy.dp import DPApi
+
+dp = DPApi(namespace="hospital_cohort_a")
+
+# 科室分布，互斥划分下联合敏感度为 1
+departments = ["Cardiology"] * 100 + ["Neurology"] * 80 + ["Oncology"] * 50
+result = dp.histogram(
+    departments,
+    categories=["Cardiology", "Neurology", "Oncology", "Other"],
+    epsilon=1.0,
+    mechanism="laplace",
+)
+print(f"带噪声科室分布: {result}")
 ```
 
 ### 2.4 Gaussian 机制示例
@@ -141,9 +160,49 @@ curl -X POST http://127.0.0.1:8079/v1/privacy/dp/mean \
       "delta": 1e-6,
       "mechanism": "gaussian",
       "clip_lower": 0.0,
-      "clip_upper": 120.0
+      "clip_upper": 120.0,
+      "min_count": 3.0
     }
   }'
+```
+
+### 3.4 Histogram
+
+```bash
+curl -X POST http://127.0.0.1:8079/v1/privacy/dp/histogram \
+  -H "Content-Type: application/json" \
+  -d '{
+    "values": ["A", "B", "A", "C"],
+    "categories": ["A", "B", "C", "D"],
+    "params": {
+      "epsilon": 10.0,
+      "mechanism": "laplace"
+    }
+  }'
+```
+
+### 3.5 Local DP via REST
+
+```bash
+# 二值扰动
+curl -X POST http://127.0.0.1:8079/v1/privacy/ldp/perturb/binary \
+  -H "Content-Type: application/json" \
+  -d '{"values": [1, 0, 1, 1], "epsilon": 10.0}'
+
+# 类别扰动
+curl -X POST http://127.0.0.1:8079/v1/privacy/ldp/perturb/categorical \
+  -H "Content-Type: application/json" \
+  -d '{"values": ["A", "B", "A"], "categories": ["A", "B", "C"], "epsilon": 10.0}'
+
+# 二值频率估计
+curl -X POST http://127.0.0.1:8079/v1/privacy/ldp/estimate/binary \
+  -H "Content-Type: application/json" \
+  -d '{"reported_values": [1, 1, 0, 1], "epsilon": 5.0}'
+
+# 类别直方图估计
+curl -X POST http://127.0.0.1:8079/v1/privacy/ldp/estimate/categorical \
+  -H "Content-Type: application/json" \
+  -d '{"reported_values": ["A", "B", "C", "A"], "categories": ["A", "B", "C"], "epsilon": 5.0}'
 ```
 
 ## 4. 本地差分隐私示例
@@ -201,7 +260,8 @@ PYTHONPATH=. python docs/dp/examples/local_dp_usage.py
 3. **优先使用 Laplace 进行纯 ε-DP**：若业务不能接受 δ，选择 Laplace。
 4. **Gaussian 适合大量组合查询**：在需要高级组合定理时，Gaussian 机制更紧致。
 5. **本地 DP 适合大样本频率估计**：样本量较小时统计误差较大，不适合需要精确聚合的场景。
-6. **记录每次查询的预算消耗**：便于审计与后续预算调整。
+6. **为长期运行服务配置预算时间窗口**：通过 `PRIVACY_BUDGET_WINDOW_SECONDS` 避免预算永久耗尽。
+7. **记录每次查询的预算消耗**：便于审计与后续预算调整。
 
 ## 6. 常见错误
 
@@ -211,3 +271,4 @@ PYTHONPATH=. python docs/dp/examples/local_dp_usage.py
 | `ValueError: delta must be positive for Gaussian mechanism` | Gaussian 请求中 `delta=0` | 设置 `delta > 0`，典型值 `1e-6` |
 | `PrivacyBudgetExhausted` | 命名空间预算已用完 | 提高总预算或减少查询次数 |
 | 结果出现负数 | 计数被噪声拉低 | count 已做 `max(0, ...)` 截断；其他场景可后处理 |
+| mean 返回 0.0 | 噪声计数低于 `min_count` | 降低 `min_count` 或增加样本量；注意过低会导致结果不稳定 |

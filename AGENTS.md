@@ -150,6 +150,7 @@ Key environment variables:
 | `PRIVACY_GRPC_HOST` | `127.0.0.1` | gRPC host |
 | `PRIVACY_GRPC_PORT` | `50051` | gRPC port |
 | `PRIVACY_BUDGET_DB` | — | SQLite DB path for distributed budget |
+| `PRIVACY_BUDGET_WINDOW_SECONDS` | — | Time window for automatic privacy budget reset |
 | `PRIVACY_LOG_LEVEL` | `INFO` | Logging level |
 | `PRIVACY_LOG_FORMAT` | `text` | `text` or `json` |
 | `PRIVACY_SERVICE_NAME` | `privacy-local-agent` | Service name in logs/traces |

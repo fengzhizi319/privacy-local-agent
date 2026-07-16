@@ -1,9 +1,10 @@
 """隐私预算记账模块测试。
 
-验证单机内存预算模式与多进程 SQLite 持久化预算模式的正确性。
+验证单机内存预算模式、多进程 SQLite 持久化预算模式，以及时间窗口重置机制的正确性。
 """
 
 import os
+import time
 import pytest
 from privacy_local_agent.privacy.budget import BudgetAccountant, PrivacyBudgetExhausted
 
@@ -63,3 +64,87 @@ def test_sqlite_budget_accountant(tmp_path):
     finally:
         # 清理环境变量，防止干扰其他测试
         os.environ.pop("PRIVACY_BUDGET_DB", None)
+
+
+def test_memory_budget_window_reset():
+    """测试内存模式下预算按时间窗口自动重置。"""
+    BudgetAccountant._instances.clear()
+
+    accountant = BudgetAccountant(
+        "test-ns-window-memory",
+        epsilon_total=2.0,
+        delta_total=1e-5,
+        window_seconds=0.1,
+    )
+    accountant.spend(1.5, 0.0)
+    assert accountant.remaining()["epsilon"] == pytest.approx(0.5, abs=1e-9)
+
+    # 等待窗口过期
+    time.sleep(0.15)
+
+    # 窗口到期后应自动重置，可继续消费
+    accountant.spend(1.5, 0.0)
+    assert accountant.remaining()["epsilon"] == pytest.approx(0.5, abs=1e-9)
+
+
+def test_sqlite_budget_window_reset(tmp_path):
+    """测试 SQLite 模式下预算按时间窗口自动重置，并能在新实例间共享。"""
+    BudgetAccountant._instances.clear()
+
+    db_file = os.path.join(tmp_path, "budget_window_test.db")
+    os.environ["PRIVACY_BUDGET_DB"] = db_file
+
+    try:
+        acc1 = BudgetAccountant(
+            "test-ns-window-sqlite",
+            epsilon_total=2.0,
+            delta_total=1e-5,
+            window_seconds=0.1,
+        )
+        acc1.spend(1.5, 0.0)
+        assert acc1.remaining()["epsilon"] == pytest.approx(0.5, abs=1e-9)
+
+        # 等待窗口过期
+        time.sleep(0.15)
+
+        # 清除单例，模拟另一个进程的新实例
+        BudgetAccountant._instances.clear()
+        acc2 = BudgetAccountant(
+            "test-ns-window-sqlite",
+            epsilon_total=2.0,
+            delta_total=1e-5,
+            window_seconds=0.1,
+        )
+        # 新实例应读取到已重置的预算
+        assert acc2.remaining()["epsilon"] == pytest.approx(2.0, abs=1e-9)
+
+        # 继续消费验证窗口生效
+        acc2.spend(1.0, 0.0)
+        assert acc2.remaining()["epsilon"] == pytest.approx(1.0, abs=1e-9)
+
+    finally:
+        os.environ.pop("PRIVACY_BUDGET_DB", None)
+
+
+def test_env_budget_window_seconds():
+    """测试通过环境变量 PRIVACY_BUDGET_WINDOW_SECONDS 配置时间窗口。"""
+    BudgetAccountant._instances.clear()
+    os.environ["PRIVACY_BUDGET_WINDOW_SECONDS"] = "0.05"
+
+    try:
+        accountant = BudgetAccountant(
+            "test-ns-env-window",
+            epsilon_total=2.0,
+            delta_total=1e-5,
+        )
+        assert accountant.window_seconds == 0.05
+
+        accountant.spend(1.5, 0.0)
+        assert accountant.remaining()["epsilon"] == pytest.approx(0.5, abs=1e-9)
+
+        time.sleep(0.08)
+        accountant.spend(1.0, 0.0)
+        assert accountant.remaining()["epsilon"] == pytest.approx(1.0, abs=1e-9)
+
+    finally:
+        os.environ.pop("PRIVACY_BUDGET_WINDOW_SECONDS", None)

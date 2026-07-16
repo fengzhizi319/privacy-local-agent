@@ -507,7 +507,9 @@ $$M(D) = f(D) + \mathcal{N}(0, \sigma^2)$$
 
 $$\sigma = \frac{\Delta_2 f \cdot \sqrt{2 \ln(1.25 / \delta)}}{\varepsilon}$$
 
-该参数满足 $(\varepsilon, \delta)$-DP。
+该参数满足 $(\varepsilon, \delta)$-DP，但要求 $\varepsilon \le 1$ 且给出的噪声界较松散。
+
+本模块默认采用 **Balle & Wang (2018) 提出的解析高斯机制（Analytic Gaussian Mechanism）**。该算法对任意 $\varepsilon > 0$、$\delta > 0$ 直接数值求解满足 $(\varepsilon, \delta)$-DP 的最小 $\sigma$，在相同隐私参数下噪声通常小于经典公式，且不受 $\varepsilon \le 1$ 的限制。实现位于 `privacy_local_agent.privacy.dp.calibrate_analytic_gaussian()`。
 
 **与 Laplace 的核心区别**：
 
@@ -624,6 +626,18 @@ mean 通过组合 count 与 sum 实现：
 - Laplace：$\text{mean} = \frac{\text{sum\_with\_noise}(\varepsilon/2)}{\text{count\_with\_noise}(\varepsilon/2)}$，总消耗 $(\varepsilon, 0)$。
 - Gaussian：$\text{mean} = \frac{\text{sum\_with\_noise}(\varepsilon/2, \delta/2)}{\text{count\_with\_noise}(\varepsilon/2, \delta/2)}$，总消耗 $(\varepsilon, \delta)$。
 
+为防止噪声计数接近 0 导致均值结果发散（Cauchy 型长尾），实现中引入 `min_count` 阈值：
+
+```python
+def mean(..., min_count: float = 5.0) -> float:
+    noisy_count = count(...)
+    if noisy_count < min_count or noisy_count <= 0.0:
+        return 0.0  # 拒绝返回不稳定的均值
+    return noisy_sum / noisy_count
+```
+
+当估计计数低于阈值时，接口返回 0.0 作为安全 fallback。调用方可通过 `params.min_count` 自定义该阈值。
+
 ### 3.6 组合定理
 
 多次 DP 查询会累计消耗隐私预算。基本组合定理：若 $k$ 个机制分别满足 $(\varepsilon_i, \delta_i)$-DP，则整体满足 $(\sum \varepsilon_i, \sum \delta_i)$-DP。BudgetAccountant 据此拒绝会导致总预算超支的查询。
@@ -695,9 +709,13 @@ $$\hat{f}_j = \frac{\hat{f}_{j,\text{reported}} - q}{p - q}, \quad q = \frac{1 -
 
 ### 4.1 `privacy_local_agent/privacy/dp.py`
 
-- `dp_count(values, epsilon, delta, mechanism, ...)`：count 查询入口。
-- `dp_sum(values, epsilon, delta, mechanism, clip_lower, clip_upper, ...)`：sum 查询入口，先 clipping 再计算。
-- `dp_mean(values, epsilon, delta, mechanism, clip_lower, clip_upper, ...)`：mean 查询入口，组合 count 与 sum。
+- `DPApi.count(...)`：count 查询入口。
+- `DPApi.sum(...)`：sum 查询入口，先 clipping 再计算。
+- `DPApi.mean(...)`：mean 查询入口，组合 count 与 sum，支持 `min_count` 低频保护。
+- `DPApi.histogram(...)`：直方图查询入口，利用互斥划分的联合敏感度为 1，仅消耗一次预算。
+- `LocalDPApi.perturb_binary/perturb_categorical(...)`：二值/类别型本地 DP 扰动。
+- `LocalDPApi.estimate_binary_frequency/estimate_categorical_histogram(...)`：本地 DP 频率/直方图纠偏估计。
+- `calibrate_analytic_gaussian(...)`：解析高斯机制噪声校准。
 - `_sample_laplace(scale)` / `_sample_gaussian(sigma)`：噪声采样。
 - `mechanism` 校验为 `laplace` 或 `gaussian`。
 
@@ -709,7 +727,14 @@ $$\hat{f}_j = \frac{\hat{f}_{j,\text{reported}} - q}{p - q}, \quad q = \frac{1 -
 ### 4.3 proto / REST / gRPC
 
 - `DPRequest` 包含 `epsilon`、`delta`、`mechanism`、`clip_lower`、`clip_upper`。
-- REST `DPRequest.params` 透传上述字段。
+- REST `DPRequest.params` 透传上述字段，mean 查询额外支持 `min_count`。
+- 新增 `DPHistogramRequest` / `POST /v1/privacy/dp/histogram`：差分隐私直方图。
+- 新增本地 DP REST 接口：
+  - `POST /v1/privacy/ldp/perturb/binary`
+  - `POST /v1/privacy/ldp/perturb/categorical`
+  - `POST /v1/privacy/ldp/estimate/binary`
+  - `POST /v1/privacy/ldp/estimate/categorical`
+- 对应 gRPC 方法：`DPHistogram`、`PerturbBinaryBatch`、`PerturbCategoricalBatch`、`EstimateBinaryFrequency`、`EstimateCategoricalHistogram`。
 
 ## 5. BudgetAccountant 设计
 
@@ -718,6 +743,18 @@ $$\hat{f}_j = \frac{\hat{f}_{j,\text{reported}} - q}{p - q}, \quad q = \frac{1 -
 - Laplace：$\text{spend}(\varepsilon, 0.0)$
 - Gaussian：$\text{spend}(\varepsilon, \delta)$
 - mean 组合：分别对 count 与 sum 调用，总消耗为 $(\varepsilon, \delta)$。
+- 直方图：利用联合敏感度为 1，仅调用一次 `spend(\varepsilon, \delta)`。
+
+### 5.1.1 时间窗口重置
+
+为避免 Sidecar 长期运行后预算永久耗尽，BudgetAccountant 支持按时间窗口自动重置已消耗预算：
+
+- 通过构造函数 `window_seconds` 或环境变量 `PRIVACY_BUDGET_WINDOW_SECONDS` 配置窗口长度。
+- 每个 namespace 独立维护一个窗口开始时间 `_window_start`。
+- 在 `spend()` 或 `remaining()` 时，若当前时间超过 `_window_start + window_seconds`，则自动将 `epsilon_spent` 与 `delta_spent` 清零，并将 `_window_start` 更新为当前时间。
+- 在 SQLite 持久化模式下，窗口开始时间也存储在数据库中，确保多实例共享一致的时间边界。
+
+示例：设置 `window_seconds=86400`（1 天），则每个 namespace 每天 0 点（从首次消费开始计）后预算自动恢复为 `epsilon_total`。
 
 ### 5.2 存储后端
 
@@ -728,7 +765,7 @@ $$\hat{f}_j = \frac{\hat{f}_{j,\text{reported}} - q}{p - q}, \quad q = \frac{1 -
 
 ### 5.3 超支处理
 
-当累计消耗超过 `total_epsilon` / `total_delta` 时，拒绝新查询并返回明确错误。预算一旦记录即不可回退。
+当累计消耗超过 `total_epsilon` / `total_delta` 时，拒绝新查询并返回明确错误。预算一旦记录即不可回退，但会在配置的窗口到期后自动清零。
 
 ## 6. 数据集级隐私预算分配
 
@@ -769,7 +806,9 @@ $$\varepsilon' = \sqrt{2k \cdot \ln(1/\delta')} \cdot \varepsilon + k \cdot \var
 
 $$\varepsilon' \approx \sqrt{2k \cdot \ln(1/\delta')} \cdot \varepsilon + k \cdot \varepsilon^2$$
 
-高级组合在 $k$ 较大时通常比基本组合更紧致，可将总 $\varepsilon$ 从 $k \cdot \varepsilon$ 降低到约 $\sqrt{k} \cdot \varepsilon$ 量级。系统设计时可在 BudgetAccountant 中支持可选的高级组合模式。
+高级组合在 $k$ 较大时通常比基本组合更紧致，可将总 $\varepsilon$ 从 $k \cdot \varepsilon$ 降低到约 $\sqrt{k} \cdot \varepsilon$ 量级。
+
+> **当前实现状态**：BudgetAccountant 仅支持基本组合（直接相加）。高级组合与 Renyi DP（RDP）虽然能显著改善多次查询下的预算估计，但会改变预算语义，要求调用方预先声明查询序列长度或维护 RDP 阶数状态，增加了 API 复杂度与审计难度。在 POC/MVP 阶段，为保持接口简单和可解释性，未实现高级组合/RDP；若未来需要支持高频查询场景，可在 BudgetAccountant 中增加可选的组合模式。
 
 ### 6.4 预算分配示例
 
@@ -832,10 +871,14 @@ $$\approx 4.48$$
 - 默认 `mechanism=laplace`，$\delta = 0$。
 - sum/mean 必须提供 `clip_lower` / `clip_upper`；未提供时返回明确错误。
 - Gaussian 机制下 `delta` 必须大于 0。
+- **浮点数安全（Mironov 攻击）**：当前实现使用 Python `float` 与标准伪随机数生成器（`random.Random`）进行连续 Laplace/Gaussian 采样。由于浮点数表示的不连续性，理论上攻击者可能通过观察输出浮点值的最低有效位推断部分信息（Mironov, 2012）。对于 POC/MVP 场景该风险可接受；若需高安全保证，应迁移到离散拉普拉斯/离散高斯机制，或使用具备 snapping mechanism 的专业库。
 
 ## 9. 测试策略
 
-- Laplace/Gaussian 机制单元测试。
+- Laplace/Gaussian 机制单元测试（含解析高斯机制）。
 - clipping 参数校验与敏感度计算测试。
-- delta 预算正确消耗与超支拒绝测试。
+- delta 预算正确消耗、超支拒绝与时间窗口重置测试。
+- mean `min_count` 低频保护测试。
+- histogram 联合敏感度测试。
 - REST/gRPC 接口参数透传测试。
+- 本地 DP REST/gRPC 接口测试。

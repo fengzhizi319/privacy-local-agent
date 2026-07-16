@@ -22,15 +22,21 @@
 | DP-MEAN-1 | mean 查询必须提供 `clip_lower` / `clip_upper`，敏感度按 clip 区间与记录数计算。 |
 | DP-CLIP-1 | clip 参数可由请求 `params` 传入，也可从 profile 配置读取。 |
 | DP-CLIP-2 | sum/mean 若未提供 clip 参数且 profile 未配置，则返回明确错误。 |
-| DP-GAUSS-1 | 支持 `mechanism=gaussian`，使用标准 Gaussian 机制。 |
+| DP-GAUSS-1 | 支持 `mechanism=gaussian`，使用解析高斯机制（Analytic Gaussian）。 |
 | DP-GAUSS-2 | Gaussian 机制必须传入 `delta > 0`，并消耗对应 delta 预算。 |
+| DP-GAUSS-3 | 解析高斯机制应支持任意 `epsilon > 0`，且噪声尺度不劣于经典公式。 |
 | DP-LAPLACE-1 | 支持 `mechanism=laplace`，提供纯 ε-DP 保证。 |
 | DP-LOCAL-1 | 提供二值随机响应（Binary Randomized Response），支持单个值与批量扰动。 |
 | DP-LOCAL-2 | 提供类别型随机响应（k-ary Randomized Response），支持单个值与批量扰动。 |
 | DP-LOCAL-3 | 提供基于扰动样本的二值频率估计与类别直方图估计。 |
+| DP-LOCAL-4 | 本地 DP 扰动与估计能力需通过 REST 与 gRPC 暴露给外部调用方。 |
+| DP-HISTO-1 | 提供差分隐私直方图查询，利用互斥划分的联合敏感度为 1。 |
+| DP-HISTO-2 | 直方图仅消耗一次 `(ε, δ)` 预算，输出每个分桶的带噪计数。 |
+| DP-MEAN-2 | mean 查询支持 `min_count` 参数，防止噪声计数过小时结果发散。 |
 | DP-BUDGET-1 | 提供 BudgetAccountant，按 namespace 追踪总 `(ε, δ)` 消耗。 |
 | DP-BUDGET-2 | 支持内存与 SQLite 两种预算存储后端。 |
 | DP-BUDGET-3 | 预算一旦消耗即不可回退。 |
+| DP-BUDGET-4 | 支持按时间窗口自动重置已消耗预算，避免长期运行服务预算永久耗尽。 |
 | DP-DATASET-1 | DP 接口以**聚合查询**为单位，不直接对整个数据表（如 CSV）做中心式 DP 加噪；调用方需按列提取字段值作为 `values`，并显式指定查询类型（count/sum/mean）与 clip 参数。 |
 
 ## 4. 接口定义
@@ -106,5 +112,5 @@ resp = requests.post(
 - [ ] 本地 DP 二值/类别型随机响应与频率估计测试通过。
 - [ ] clipping 参数校验与敏感度计算测试通过。
 - [ ] delta 预算正确消耗与超支拒绝测试通过。
-- [ ] REST/gRPC 接口支持新参数。
-- [ ] 文档（PRD/design/ops/examples/testing）与 `AGENTS.md` 已更新。
+- [ ] REST/gRPC 接口支持新参数（含 histogram 与本地 DP）。
+- [ ] 文档（PRD/design/ops/examples/testing/api_reference）与 `AGENTS.md` 已更新。

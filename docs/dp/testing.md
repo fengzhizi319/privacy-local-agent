@@ -7,16 +7,20 @@
 ## 2. 测试目标
 
 - 验证 Laplace 机制与 Gaussian 机制输出符合预期分布。
+- 验证解析高斯机制（Analytic Gaussian）噪声尺度小于经典公式。
 - 验证 clipping 参数校验与敏感度计算正确。
 - 验证 BudgetAccountant 正确追踪 `(ε, δ)` 消耗并拒绝超支。
+- 验证 BudgetAccountant 时间窗口到期后自动重置预算。
 - 验证 REST/gRPC 接口透传参数无误。
-- 验证 mean 组合实现满足组合定理。
+- 验证 mean 组合实现满足组合定理，且 `min_count` 低频保护生效。
+- 验证直方图聚合使用联合敏感度为 1。
+- 验证本地 DP 扰动与估计接口（REST/gRPC）行为正确。
 
 ## 3. 单元测试策略
 
 ### 3.1 机制正确性测试
 
-固定随机数种子，断言噪声值与理论值一致。
+固定随机数种子，断言噪声值与理论值一致。对解析高斯机制，断言其噪声小于经典高斯公式。
 
 ```python
 import math
@@ -95,9 +99,41 @@ def test_laplace_noise_statistics():
     assert 1.8 < var < 2.2        # Laplace(0,1) 方差为 2
 ```
 
-### 3.5 本地差分隐私测试
+### 3.5 均值低频保护与直方图测试
 
-本地 DP 测试重点在于随机响应扰动与频率估计的无偏性。
+```python
+from privacy_local_agent.privacy.dp import DPApi
+from privacy_local_agent.privacy.budget import BudgetAccountant
+
+
+def test_mean_min_count_protection():
+    BudgetAccountant("test-mean-thresh", epsilon_total=100.0, delta_total=1.0)
+    api = DPApi(namespace="test-mean-thresh")
+
+    # 正常计算
+    res = api.mean([10.0] * 10, epsilon=10.0, min_count=2.0)
+    assert res > 0.0
+
+    # 计数过小，触发低频保护返回 0.0
+    res_shielded = api.mean([10.0] * 3, epsilon=10.0, min_count=5.0)
+    assert res_shielded == 0.0
+
+
+def test_histogram_joint_sensitivity():
+    BudgetAccountant("test-hist", epsilon_total=100.0, delta_total=1.0)
+    api = DPApi(namespace="test-hist")
+    values = ["A"] * 100 + ["B"] * 200 + ["C"] * 50
+    categories = ["A", "B", "C", "D"]
+    res = api.histogram(values, categories, epsilon=10.0, mechanism="laplace")
+    assert len(res) == 4
+    assert res["A"] > 50
+    assert res["B"] > 100
+    assert res["D"] >= 0.0
+```
+
+### 3.6 本地差分隐私测试
+
+本地 DP 测试重点在于随机响应扰动与频率估计的无偏性。此外需验证 REST/gRPC 接口对本地 DP 能力的暴露。
 
 ```python
 from privacy_local_agent.privacy.dp import LocalDPApi
@@ -132,6 +168,26 @@ def test_local_dp_categorical_unbiased():
 
 ```bash
 PYTHONPATH=. pytest tests/test_dp.py -v -k "LocalDP or Randomized"
+```
+
+### 3.7 时间窗口预算重置测试
+
+```python
+import time
+from privacy_local_agent.privacy.budget import BudgetAccountant
+
+
+def test_budget_window_reset():
+    BudgetAccountant._instances.clear()
+    accountant = BudgetAccountant(
+        "test-window", epsilon_total=2.0, delta_total=1e-5, window_seconds=0.1
+    )
+    accountant.spend(1.5, 0.0)
+    assert accountant.remaining()["epsilon"] == 0.5
+
+    time.sleep(0.15)
+    accountant.spend(1.0, 0.0)
+    assert accountant.remaining()["epsilon"] == 1.0
 ```
 
 ## 4. 集成测试策略
@@ -201,10 +257,13 @@ PYTHONPATH=. pytest tests/test_dp.py -v --slow
 
 ## 7. 验收检查清单
 
-- [ ] count/sum/mean 三种聚合的单元测试覆盖。
+- [ ] count/sum/mean/histogram 四种聚合的单元测试覆盖。
 - [ ] Laplace 与 Gaussian 机制各至少一组测试。
+- [ ] 解析高斯机制噪声尺度测试覆盖。
 - [ ] 本地 DP 二值/类别随机响应与频率估计测试覆盖。
+- [ ] 本地 DP REST/gRPC 接口测试覆盖。
 - [ ] clipping 参数缺失/错误时抛出明确异常。
 - [ ] 预算超支时返回 `PrivacyBudgetExhausted` 或对应 HTTP/gRPC 错误。
+- [ ] 预算时间窗口重置测试覆盖。
 - [ ] REST/gRPC 接口参数透传测试通过。
 - [ ] 统计测试在 5000 次采样下通过。
