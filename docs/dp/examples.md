@@ -153,7 +153,7 @@ curl -X POST http://127.0.0.1:8079/v1/privacy/dp/mean \
 ### 4.1 二值随机响应
 
 ```python
-from privacy_local_agent.privacy.local_dp import LocalDPApi
+from privacy_local_agent.privacy.dp import LocalDPApi
 
 api = LocalDPApi(seed=42)
 
@@ -173,7 +173,7 @@ print(f"纠偏估计患病率: {estimated:.2%}")
 ### 4.2 类别型随机响应与本地直方图
 
 ```python
-from privacy_local_agent.privacy.local_dp import LocalDPApi
+from privacy_local_agent.privacy.dp import LocalDPApi
 
 api = LocalDPApi(seed=42)
 

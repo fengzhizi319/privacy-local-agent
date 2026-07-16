@@ -108,7 +108,7 @@ mean(
 
 ### `LocalDPApi`
 
-位置：`privacy_local_agent.privacy.local_dp.LocalDPApi`
+位置：`privacy_local_agent.privacy.dp.LocalDPApi`
 
 本地差分隐私入口类，支持单条记录的随机响应扰动与服务端的频率/直方图纠偏估计。
 

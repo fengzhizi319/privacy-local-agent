@@ -2,7 +2,7 @@
 
 ## 1. 概述
 
-本文档定义 `privacy_local_agent/privacy/dp.py` 与 `privacy_local_agent/privacy/local_dp.py` 的测试策略、测试范围与可执行示例。DP 模块的测试需覆盖算法正确性、参数校验、预算消耗、接口一致性、本地 DP 扰动与统计特性。
+本文档定义 `privacy_local_agent/privacy/dp.py` 的测试策略、测试范围与可执行示例。该模块同时包含中心式 DP（`DPApi`）与本地 DP（`LocalDPApi`）两类接口，测试需覆盖算法正确性、参数校验、预算消耗、接口一致性、本地 DP 扰动与统计特性。
 
 ## 2. 测试目标
 
@@ -100,7 +100,7 @@ def test_laplace_noise_statistics():
 本地 DP 测试重点在于随机响应扰动与频率估计的无偏性。
 
 ```python
-from privacy_local_agent.privacy.local_dp import LocalDPApi
+from privacy_local_agent.privacy.dp import LocalDPApi
 
 
 def test_local_dp_binary_unbiased():
@@ -131,7 +131,7 @@ def test_local_dp_categorical_unbiased():
 执行本地 DP 测试：
 
 ```bash
-PYTHONPATH=. pytest tests/test_local_dp.py -v
+PYTHONPATH=. pytest tests/test_dp.py -v -k "LocalDP or Randomized"
 ```
 
 ## 4. 集成测试策略
@@ -181,13 +181,13 @@ def test_grpc_dp_sum():
 
 ```bash
 # 运行所有 DP 相关测试
-PYTHONPATH=. pytest tests/test_dp.py tests/test_local_dp.py -v
+PYTHONPATH=. pytest tests/test_dp.py -v
 
 # 运行 DP 模块单元测试
 PYTHONPATH=. pytest tests/test_budget.py tests/test_rest.py -v -k dp
 
 # 本地 DP 测试
-PYTHONPATH=. pytest tests/test_local_dp.py -v
+PYTHONPATH=. pytest tests/test_dp.py -v -k "LocalDP or Randomized"
 
 # 统计特性测试可能需要更多样本
 PYTHONPATH=. pytest tests/test_dp.py -v --slow
