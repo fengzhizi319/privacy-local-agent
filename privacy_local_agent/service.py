@@ -96,11 +96,22 @@ class PrivacyService:
         """
         return truncate(value, keep_prefix)
 
-    def dp_count(self, values: List[float], params: Dict[str, Any] = None) -> float:
+    @staticmethod
+    def _dp_format_kwargs(params: Dict[str, Any]) -> Dict[str, Any]:
+        """从 params 中提取数据格式相关的 column / party 参数。"""
+        kwargs: Dict[str, Any] = {}
+        if params:
+            if "column" in params:
+                kwargs["column"] = params["column"]
+            if "party" in params:
+                kwargs["party"] = params["party"]
+        return kwargs
+
+    def dp_count(self, values: Any, params: Dict[str, Any] = None) -> float:
         """差分隐私计数。
 
         Args:
-            values: 输入数值列表。
+            values: 输入数值，支持 list/tuple/ndarray/Series/DataFrame/SecretFlow 格式。
             params: 请求级 DP 参数，例如 {"epsilon": 1.0, "mechanism": "laplace"}。
 
         Returns:
@@ -112,14 +123,15 @@ class PrivacyService:
             float(p["epsilon"]),
             float(p.get("delta", 0.0)),
             str(p.get("mechanism", "laplace")),
+            **self._dp_format_kwargs(params),
         )
 
-    def dp_sum(self, values: List[float], params: Dict[str, Any] = None) -> float:
+    def dp_sum(self, values: Any, params: Dict[str, Any] = None) -> float:
         """差分隐私求和。
 
         Args:
-            values: 输入数值列表。
-            params: 请求级 DP 参数，可包含 clip_lower/clip_upper。
+            values: 输入数值，支持多种数据格式。
+            params: 请求级 DP 参数，可包含 clip_lower/clip_upper/column/party。
 
         Returns:
             带噪声的求和结果。
@@ -132,14 +144,15 @@ class PrivacyService:
             str(p.get("mechanism", "laplace")),
             clip_lower=p.get("clip_lower"),
             clip_upper=p.get("clip_upper"),
+            **self._dp_format_kwargs(params),
         )
 
-    def dp_mean(self, values: List[float], params: Dict[str, Any] = None) -> float:
+    def dp_mean(self, values: Any, params: Dict[str, Any] = None) -> float:
         """差分隐私均值。
 
         Args:
-            values: 输入数值列表。
-            params: 请求级 DP 参数，可包含 clip_lower/clip_upper、min_count。
+            values: 输入数值，支持多种数据格式。
+            params: 请求级 DP 参数，可包含 clip_lower/clip_upper/min_count/column/party。
 
         Returns:
             带噪声的均值。
@@ -153,17 +166,18 @@ class PrivacyService:
             clip_lower=p.get("clip_lower"),
             clip_upper=p.get("clip_upper"),
             min_count=float(p.get("min_count", 5.0)),
+            **self._dp_format_kwargs(params),
         )
 
     def dp_histogram(
-        self, values: List[Any], categories: List[Any], params: Dict[str, Any] = None
+        self, values: Any, categories: List[Any], params: Dict[str, Any] = None
     ) -> Dict[Any, float]:
         """差分隐私直方图计数（使用联合敏感度为 1）。
 
         Args:
-            values: 输入类别列表。
+            values: 输入类别，支持多种数据格式。
             categories: 目标类别集合。
-            params: 请求级 DP 参数。
+            params: 请求级 DP 参数，可包含 column/party。
 
         Returns:
             分桶名到带噪计数的字典。
@@ -175,6 +189,207 @@ class PrivacyService:
             float(p["epsilon"]),
             float(p.get("delta", 0.0)),
             str(p.get("mechanism", "laplace")),
+            **self._dp_format_kwargs(params),
+        )
+
+    def dp_noisy_count(self, true_count: float, params: Dict[str, Any] = None) -> float:
+        """对已经聚合好的计数结果注入 DP 噪声。
+
+        Args:
+            true_count: 真实计数值。
+            params: 请求级 DP 参数。
+
+        Returns:
+            带噪声的计数值。
+        """
+        p = self.resolver.resolve("dp", params, namespace=self.namespace)
+        return self.dp_api.noisy_count(
+            true_count,
+            float(p["epsilon"]),
+            float(p.get("delta", 0.0)),
+            str(p.get("mechanism", "laplace")),
+        )
+
+    def dp_noisy_sum(self, true_sum: float, params: Dict[str, Any] = None) -> float:
+        """对已经聚合好的求和结果注入 DP 噪声。
+
+        Args:
+            true_sum: 真实求和值。
+            params: 请求级 DP 参数，需包含 sensitivity（或 clip_lower/clip_upper）。
+
+        Returns:
+            带噪声的求和结果。
+        """
+        p = self.resolver.resolve("dp", params, namespace=self.namespace)
+        lower = p.get("clip_lower")
+        upper = p.get("clip_upper")
+        sensitivity = p.get("sensitivity")
+        if sensitivity is None:
+            if lower is None or upper is None:
+                raise ValueError(
+                    "dp_noisy_sum requires 'sensitivity' or both 'clip_lower' and 'clip_upper'"
+                )
+            sensitivity = float(upper) - float(lower)
+        else:
+            sensitivity = float(sensitivity)
+        return self.dp_api.noisy_sum(
+            true_sum,
+            sensitivity,
+            float(p["epsilon"]),
+            float(p.get("delta", 0.0)),
+            str(p.get("mechanism", "laplace")),
+        )
+
+    def dp_noisy_mean(
+        self,
+        true_sum: float,
+        true_count: float,
+        params: Dict[str, Any] = None,
+    ) -> float:
+        """对已经聚合好的 sum/count 注入 DP 噪声后得到均值。
+
+        Args:
+            true_sum: 真实求和值。
+            true_count: 真实计数值。
+            params: 请求级 DP 参数，需包含 sensitivity（或 clip_lower/clip_upper）。
+
+        Returns:
+            带噪声的均值。
+        """
+        p = self.resolver.resolve("dp", params, namespace=self.namespace)
+        lower = p.get("clip_lower")
+        upper = p.get("clip_upper")
+        sensitivity = p.get("sensitivity")
+        if sensitivity is None:
+            if lower is None or upper is None:
+                raise ValueError(
+                    "dp_noisy_mean requires 'sensitivity' or both 'clip_lower' and 'clip_upper'"
+                )
+            sensitivity = float(upper) - float(lower)
+        else:
+            sensitivity = float(sensitivity)
+        return self.dp_api.noisy_mean(
+            true_sum,
+            true_count,
+            sensitivity,
+            float(p["epsilon"]),
+            float(p.get("delta", 0.0)),
+            str(p.get("mechanism", "laplace")),
+            min_count=float(p.get("min_count", 5.0)),
+        )
+
+    def dp_noisy_histogram(
+        self, true_counts: Dict[Any, Any], params: Dict[str, Any] = None
+    ) -> Dict[Any, float]:
+        """对已经聚合好的直方图计数注入 DP 噪声。
+
+        Args:
+            true_counts: 分桶名到真实计数的字典。
+            params: 请求级 DP 参数。
+
+        Returns:
+            分桶名到带噪计数的字典。
+        """
+        p = self.resolver.resolve("dp", params, namespace=self.namespace)
+        return self.dp_api.noisy_histogram(
+            true_counts,
+            float(p["epsilon"]),
+            float(p.get("delta", 0.0)),
+            str(p.get("mechanism", "laplace")),
+        )
+
+    def dp_chunked_count(
+        self, chunks: List[Any], params: Dict[str, Any] = None
+    ) -> float:
+        """分块流式差分隐私计数。
+
+        Args:
+            chunks: 数据块列表，每块支持多种数据格式。
+            params: 请求级 DP 参数，可包含 column/party。
+
+        Returns:
+            带噪声的计数值。
+        """
+        p = self.resolver.resolve("dp", params, namespace=self.namespace)
+        return self.dp_api.chunked_count(
+            chunks,
+            float(p["epsilon"]),
+            float(p.get("delta", 0.0)),
+            str(p.get("mechanism", "laplace")),
+            **self._dp_format_kwargs(params),
+        )
+
+    def dp_chunked_sum(
+        self, chunks: List[Any], params: Dict[str, Any] = None
+    ) -> float:
+        """分块流式差分隐私求和。
+
+        Args:
+            chunks: 数据块列表，每块支持多种数据格式。
+            params: 请求级 DP 参数，必须包含 clip_lower/clip_upper，可包含 column/party。
+
+        Returns:
+            带噪声的求和结果。
+        """
+        p = self.resolver.resolve("dp", params, namespace=self.namespace)
+        return self.dp_api.chunked_sum(
+            chunks,
+            float(p["epsilon"]),
+            float(p.get("delta", 0.0)),
+            str(p.get("mechanism", "laplace")),
+            clip_lower=p.get("clip_lower"),
+            clip_upper=p.get("clip_upper"),
+            **self._dp_format_kwargs(params),
+        )
+
+    def dp_chunked_mean(
+        self, chunks: List[Any], params: Dict[str, Any] = None
+    ) -> float:
+        """分块流式差分隐私均值。
+
+        Args:
+            chunks: 数据块列表，每块支持多种数据格式。
+            params: 请求级 DP 参数，必须包含 clip_lower/clip_upper，可包含 column/party。
+
+        Returns:
+            带噪声的均值。
+        """
+        p = self.resolver.resolve("dp", params, namespace=self.namespace)
+        return self.dp_api.chunked_mean(
+            chunks,
+            float(p["epsilon"]),
+            float(p.get("delta", 0.0)),
+            str(p.get("mechanism", "laplace")),
+            clip_lower=p.get("clip_lower"),
+            clip_upper=p.get("clip_upper"),
+            min_count=float(p.get("min_count", 5.0)),
+            **self._dp_format_kwargs(params),
+        )
+
+    def dp_chunked_histogram(
+        self,
+        chunks: List[Any],
+        categories: List[Any],
+        params: Dict[str, Any] = None,
+    ) -> Dict[Any, float]:
+        """分块流式差分隐私直方图计数。
+
+        Args:
+            chunks: 数据块列表，每块支持多种数据格式。
+            categories: 目标类别集合。
+            params: 请求级 DP 参数，可包含 column/party。
+
+        Returns:
+            分桶名到带噪计数的字典。
+        """
+        p = self.resolver.resolve("dp", params, namespace=self.namespace)
+        return self.dp_api.chunked_histogram(
+            chunks,
+            categories,
+            float(p["epsilon"]),
+            float(p.get("delta", 0.0)),
+            str(p.get("mechanism", "laplace")),
+            **self._dp_format_kwargs(params),
         )
 
 

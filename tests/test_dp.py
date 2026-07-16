@@ -321,3 +321,212 @@ class TestAnalyticGaussianAndMeanThreshold:
         assert res_g["A"] > 50
 
 
+
+
+class TestVectorizedClip:
+    """测试 _clip_values 的向量化裁剪与回退路径。"""
+
+    def test_clip_values_basic(self):
+        api = DPApi(namespace="test-clip-basic")
+        result = api._clip_values([1.0, 2.0, 100.0, -5.0], 0.0, 10.0)
+        assert result == [1.0, 2.0, 10.0, 0.0]
+
+    def test_clip_values_with_nan(self):
+        import math
+
+        api = DPApi(namespace="test-clip-nan")
+        result = api._clip_values([1.0, float("nan"), 100.0], 0.0, 10.0)
+        assert result[0] == 1.0
+        assert result[2] == 10.0
+        assert math.isnan(result[1])
+
+
+class TestNoisyAggregation:
+    """测试对已聚合中间结果直接加噪的接口。"""
+
+    def test_noisy_count_laplace(self):
+        ns = "test-noisy-count"
+        BudgetAccountant(ns, epsilon_total=10.0, delta_total=1.0)
+        api = DPApi(namespace=ns)
+        api.rng.seed(42)
+        result = api.noisy_count(100.0, epsilon=1.0, mechanism="laplace")
+        assert result >= 0.0
+        accountant = BudgetAccountant(ns)
+        assert accountant.remaining()["epsilon"] == pytest.approx(9.0, abs=1e-9)
+
+    def test_noisy_sum_requires_non_negative_sensitivity(self):
+        ns = "test-noisy-sum-validation"
+        api = DPApi(namespace=ns)
+        with pytest.raises(ValueError, match="sensitivity"):
+            api.noisy_sum(100.0, sensitivity=-1.0, epsilon=1.0)
+
+    def test_noisy_sum_laplace(self):
+        ns = "test-noisy-sum"
+        BudgetAccountant(ns, epsilon_total=10.0, delta_total=1.0)
+        api = DPApi(namespace=ns)
+        api.rng.seed(42)
+        result = api.noisy_sum(
+            100.0, sensitivity=10.0, epsilon=1.0, mechanism="laplace"
+        )
+        assert result >= 80.0  # 噪声尺度为 10，大致范围
+        accountant = BudgetAccountant(ns)
+        assert accountant.remaining()["epsilon"] == pytest.approx(9.0, abs=1e-9)
+
+    def test_noisy_mean_low_count_shield(self):
+        ns = "test-noisy-mean-shield"
+        BudgetAccountant(ns, epsilon_total=10.0, delta_total=1.0)
+        api = DPApi(namespace=ns)
+        api.rng.seed(42)
+        result = api.noisy_mean(
+            true_sum=100.0,
+            true_count=2.0,
+            sensitivity=10.0,
+            epsilon=1.0,
+            mechanism="laplace",
+            min_count=5.0,
+        )
+        assert result == 0.0
+
+    def test_noisy_histogram(self):
+        ns = "test-noisy-hist"
+        BudgetAccountant(ns, epsilon_total=10.0, delta_total=1.0)
+        api = DPApi(namespace=ns)
+        api.rng.seed(42)
+        result = api.noisy_histogram(
+            {"A": 100.0, "B": 200.0, "C": 50.0},
+            epsilon=10.0,
+            mechanism="laplace",
+        )
+        assert len(result) == 3
+        assert result["A"] > 50
+        assert result["B"] > 150
+        assert result["C"] > 20
+
+
+class TestChunkedAggregation:
+    """测试分块流式 DP 聚合接口。"""
+
+    def test_chunked_count(self):
+        ns = "test-chunked-count"
+        BudgetAccountant(ns, epsilon_total=10.0, delta_total=1.0)
+        api = DPApi(namespace=ns)
+        api.rng.seed(42)
+        chunks = [[1.0, 0.0, 1.0], [0.0, 1.0, 1.0, 1.0], [0.0]]
+        result = api.chunked_count(chunks, epsilon=10.0, mechanism="laplace")
+        assert 4 <= result <= 7
+        accountant = BudgetAccountant(ns)
+        assert accountant.remaining()["epsilon"] == pytest.approx(0.0, abs=1e-9)
+
+    def test_chunked_sum_requires_clip(self):
+        ns = "test-chunked-sum-clip"
+        api = DPApi(namespace=ns)
+        with pytest.raises(ValueError, match="clip_lower and clip_upper"):
+            api.chunked_sum([[1.0, 2.0]], epsilon=1.0)
+
+    def test_chunked_sum(self):
+        ns = "test-chunked-sum"
+        BudgetAccountant(ns, epsilon_total=10.0, delta_total=1.0)
+        api = DPApi(namespace=ns)
+        api.rng.seed(42)
+        chunks = [[1.0, 2.0, 3.0], [100.0, 5.0], [8.0]]
+        result = api.chunked_sum(
+            chunks,
+            epsilon=10.0,
+            mechanism="laplace",
+            clip_lower=0.0,
+            clip_upper=10.0,
+        )
+        # clipped sum = 1+2+3+10+5+8 = 29
+        assert 20 <= result <= 40
+
+    def test_chunked_mean(self):
+        ns = "test-chunked-mean"
+        BudgetAccountant(ns, epsilon_total=10.0, delta_total=1.0)
+        api = DPApi(namespace=ns)
+        api.rng.seed(42)
+        chunks = [[1.0, 2.0, 3.0], [4.0, 5.0]]
+        result = api.chunked_mean(
+            chunks,
+            epsilon=10.0,
+            mechanism="laplace",
+            clip_lower=0.0,
+            clip_upper=10.0,
+        )
+        assert 0 <= result <= 10
+
+    def test_chunked_histogram(self):
+        ns = "test-chunked-hist"
+        BudgetAccountant(ns, epsilon_total=10.0, delta_total=1.0)
+        api = DPApi(namespace=ns)
+        api.rng.seed(42)
+        chunks = [["A", "B", "A"], ["B", "C", "A"], ["B"]]
+        result = api.chunked_histogram(
+            chunks, categories=["A", "B", "C"], epsilon=10.0, mechanism="laplace"
+        )
+        assert result["A"] > 1
+        assert result["B"] > 2
+        assert result["C"] > 0
+
+
+class TestDataAdapters:
+    """测试 DP 输入支持多种数据格式（list/ndarray/pandas DataFrame）。"""
+
+    def test_count_with_pandas_series(self):
+        pd = pytest.importorskip("pandas")
+        ns = "test-count-pd-series"
+        BudgetAccountant(ns, epsilon_total=10.0, delta_total=1.0)
+        api = DPApi(namespace=ns)
+        api.rng.seed(42)
+        series = pd.Series([1.0, 0.0, 1.0, 1.0])
+        result = api.count(series, epsilon=10.0, mechanism="laplace")
+        assert 0 <= result <= 5
+
+    def test_sum_with_pandas_dataframe_column(self):
+        pd = pytest.importorskip("pandas")
+        ns = "test-sum-pd-df"
+        BudgetAccountant(ns, epsilon_total=10.0, delta_total=1.0)
+        api = DPApi(namespace=ns)
+        api.rng.seed(42)
+        df = pd.DataFrame({"salary": [1.0, 2.0, 3.0, 100.0], "age": [20, 30, 40, 50]})
+        result = api.sum(
+            df,
+            epsilon=10.0,
+            mechanism="laplace",
+            clip_lower=0.0,
+            clip_upper=10.0,
+            column="salary",
+        )
+        assert 10 <= result <= 25
+
+    def test_sum_with_numpy_array(self):
+        np = pytest.importorskip("numpy")
+        ns = "test-sum-np"
+        BudgetAccountant(ns, epsilon_total=10.0, delta_total=1.0)
+        api = DPApi(namespace=ns)
+        api.rng.seed(42)
+        arr = np.array([1.0, 2.0, 3.0, 100.0])
+        result = api.sum(
+            arr, epsilon=10.0, mechanism="laplace", clip_lower=0.0, clip_upper=10.0
+        )
+        assert 10 <= result <= 25
+
+    def test_histogram_with_pandas_series(self):
+        pd = pytest.importorskip("pandas")
+        ns = "test-hist-pd"
+        BudgetAccountant(ns, epsilon_total=10.0, delta_total=1.0)
+        api = DPApi(namespace=ns)
+        api.rng.seed(42)
+        series = pd.Series(["A", "B", "A", "C"])
+        result = api.histogram(
+            series, categories=["A", "B", "C", "D"], epsilon=10.0, mechanism="laplace"
+        )
+        assert len(result) == 4
+        assert result["A"] > 0.5
+
+    def test_dataframe_requires_column(self):
+        pd = pytest.importorskip("pandas")
+        ns = "test-df-requires-column"
+        api = DPApi(namespace=ns)
+        df = pd.DataFrame({"a": [1.0, 2.0]})
+        with pytest.raises(ValueError, match="column"):
+            api.count(df, epsilon=1.0)

@@ -14,6 +14,14 @@ service PrivacyService {
   rpc DPSum (DPRequest) returns (DPResponse);
   rpc DPMean (DPRequest) returns (DPResponse);
   rpc DPHistogram (DPHistogramRequest) returns (DPHistogramResponse);
+  rpc DPNoisyCount (DPNoisyCountRequest) returns (DPResponse);
+  rpc DPNoisySum (DPNoisySumRequest) returns (DPResponse);
+  rpc DPNoisyMean (DPNoisyMeanRequest) returns (DPResponse);
+  rpc DPNoisyHistogram (DPNoisyHistogramRequest) returns (DPHistogramResponse);
+  rpc DPChunkedCount (DPChunkedCountRequest) returns (DPResponse);
+  rpc DPChunkedSum (DPChunkedSumRequest) returns (DPResponse);
+  rpc DPChunkedMean (DPChunkedMeanRequest) returns (DPResponse);
+  rpc DPChunkedHistogram (DPChunkedHistogramRequest) returns (DPHistogramResponse);
   rpc KAnonymizeRecord (KAnonymizeRequest) returns (KAnonymizeResponse);
   rpc KAnonymizeTable (KAnonymizeTableRequest) returns (KAnonymizeTableResponse);
   rpc ObfuscateQuery (ObfuscateQueryRequest) returns (ObfuscateQueryResponse);
@@ -201,6 +209,84 @@ message DPHistogramRequest {
 
 message DPHistogramResponse {
   map<string, double> result = 1;
+}
+
+message DPNoisyCountRequest {
+  double true_count = 1;
+  double epsilon = 2;
+  string mechanism = 3;
+  double delta = 4;
+}
+
+message DPNoisySumRequest {
+  double true_sum = 1;
+  double epsilon = 2;
+  string mechanism = 3;
+  double delta = 4;
+  double sensitivity = 5;
+  double clip_lower = 6;
+  double clip_upper = 7;
+}
+
+message DPNoisyMeanRequest {
+  double true_sum = 1;
+  double true_count = 2;
+  double epsilon = 3;
+  string mechanism = 4;
+  double delta = 5;
+  double sensitivity = 6;
+  double clip_lower = 7;
+  double clip_upper = 8;
+  double min_count = 9;
+}
+
+message DPNoisyHistogramRequest {
+  map<string, double> true_counts = 1;
+  double epsilon = 2;
+  string mechanism = 3;
+  double delta = 4;
+}
+
+message DoubleChunk {
+  repeated double values = 1;
+}
+
+message StringChunk {
+  repeated string values = 1;
+}
+
+message DPChunkedCountRequest {
+  repeated DoubleChunk chunks = 1;
+  double epsilon = 2;
+  string mechanism = 3;
+  double delta = 4;
+}
+
+message DPChunkedSumRequest {
+  repeated DoubleChunk chunks = 1;
+  double epsilon = 2;
+  string mechanism = 3;
+  double delta = 4;
+  double clip_lower = 5;
+  double clip_upper = 6;
+}
+
+message DPChunkedMeanRequest {
+  repeated DoubleChunk chunks = 1;
+  double epsilon = 2;
+  string mechanism = 3;
+  double delta = 4;
+  double clip_lower = 5;
+  double clip_upper = 6;
+  double min_count = 7;
+}
+
+message DPChunkedHistogramRequest {
+  repeated StringChunk chunks = 1;
+  repeated string categories = 2;
+  double epsilon = 3;
+  string mechanism = 4;
+  double delta = 5;
 }
 
 

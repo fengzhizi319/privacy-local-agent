@@ -6,6 +6,11 @@
 
 支持显式 clip_lower / clip_upper，确保 sum/mean 的敏感度在 seeing data 之前即
 已确定，满足差分隐私的形式化要求。
+
+扩展能力：
+- 向量化 clip：优先使用 NumPy 加速大规模数据裁剪。
+- Noisify 接口：对已由外部引擎聚合好的中间结果直接加噪。
+- Chunked 接口：支持分块流式聚合，避免一次性加载全部数据到内存。
 """
 
 from __future__ import annotations
@@ -13,10 +18,11 @@ from __future__ import annotations
 import math
 import random
 import warnings
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, Iterable, List, Optional, Sequence
 
 from ..observability.metrics import DP_QUERIES_TOTAL
 from .budget import BudgetAccountant, PrivacyBudgetExhausted
+from .data_adapters import extract_chunks, extract_values
 
 
 def calibrate_analytic_gaussian(epsilon: float, delta: float, sensitivity: float, tol: float = 1e-12) -> float:
@@ -112,8 +118,20 @@ class DPApi:
 
     @staticmethod
     def _clip_values(values: List[float], lower: float, upper: float) -> List[float]:
-        """对输入值做截断，将其限制在 [lower, upper] 区间内。"""
-        return [min(upper, max(lower, float(v))) for v in values]
+        """对输入值做截断，将其限制在 [lower, upper] 区间内。
+
+        优先使用 NumPy 向量化 ``np.clip`` 以提升大规模数据处理效率；
+        当 numpy 不可用或转换失败时回退到纯 Python 列表推导。
+        """
+        try:
+            import numpy as np
+
+            arr = np.asarray(values, dtype=float)
+            # np.clip 对 NaN/inf 的行为：NaN 保持 NaN，inf 被截断到边界
+            clipped = np.clip(arr, lower, upper)
+            return clipped.tolist()
+        except Exception:
+            return [min(upper, max(lower, float(v))) for v in values]
 
     def _resolve_clip_bounds(
         self,
@@ -151,103 +169,123 @@ class DPApi:
         )
         return lower, upper
 
-    def count(
-        self,
-        values: List[float],
-        epsilon: float,
-        delta: float = 0.0,
-        mechanism: str = "laplace",
-    ) -> float:
-        """差分隐私计数。
-
-        Args:
-            values: 输入数值列表。
-            epsilon: 隐私预算参数。
-            delta: 隐私预算 delta 参数；Gaussian 机制必须大于 0。
-            mechanism: "laplace" 或 "gaussian"。
-
-        Returns:
-            带噪声的计数值，经 max(0, ...) 截断保证非负。
-        """
+    def _validate_mechanism(self, mechanism: str, delta: float) -> str:
+        """校验 mechanism 与 delta 参数，返回规范化后的 mechanism 名称。"""
         mechanism = mechanism.lower()
         if mechanism not in ("laplace", "gaussian"):
             raise ValueError("mechanism must be 'laplace' or 'gaussian'")
         if mechanism == "gaussian" and delta <= 0:
             raise ValueError("delta must be positive for Gaussian mechanism")
+        return mechanism
 
+    def _sample_count_noise(self, epsilon: float, delta: float, mechanism: str) -> float:
+        """采样 count / histogram bin 所需的 DP 噪声。
+
+        count 与直方图分桶的 L1 敏感度为 1（Laplace）或 L2 敏感度为 1（Gaussian）。
+        """
+        if mechanism == "laplace":
+            return self._sample_laplace(1.0 / epsilon)
+        # count L2 sensitivity = 1，使用更紧的解析高斯机制
+        sigma = calibrate_analytic_gaussian(epsilon, delta, 1.0)
+        return self._sample_gaussian(sigma)
+
+    def _sample_sum_noise(
+        self, sensitivity: float, epsilon: float, delta: float, mechanism: str
+    ) -> float:
+        """采样 sum 所需的 DP 噪声。
+
+        sum 的敏感度由调用方提供的 sensitivity 决定。
+        """
+        if mechanism == "laplace":
+            scale = sensitivity / epsilon if epsilon > 0 else 0.0
+            return self._sample_laplace(scale)
+        if sensitivity == 0:
+            return 0.0
+        sigma = calibrate_analytic_gaussian(epsilon, delta, sensitivity)
+        return self._sample_gaussian(sigma)
+
+    def count(
+        self,
+        values: Any,
+        epsilon: float,
+        delta: float = 0.0,
+        mechanism: str = "laplace",
+        column: Optional[str] = None,
+        party: Optional[str] = None,
+    ) -> float:
+        """差分隐私计数。
+
+        Args:
+            values: 输入数值，支持 list/tuple/ndarray/Series/DataFrame/SecretFlow 格式。
+            epsilon: 隐私预算参数。
+            delta: 隐私预算 delta 参数；Gaussian 机制必须大于 0。
+            mechanism: "laplace" 或 "gaussian"。
+            column: 当 values 为 DataFrame 等表格类型时，指定目标列名。
+            party: 当 values 为 SecretFlow HDataFrame 时，指定参与方。
+
+        Returns:
+            带噪声的计数值，经 max(0, ...) 截断保证非负。
+        """
+        mechanism = self._validate_mechanism(mechanism, delta)
+        values = extract_values(values, column=column, party=party)
         self.budget.spend(epsilon, delta)
         true_count = sum(1 for v in values if v)
         DP_QUERIES_TOTAL.labels(mechanism=mechanism, aggregation="count").inc()
-
-        if mechanism == "laplace":
-            noise = self._sample_laplace(1.0 / epsilon)
-        else:
-            # count L2 sensitivity = 1，使用更紧的解析高斯机制
-            sigma = calibrate_analytic_gaussian(epsilon, delta, 1.0)
-            noise = self._sample_gaussian(sigma)
+        noise = self._sample_count_noise(epsilon, delta, mechanism)
         return max(0.0, true_count + noise)
 
     def sum(
         self,
-        values: List[float],
+        values: Any,
         epsilon: float,
         delta: float = 0.0,
         mechanism: str = "laplace",
         clip_lower: Optional[float] = None,
         clip_upper: Optional[float] = None,
+        column: Optional[str] = None,
+        party: Optional[str] = None,
     ) -> float:
         """差分隐私求和。
 
         Args:
-            values: 输入数值列表。
+            values: 输入数值，支持 list/tuple/ndarray/Series/DataFrame/SecretFlow 格式。
             epsilon: 隐私预算参数。
             delta: 隐私预算 delta 参数。
             mechanism: "laplace" 或 "gaussian"。
             clip_lower: 截断下界；Gaussian 必须提供。
             clip_upper: 截断上界；Gaussian 必须提供。
+            column: 当 values 为表格类型时，指定目标列名。
+            party: 当 values 为 SecretFlow HDataFrame 时，指定参与方。
 
         Returns:
             带噪声的求和结果。
         """
-        mechanism = mechanism.lower()
-        if mechanism not in ("laplace", "gaussian"):
-            raise ValueError("mechanism must be 'laplace' or 'gaussian'")
-        if mechanism == "gaussian" and delta <= 0:
-            raise ValueError("delta must be positive for Gaussian mechanism")
+        mechanism = self._validate_mechanism(mechanism, delta)
 
+        values = extract_values(values, column=column, party=party)
         lower, upper = self._resolve_clip_bounds(
             values, clip_lower, clip_upper, mechanism
         )
         clipped = self._clip_values(values, lower, upper)
         true_sum = sum(clipped)
-        sensitivity = upper - lower
-        if sensitivity <= 0:
-            sensitivity = 0.0
+        sensitivity = max(0.0, upper - lower)
 
         self.budget.spend(epsilon, delta)
         DP_QUERIES_TOTAL.labels(mechanism=mechanism, aggregation="sum").inc()
-
-        if mechanism == "laplace":
-            scale = sensitivity / epsilon if epsilon > 0 else 0.0
-            noise = self._sample_laplace(scale)
-        else:
-            # sum L2 sensitivity = upper - lower，使用更紧的解析高斯机制
-            if sensitivity == 0:
-                noise = 0.0
-            else:
-                sigma = calibrate_analytic_gaussian(epsilon, delta, sensitivity)
-                noise = self._sample_gaussian(sigma)
+        noise = self._sample_sum_noise(sensitivity, epsilon, delta, mechanism)
         return true_sum + noise
 
     def mean(
         self,
-        values: List[float],
+        values: Any,
         epsilon: float,
         delta: float = 0.0,
         mechanism: str = "laplace",
         clip_lower: Optional[float] = None,
         clip_upper: Optional[float] = None,
         min_count: float = 5.0,
+        column: Optional[str] = None,
+        party: Optional[str] = None,
     ) -> float:
         """差分隐私均值。
 
@@ -255,14 +293,11 @@ class DPApi:
         最后用 noisy_sum / noisy_count 得到差分隐私均值。
         为了防除以接近零的值导致结果发散，当 noisy_count < min_count 时返回 0.0。
         """
+        values = extract_values(values, column=column, party=party)
         if not values:
             return 0.0
 
-        mechanism = mechanism.lower()
-        if mechanism not in ("laplace", "gaussian"):
-            raise ValueError("mechanism must be 'laplace' or 'gaussian'")
-        if mechanism == "gaussian" and delta <= 0:
-            raise ValueError("delta must be positive for Gaussian mechanism")
+        mechanism = self._validate_mechanism(mechanism, delta)
 
         # 组合定理：总预算 = epsilon/2 + epsilon/2；delta/2 + delta/2
         noisy_count = self.count(
@@ -279,22 +314,21 @@ class DPApi:
 
     def histogram(
         self,
-        values: List[Any],
+        values: Any,
         categories: Sequence[Any],
         epsilon: float,
         delta: float = 0.0,
         mechanism: str = "laplace",
+        column: Optional[str] = None,
+        party: Optional[str] = None,
     ) -> Dict[Any, float]:
         """差分隐私直方图计数（使用联合敏感度为 1）。
 
         对于互斥分类，每个个体最多贡献到一个分桶。因此，整个直方图的 L1 / L2 敏感度均为 1。
         只需消耗一次 (epsilon, delta) 预算即可对所有类别并行加噪，大幅提升多分类查询效用。
         """
-        mechanism = mechanism.lower()
-        if mechanism not in ("laplace", "gaussian"):
-            raise ValueError("mechanism must be 'laplace' or 'gaussian'")
-        if mechanism == "gaussian" and delta <= 0:
-            raise ValueError("delta must be positive for Gaussian mechanism")
+        mechanism = self._validate_mechanism(mechanism, delta)
+        values = extract_values(values, column=column, party=party)
 
         self.budget.spend(epsilon, delta)
         DP_QUERIES_TOTAL.labels(mechanism=mechanism, aggregation="histogram").inc()
@@ -306,17 +340,288 @@ class DPApi:
                 counts[v] += 1.0
 
         # 由于联合敏感度为 1，直接对每个 Bin 加噪
-        if mechanism == "laplace":
-            scale = 1.0 / epsilon
-            for c in counts:
-                noise = self._sample_laplace(scale)
-                counts[c] = max(0.0, counts[c] + noise)
-        else:
-            sigma = calibrate_analytic_gaussian(epsilon, delta, 1.0)
-            for c in counts:
-                noise = self._sample_gaussian(sigma)
-                counts[c] = max(0.0, counts[c] + noise)
+        for c in counts:
+            noise = self._sample_count_noise(epsilon, delta, mechanism)
+            counts[c] = max(0.0, counts[c] + noise)
 
+        return counts
+
+    def noisy_count(
+        self,
+        true_count: float,
+        epsilon: float,
+        delta: float = 0.0,
+        mechanism: str = "laplace",
+    ) -> float:
+        """对已经聚合好的计数结果直接注入 DP 噪声。
+
+        适用于数据引擎（Spark/SQL/DuckDB 等）已在数据源侧完成 count，
+        仅需 sidecar 完成最终加噪与预算扣减的场景。
+
+        Args:
+            true_count: 真实计数值。
+            epsilon: 隐私预算参数。
+            delta: 隐私预算 delta 参数；Gaussian 机制必须大于 0。
+            mechanism: "laplace" 或 "gaussian"。
+
+        Returns:
+            带噪声的计数值，经 max(0, ...) 截断保证非负。
+        """
+        mechanism = self._validate_mechanism(mechanism, delta)
+        self.budget.spend(epsilon, delta)
+        DP_QUERIES_TOTAL.labels(mechanism=mechanism, aggregation="count").inc()
+        noise = self._sample_count_noise(epsilon, delta, mechanism)
+        return max(0.0, float(true_count) + noise)
+
+    def noisy_sum(
+        self,
+        true_sum: float,
+        sensitivity: float,
+        epsilon: float,
+        delta: float = 0.0,
+        mechanism: str = "laplace",
+    ) -> float:
+        """对已经聚合好的求和结果直接注入 DP 噪声。
+
+        调用方必须提供已知的敏感度（通常为 clip_upper - clip_lower），
+        因为本方法不再接触原始数据，无法自行推断边界。
+
+        Args:
+            true_sum: 真实求和值（已由外部引擎完成 clip 后聚合）。
+            sensitivity: 求和的 L1/L2 敏感度。
+            epsilon: 隐私预算参数。
+            delta: 隐私预算 delta 参数。
+            mechanism: "laplace" 或 "gaussian"。
+
+        Returns:
+            带噪声的求和结果。
+        """
+        mechanism = self._validate_mechanism(mechanism, delta)
+        if sensitivity < 0:
+            raise ValueError("sensitivity must be non-negative")
+        self.budget.spend(epsilon, delta)
+        DP_QUERIES_TOTAL.labels(mechanism=mechanism, aggregation="sum").inc()
+        noise = self._sample_sum_noise(sensitivity, epsilon, delta, mechanism)
+        return float(true_sum) + noise
+
+    def noisy_mean(
+        self,
+        true_sum: float,
+        true_count: float,
+        sensitivity: float,
+        epsilon: float,
+        delta: float = 0.0,
+        mechanism: str = "laplace",
+        min_count: float = 5.0,
+    ) -> float:
+        """对已经聚合好的 sum/count 分别注入 DP 噪声后得到均值。
+
+        使用组合定理：将 (epsilon, delta) 拆分为两份，分别用于 count 与 sum。
+        当 noisy_count < min_count 时返回 0.0，防止除以接近零的值导致结果发散。
+        """
+        mechanism = self._validate_mechanism(mechanism, delta)
+        if sensitivity < 0:
+            raise ValueError("sensitivity must be non-negative")
+        noisy_count = self.noisy_count(
+            true_count, epsilon / 2.0, delta / 2.0, mechanism
+        )
+        if noisy_count < min_count or noisy_count <= 0.0:
+            return 0.0
+        noisy_sum = self.noisy_sum(
+            true_sum, sensitivity, epsilon / 2.0, delta / 2.0, mechanism
+        )
+        DP_QUERIES_TOTAL.labels(mechanism=mechanism, aggregation="mean").inc()
+        return noisy_sum / noisy_count
+
+    def noisy_histogram(
+        self,
+        true_counts: Dict[Any, float],
+        epsilon: float,
+        delta: float = 0.0,
+        mechanism: str = "laplace",
+    ) -> Dict[Any, float]:
+        """对已经聚合好的直方图计数直接注入 DP 噪声。
+
+        适用于外部引擎已完成分桶计数，仅需 sidecar 加噪的场景。
+        联合敏感度为 1，因此所有分桶共享一次 (epsilon, delta) 预算。
+
+        Args:
+            true_counts: 分桶名到真实计数的字典。
+            epsilon: 隐私预算参数。
+            delta: 隐私预算 delta 参数。
+            mechanism: "laplace" 或 "gaussian"。
+
+        Returns:
+            分桶名到带噪计数的字典。
+        """
+        mechanism = self._validate_mechanism(mechanism, delta)
+        self.budget.spend(epsilon, delta)
+        DP_QUERIES_TOTAL.labels(mechanism=mechanism, aggregation="histogram").inc()
+
+        result = {c: float(true_counts.get(c, 0.0)) for c in true_counts}
+        for c in result:
+            noise = self._sample_count_noise(epsilon, delta, mechanism)
+            result[c] = max(0.0, result[c] + noise)
+        return result
+
+    def chunked_count(
+        self,
+        chunks: Iterable[Any],
+        epsilon: float,
+        delta: float = 0.0,
+        mechanism: str = "laplace",
+        column: Optional[str] = None,
+        party: Optional[str] = None,
+    ) -> float:
+        """分块流式差分隐私计数。
+
+        允许调用方以多个 chunk（生成器/迭代器）分批传入数据，
+        sidecar 增量聚合真实计数后只加一次噪声、只消耗一次 (epsilon, delta) 预算。
+        适用于上亿级数据无法一次性加载内存的场景。
+
+        Args:
+            chunks: 数据块的可迭代对象，每块支持 list/tuple/ndarray/Series/DataFrame/SecretFlow 格式。
+            epsilon: 隐私预算参数。
+            delta: 隐私预算 delta 参数。
+            mechanism: "laplace" 或 "gaussian"。
+            column: 当 chunk 为表格类型时，指定目标列名。
+            party: 当 chunk 为 SecretFlow HDataFrame 时，指定参与方。
+
+        Returns:
+            带噪声的计数值。
+        """
+        mechanism = self._validate_mechanism(mechanism, delta)
+        chunks = extract_chunks(chunks, column=column, party=party)
+        true_count = 0.0
+        for chunk in chunks:
+            true_count += sum(1 for v in chunk if v)
+        self.budget.spend(epsilon, delta)
+        DP_QUERIES_TOTAL.labels(mechanism=mechanism, aggregation="count").inc()
+        noise = self._sample_count_noise(epsilon, delta, mechanism)
+        return max(0.0, true_count + noise)
+
+    def chunked_sum(
+        self,
+        chunks: Iterable[Any],
+        epsilon: float,
+        delta: float = 0.0,
+        mechanism: str = "laplace",
+        clip_lower: Optional[float] = None,
+        clip_upper: Optional[float] = None,
+        column: Optional[str] = None,
+        party: Optional[str] = None,
+    ) -> float:
+        """分块流式差分隐私求和。
+
+        调用方必须显式提供 clip 边界；本方法按块 clip 并累加局部和，
+        最终只消耗一次 (epsilon, delta) 预算并注入噪声。
+
+        Args:
+            chunks: 数据块的可迭代对象，每块支持多种数据格式。
+            epsilon: 隐私预算参数。
+            delta: 隐私预算 delta 参数。
+            mechanism: "laplace" 或 "gaussian"。
+            clip_lower: 截断下界（必须显式提供）。
+            clip_upper: 截断上界（必须显式提供）。
+            column: 当 chunk 为表格类型时，指定目标列名。
+            party: 当 chunk 为 SecretFlow HDataFrame 时，指定参与方。
+
+        Returns:
+            带噪声的求和结果。
+        """
+        mechanism = self._validate_mechanism(mechanism, delta)
+        if clip_lower is None or clip_upper is None:
+            raise ValueError(
+                "chunked_sum requires explicit clip_lower and clip_upper"
+            )
+        if clip_lower > clip_upper:
+            raise ValueError("clip_lower must be <= clip_upper")
+        lower, upper = float(clip_lower), float(clip_upper)
+        sensitivity = max(0.0, upper - lower)
+
+        chunks = extract_chunks(chunks, column=column, party=party)
+        true_sum = 0.0
+        for chunk in chunks:
+            clipped = self._clip_values(chunk, lower, upper)
+            true_sum += sum(clipped)
+
+        self.budget.spend(epsilon, delta)
+        DP_QUERIES_TOTAL.labels(mechanism=mechanism, aggregation="sum").inc()
+        noise = self._sample_sum_noise(sensitivity, epsilon, delta, mechanism)
+        return true_sum + noise
+
+    def chunked_mean(
+        self,
+        chunks: Iterable[Any],
+        epsilon: float,
+        delta: float = 0.0,
+        mechanism: str = "laplace",
+        clip_lower: Optional[float] = None,
+        clip_upper: Optional[float] = None,
+        min_count: float = 5.0,
+        column: Optional[str] = None,
+        party: Optional[str] = None,
+    ) -> float:
+        """分块流式差分隐私均值。
+
+        使用组合定理：将 (epsilon, delta) 拆分为两份，分别用于 count 与 sum。
+        每个 chunk 只被遍历一次，内存占用与总数据量解耦。
+        """
+        mechanism = self._validate_mechanism(mechanism, delta)
+        if clip_lower is None or clip_upper is None:
+            raise ValueError(
+                "chunked_mean requires explicit clip_lower and clip_upper"
+            )
+        if clip_lower > clip_upper:
+            raise ValueError("clip_lower must be <= clip_upper")
+        lower, upper = float(clip_lower), float(clip_upper)
+        sensitivity = max(0.0, upper - lower)
+
+        true_count = 0.0
+        true_sum = 0.0
+        for chunk in chunks:
+            chunk_list = list(chunk)
+            true_count += len(chunk_list)
+            clipped = self._clip_values(chunk_list, lower, upper)
+            true_sum += sum(clipped)
+
+        noisy_count = self.noisy_count(
+            true_count, epsilon / 2.0, delta / 2.0, mechanism
+        )
+        if noisy_count < min_count or noisy_count <= 0.0:
+            return 0.0
+        noisy_sum = self.noisy_sum(
+            true_sum, sensitivity, epsilon / 2.0, delta / 2.0, mechanism
+        )
+        DP_QUERIES_TOTAL.labels(mechanism=mechanism, aggregation="mean").inc()
+        return noisy_sum / noisy_count
+
+    def chunked_histogram(
+        self,
+        chunks: Iterable[Any],
+        categories: Sequence[Any],
+        epsilon: float,
+        delta: float = 0.0,
+        mechanism: str = "laplace",
+        column: Optional[str] = None,
+        party: Optional[str] = None,
+    ) -> Dict[Any, float]:
+        """分块流式差分隐私直方图计数。
+
+        按块统计各分类计数并合并，最终对所有分桶加噪，只消耗一次预算。
+        """
+        mechanism = self._validate_mechanism(mechanism, delta)
+        counts = {c: 0.0 for c in categories}
+        for chunk in chunks:
+            for v in chunk:
+                if v in counts:
+                    counts[v] += 1.0
+
+        self.budget.spend(epsilon, delta)
+        DP_QUERIES_TOTAL.labels(mechanism=mechanism, aggregation="histogram").inc()
+        for c in counts:
+            noise = self._sample_count_noise(epsilon, delta, mechanism)
+            counts[c] = max(0.0, counts[c] + noise)
         return counts
 
 

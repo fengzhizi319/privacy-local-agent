@@ -9,3 +9,4 @@ limits>=3.10.0
 cryptography>=42.0.0
 python-json-logger>=2.0.7
 prometheus-client>=0.20.0
+numpy>=1.24.0

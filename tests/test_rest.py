@@ -326,3 +326,128 @@ def test_dp_histogram_rest():
     assert res_dict["A"] >= 0.0
 
 
+
+
+def test_dp_noisy_count_rest():
+    """测试对已聚合计数加噪的 REST 接口。"""
+    resp = client.post(
+        "/v1/privacy/dp/noisy_count",
+        json={"true_count": 100.0, "params": {"epsilon": 1.0, "mechanism": "laplace"}},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["result"] >= 0.0
+
+
+def test_dp_noisy_sum_rest():
+    """测试对已聚合求和加噪的 REST 接口。"""
+    resp = client.post(
+        "/v1/privacy/dp/noisy_sum",
+        json={
+            "true_sum": 100.0,
+            "params": {
+                "epsilon": 1.0,
+                "mechanism": "laplace",
+                "sensitivity": 10.0,
+            },
+        },
+    )
+    assert resp.status_code == 200
+    assert resp.json()["result"] >= 80.0
+
+
+def test_dp_noisy_mean_rest():
+    """测试对已聚合 sum/count 加噪得到均值的 REST 接口。"""
+    resp = client.post(
+        "/v1/privacy/dp/noisy_mean",
+        json={
+            "true_sum": 150.0,
+            "true_count": 10.0,
+            "params": {
+                "epsilon": 10.0,
+                "mechanism": "laplace",
+                "clip_lower": 0.0,
+                "clip_upper": 100.0,
+            },
+        },
+    )
+    assert resp.status_code == 200
+    assert 0 <= resp.json()["result"] <= 100
+
+
+def test_dp_noisy_histogram_rest():
+    """测试对已聚合直方图加噪的 REST 接口。"""
+    resp = client.post(
+        "/v1/privacy/dp/noisy_histogram",
+        json={
+            "true_counts": {"A": 100.0, "B": 200.0},
+            "params": {"epsilon": 10.0, "mechanism": "laplace"},
+        },
+    )
+    assert resp.status_code == 200
+    res_dict = resp.json()["result"]
+    assert res_dict["A"] >= 0.0
+    assert res_dict["B"] >= 0.0
+
+
+def test_dp_chunked_count_rest():
+    """测试分块流式 DP 计数 REST 接口。"""
+    resp = client.post(
+        "/v1/privacy/dp/chunked_count",
+        json={
+            "chunks": [[1.0, 0.0, 1.0], [0.0, 1.0, 1.0]],
+            "params": {"epsilon": 10.0, "mechanism": "laplace"},
+        },
+    )
+    assert resp.status_code == 200
+    assert resp.json()["result"] >= 0.0
+
+
+def test_dp_chunked_sum_rest():
+    """测试分块流式 DP 求和 REST 接口。"""
+    resp = client.post(
+        "/v1/privacy/dp/chunked_sum",
+        json={
+            "chunks": [[1.0, 2.0, 3.0], [100.0, 5.0]],
+            "params": {
+                "epsilon": 10.0,
+                "mechanism": "laplace",
+                "clip_lower": 0.0,
+                "clip_upper": 10.0,
+            },
+        },
+    )
+    assert resp.status_code == 200
+    assert resp.json()["result"] >= 15.0
+
+
+def test_dp_chunked_mean_rest():
+    """测试分块流式 DP 均值 REST 接口。"""
+    resp = client.post(
+        "/v1/privacy/dp/chunked_mean",
+        json={
+            "chunks": [[1.0, 2.0, 3.0], [4.0, 5.0]],
+            "params": {
+                "epsilon": 10.0,
+                "mechanism": "laplace",
+                "clip_lower": 0.0,
+                "clip_upper": 10.0,
+            },
+        },
+    )
+    assert resp.status_code == 200
+    assert 0 <= resp.json()["result"] <= 10
+
+
+def test_dp_chunked_histogram_rest():
+    """测试分块流式 DP 直方图 REST 接口。"""
+    resp = client.post(
+        "/v1/privacy/dp/chunked_histogram",
+        json={
+            "chunks": [["A", "B", "A"], ["B", "C", "A"]],
+            "categories": ["A", "B", "C"],
+            "params": {"epsilon": 10.0, "mechanism": "laplace"},
+        },
+    )
+    assert resp.status_code == 200
+    res_dict = resp.json()["result"]
+    assert all(c in res_dict for c in ("A", "B", "C"))

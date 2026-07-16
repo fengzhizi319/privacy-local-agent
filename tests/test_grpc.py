@@ -143,3 +143,120 @@ def test_grpc_dp_histogram():
     assert response.result["A"] >= 0.0
 
 
+
+
+def test_grpc_dp_noisy_count():
+    """验证 gRPC 对已聚合计数加噪接口。"""
+    servicer = PrivacyServicer()
+    request = privacy_pb2.DPNoisyCountRequest(
+        true_count=100.0, epsilon=10.0, mechanism="laplace"
+    )
+    response = servicer.DPNoisyCount(request, None)
+    assert response.result >= 0.0
+
+
+def test_grpc_dp_noisy_sum():
+    """验证 gRPC 对已聚合求和加噪接口。"""
+    servicer = PrivacyServicer()
+    request = privacy_pb2.DPNoisySumRequest(
+        true_sum=100.0,
+        epsilon=10.0,
+        mechanism="laplace",
+        sensitivity=10.0,
+    )
+    response = servicer.DPNoisySum(request, None)
+    assert response.result >= 80.0
+
+
+def test_grpc_dp_noisy_mean():
+    """验证 gRPC 对已聚合 sum/count 加噪得到均值接口。"""
+    servicer = PrivacyServicer()
+    request = privacy_pb2.DPNoisyMeanRequest(
+        true_sum=150.0,
+        true_count=10.0,
+        epsilon=10.0,
+        mechanism="laplace",
+        clip_lower=0.0,
+        clip_upper=100.0,
+    )
+    response = servicer.DPNoisyMean(request, None)
+    assert 0.0 <= response.result <= 100.0
+
+
+def test_grpc_dp_noisy_histogram():
+    """验证 gRPC 对已聚合直方图加噪接口。"""
+    servicer = PrivacyServicer()
+    request = privacy_pb2.DPNoisyHistogramRequest(
+        true_counts={"A": 100.0, "B": 200.0},
+        epsilon=10.0,
+        mechanism="laplace",
+    )
+    response = servicer.DPNoisyHistogram(request, None)
+    assert "A" in response.result
+    assert "B" in response.result
+    assert response.result["A"] >= 0.0
+
+
+def test_grpc_dp_chunked_count():
+    """验证 gRPC 分块流式 DP 计数接口。"""
+    servicer = PrivacyServicer()
+    request = privacy_pb2.DPChunkedCountRequest(
+        chunks=[
+            privacy_pb2.DoubleChunk(values=[1.0, 0.0, 1.0]),
+            privacy_pb2.DoubleChunk(values=[0.0, 1.0]),
+        ],
+        epsilon=10.0,
+        mechanism="laplace",
+    )
+    response = servicer.DPChunkedCount(request, None)
+    assert response.result >= 0.0
+
+
+def test_grpc_dp_chunked_sum():
+    """验证 gRPC 分块流式 DP 求和接口。"""
+    servicer = PrivacyServicer()
+    request = privacy_pb2.DPChunkedSumRequest(
+        chunks=[
+            privacy_pb2.DoubleChunk(values=[1.0, 2.0, 3.0]),
+            privacy_pb2.DoubleChunk(values=[100.0, 5.0]),
+        ],
+        epsilon=10.0,
+        mechanism="laplace",
+        clip_lower=0.0,
+        clip_upper=10.0,
+    )
+    response = servicer.DPChunkedSum(request, None)
+    assert response.result >= 15.0
+
+
+def test_grpc_dp_chunked_mean():
+    """验证 gRPC 分块流式 DP 均值接口。"""
+    servicer = PrivacyServicer()
+    request = privacy_pb2.DPChunkedMeanRequest(
+        chunks=[
+            privacy_pb2.DoubleChunk(values=[1.0, 2.0, 3.0]),
+            privacy_pb2.DoubleChunk(values=[4.0, 5.0]),
+        ],
+        epsilon=10.0,
+        mechanism="laplace",
+        clip_lower=0.0,
+        clip_upper=10.0,
+    )
+    response = servicer.DPChunkedMean(request, None)
+    assert 0.0 <= response.result <= 10.0
+
+
+def test_grpc_dp_chunked_histogram():
+    """验证 gRPC 分块流式 DP 直方图接口。"""
+    servicer = PrivacyServicer()
+    request = privacy_pb2.DPChunkedHistogramRequest(
+        chunks=[
+            privacy_pb2.StringChunk(values=["A", "B", "A"]),
+            privacy_pb2.StringChunk(values=["B", "C", "A"]),
+        ],
+        categories=["A", "B", "C"],
+        epsilon=10.0,
+        mechanism="laplace",
+    )
+    response = servicer.DPChunkedHistogram(request, None)
+    assert all(c in response.result for c in ("A", "B", "C"))

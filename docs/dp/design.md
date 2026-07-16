@@ -191,7 +191,7 @@ from privacy_local_agent.privacy.dp import DPApi
 df = pd.read_csv("data.csv")
 api = DPApi(namespace="hr_dataset")
 
-# 只传入 salary 这一列，而不是整个 df
+# 方式 1：手动提取单列
 result = api.sum(
     values=df["salary"].tolist(),
     epsilon=1.0,
@@ -200,9 +200,51 @@ result = api.sum(
     clip_lower=0.0,
     clip_upper=100000.0,
 )
+
+# 方式 2：直接传入 DataFrame，使用 column 参数指定目标列
+result = api.sum(
+    values=df,
+    column="salary",
+    epsilon=1.0,
+    delta=1e-6,
+    mechanism="gaussian",
+    clip_lower=0.0,
+    clip_upper=100000.0,
+)
 ```
 
-REST 侧同理：`values` 字段只包含目标列的样本值。
+SecretFlow 联邦 DataFrame 同样支持直接传入（需安装 secretflow）：
+
+```python
+from privacy_local_agent.privacy.dp import DPApi
+
+api = DPApi(namespace="hr_dataset")
+
+# VDataFrame：列分布在不同参与方，自动定位包含 salary 的 partition
+result = api.sum(
+    values=vdf,
+    column="salary",
+    epsilon=1.0,
+    delta=1e-6,
+    mechanism="gaussian",
+    clip_lower=0.0,
+    clip_upper=100000.0,
+)
+
+# HDataFrame：样本水平分割，需指定参与方
+result = api.sum(
+    values=hdf,
+    column="salary",
+    party="alice",
+    epsilon=1.0,
+    delta=1e-6,
+    mechanism="gaussian",
+    clip_lower=0.0,
+    clip_upper=100000.0,
+)
+```
+
+REST 侧同理：`values` 字段只包含目标列的样本值；如需指定列/参与方，可在 `params` 中传入 `column` 和 `party`。
 
 ##### 多字段 / 多列 / 分组分析怎么办
 

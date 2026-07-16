@@ -12,7 +12,7 @@ composed into PrivacyServicer via multiple inheritance.
 
 import os
 from concurrent import futures
-from typing import Dict
+from typing import Dict, List
 
 import grpc
 
@@ -103,6 +103,85 @@ class PrivacyServicer(
             params["delta"] = request.delta
         res_dict = self.service.dp_histogram(
             list(request.values), list(request.categories), params
+        )
+        result = {str(k): float(v) for k, v in res_dict.items()}
+        return privacy_pb2.DPHistogramResponse(result=result)
+
+    def _dp_params_from_noisy_request(self, request) -> Dict[str, object]:
+        """从 noisify 请求构建参数字典。"""
+        params: Dict[str, object] = {
+            "epsilon": request.epsilon,
+            "mechanism": request.mechanism,
+        }
+        if request.delta != 0.0:
+            params["delta"] = request.delta
+        # proto3 默认值问题：sensitivity=0 视为未提供，依赖 clip 边界推导
+        if getattr(request, "sensitivity", 0.0) != 0.0:
+            params["sensitivity"] = request.sensitivity
+        if getattr(request, "clip_lower", 0.0) != 0.0 or getattr(request, "clip_upper", 0.0) != 0.0:
+            params["clip_lower"] = request.clip_lower
+            params["clip_upper"] = request.clip_upper
+        if getattr(request, "min_count", 0.0) != 0.0:
+            params["min_count"] = request.min_count
+        return params
+
+    def DPNoisyCount(self, request, context):
+        """对已聚合计数加噪的 gRPC 方法。"""
+        params = self._dp_params_from_noisy_request(request)
+        result = self.service.dp_noisy_count(request.true_count, params)
+        return privacy_pb2.DPResponse(result=result)
+
+    def DPNoisySum(self, request, context):
+        """对已聚合求和加噪的 gRPC 方法。"""
+        params = self._dp_params_from_noisy_request(request)
+        result = self.service.dp_noisy_sum(request.true_sum, params)
+        return privacy_pb2.DPResponse(result=result)
+
+    def DPNoisyMean(self, request, context):
+        """对已聚合 sum/count 加噪得到均值的 gRPC 方法。"""
+        params = self._dp_params_from_noisy_request(request)
+        result = self.service.dp_noisy_mean(
+            request.true_sum, request.true_count, params
+        )
+        return privacy_pb2.DPResponse(result=result)
+
+    def DPNoisyHistogram(self, request, context):
+        """对已聚合直方图加噪的 gRPC 方法。"""
+        params = self._dp_params_from_noisy_request(request)
+        res_dict = self.service.dp_noisy_histogram(dict(request.true_counts), params)
+        result = {str(k): float(v) for k, v in res_dict.items()}
+        return privacy_pb2.DPHistogramResponse(result=result)
+
+    def _chunks_from_request(self, request) -> List[List[float]]:
+        """从 chunked 请求中提取数据块列表。"""
+        return [list(chunk.values) for chunk in request.chunks]
+
+    def DPChunkedCount(self, request, context):
+        """分块流式 DP 计数 gRPC 方法。"""
+        params = self._dp_params_from_noisy_request(request)
+        result = self.service.dp_chunked_count(self._chunks_from_request(request), params)
+        return privacy_pb2.DPResponse(result=result)
+
+    def DPChunkedSum(self, request, context):
+        """分块流式 DP 求和 gRPC 方法。"""
+        params = self._dp_params_from_noisy_request(request)
+        result = self.service.dp_chunked_sum(self._chunks_from_request(request), params)
+        return privacy_pb2.DPResponse(result=result)
+
+    def DPChunkedMean(self, request, context):
+        """分块流式 DP 均值 gRPC 方法。"""
+        params = self._dp_params_from_noisy_request(request)
+        result = self.service.dp_chunked_mean(
+            self._chunks_from_request(request), params
+        )
+        return privacy_pb2.DPResponse(result=result)
+
+    def DPChunkedHistogram(self, request, context):
+        """分块流式 DP 直方图 gRPC 方法。"""
+        params = self._dp_params_from_noisy_request(request)
+        chunks = [list(chunk.values) for chunk in request.chunks]
+        res_dict = self.service.dp_chunked_histogram(
+            chunks, list(request.categories), params
         )
         result = {str(k): float(v) for k, v in res_dict.items()}
         return privacy_pb2.DPHistogramResponse(result=result)

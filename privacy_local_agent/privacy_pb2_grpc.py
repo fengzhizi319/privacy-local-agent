@@ -69,6 +69,46 @@ class PrivacyServiceStub:
                 request_serializer=privacy__pb2.DPHistogramRequest.SerializeToString,
                 response_deserializer=privacy__pb2.DPHistogramResponse.FromString,
                 _registered_method=True)
+        self.DPNoisyCount = channel.unary_unary(
+                '/privacy.local.PrivacyService/DPNoisyCount',
+                request_serializer=privacy__pb2.DPNoisyCountRequest.SerializeToString,
+                response_deserializer=privacy__pb2.DPResponse.FromString,
+                _registered_method=True)
+        self.DPNoisySum = channel.unary_unary(
+                '/privacy.local.PrivacyService/DPNoisySum',
+                request_serializer=privacy__pb2.DPNoisySumRequest.SerializeToString,
+                response_deserializer=privacy__pb2.DPResponse.FromString,
+                _registered_method=True)
+        self.DPNoisyMean = channel.unary_unary(
+                '/privacy.local.PrivacyService/DPNoisyMean',
+                request_serializer=privacy__pb2.DPNoisyMeanRequest.SerializeToString,
+                response_deserializer=privacy__pb2.DPResponse.FromString,
+                _registered_method=True)
+        self.DPNoisyHistogram = channel.unary_unary(
+                '/privacy.local.PrivacyService/DPNoisyHistogram',
+                request_serializer=privacy__pb2.DPNoisyHistogramRequest.SerializeToString,
+                response_deserializer=privacy__pb2.DPHistogramResponse.FromString,
+                _registered_method=True)
+        self.DPChunkedCount = channel.unary_unary(
+                '/privacy.local.PrivacyService/DPChunkedCount',
+                request_serializer=privacy__pb2.DPChunkedCountRequest.SerializeToString,
+                response_deserializer=privacy__pb2.DPResponse.FromString,
+                _registered_method=True)
+        self.DPChunkedSum = channel.unary_unary(
+                '/privacy.local.PrivacyService/DPChunkedSum',
+                request_serializer=privacy__pb2.DPChunkedSumRequest.SerializeToString,
+                response_deserializer=privacy__pb2.DPResponse.FromString,
+                _registered_method=True)
+        self.DPChunkedMean = channel.unary_unary(
+                '/privacy.local.PrivacyService/DPChunkedMean',
+                request_serializer=privacy__pb2.DPChunkedMeanRequest.SerializeToString,
+                response_deserializer=privacy__pb2.DPResponse.FromString,
+                _registered_method=True)
+        self.DPChunkedHistogram = channel.unary_unary(
+                '/privacy.local.PrivacyService/DPChunkedHistogram',
+                request_serializer=privacy__pb2.DPChunkedHistogramRequest.SerializeToString,
+                response_deserializer=privacy__pb2.DPHistogramResponse.FromString,
+                _registered_method=True)
         self.KAnonymizeRecord = channel.unary_unary(
                 '/privacy.local.PrivacyService/KAnonymizeRecord',
                 request_serializer=privacy__pb2.KAnonymizeRequest.SerializeToString,
@@ -171,6 +211,54 @@ class PrivacyServiceServicer:
         raise NotImplementedError('Method not implemented!')
 
     def DPHistogram(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def DPNoisyCount(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def DPNoisySum(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def DPNoisyMean(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def DPNoisyHistogram(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def DPChunkedCount(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def DPChunkedSum(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def DPChunkedMean(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def DPChunkedHistogram(self, request, context):
         """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
@@ -284,6 +372,46 @@ def add_PrivacyServiceServicer_to_server(servicer, server):
             'DPHistogram': grpc.unary_unary_rpc_method_handler(
                     servicer.DPHistogram,
                     request_deserializer=privacy__pb2.DPHistogramRequest.FromString,
+                    response_serializer=privacy__pb2.DPHistogramResponse.SerializeToString,
+            ),
+            'DPNoisyCount': grpc.unary_unary_rpc_method_handler(
+                    servicer.DPNoisyCount,
+                    request_deserializer=privacy__pb2.DPNoisyCountRequest.FromString,
+                    response_serializer=privacy__pb2.DPResponse.SerializeToString,
+            ),
+            'DPNoisySum': grpc.unary_unary_rpc_method_handler(
+                    servicer.DPNoisySum,
+                    request_deserializer=privacy__pb2.DPNoisySumRequest.FromString,
+                    response_serializer=privacy__pb2.DPResponse.SerializeToString,
+            ),
+            'DPNoisyMean': grpc.unary_unary_rpc_method_handler(
+                    servicer.DPNoisyMean,
+                    request_deserializer=privacy__pb2.DPNoisyMeanRequest.FromString,
+                    response_serializer=privacy__pb2.DPResponse.SerializeToString,
+            ),
+            'DPNoisyHistogram': grpc.unary_unary_rpc_method_handler(
+                    servicer.DPNoisyHistogram,
+                    request_deserializer=privacy__pb2.DPNoisyHistogramRequest.FromString,
+                    response_serializer=privacy__pb2.DPHistogramResponse.SerializeToString,
+            ),
+            'DPChunkedCount': grpc.unary_unary_rpc_method_handler(
+                    servicer.DPChunkedCount,
+                    request_deserializer=privacy__pb2.DPChunkedCountRequest.FromString,
+                    response_serializer=privacy__pb2.DPResponse.SerializeToString,
+            ),
+            'DPChunkedSum': grpc.unary_unary_rpc_method_handler(
+                    servicer.DPChunkedSum,
+                    request_deserializer=privacy__pb2.DPChunkedSumRequest.FromString,
+                    response_serializer=privacy__pb2.DPResponse.SerializeToString,
+            ),
+            'DPChunkedMean': grpc.unary_unary_rpc_method_handler(
+                    servicer.DPChunkedMean,
+                    request_deserializer=privacy__pb2.DPChunkedMeanRequest.FromString,
+                    response_serializer=privacy__pb2.DPResponse.SerializeToString,
+            ),
+            'DPChunkedHistogram': grpc.unary_unary_rpc_method_handler(
+                    servicer.DPChunkedHistogram,
+                    request_deserializer=privacy__pb2.DPChunkedHistogramRequest.FromString,
                     response_serializer=privacy__pb2.DPHistogramResponse.SerializeToString,
             ),
             'KAnonymizeRecord': grpc.unary_unary_rpc_method_handler(
@@ -535,6 +663,222 @@ class PrivacyService:
             target,
             '/privacy.local.PrivacyService/DPHistogram',
             privacy__pb2.DPHistogramRequest.SerializeToString,
+            privacy__pb2.DPHistogramResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def DPNoisyCount(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/privacy.local.PrivacyService/DPNoisyCount',
+            privacy__pb2.DPNoisyCountRequest.SerializeToString,
+            privacy__pb2.DPResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def DPNoisySum(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/privacy.local.PrivacyService/DPNoisySum',
+            privacy__pb2.DPNoisySumRequest.SerializeToString,
+            privacy__pb2.DPResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def DPNoisyMean(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/privacy.local.PrivacyService/DPNoisyMean',
+            privacy__pb2.DPNoisyMeanRequest.SerializeToString,
+            privacy__pb2.DPResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def DPNoisyHistogram(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/privacy.local.PrivacyService/DPNoisyHistogram',
+            privacy__pb2.DPNoisyHistogramRequest.SerializeToString,
+            privacy__pb2.DPHistogramResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def DPChunkedCount(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/privacy.local.PrivacyService/DPChunkedCount',
+            privacy__pb2.DPChunkedCountRequest.SerializeToString,
+            privacy__pb2.DPResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def DPChunkedSum(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/privacy.local.PrivacyService/DPChunkedSum',
+            privacy__pb2.DPChunkedSumRequest.SerializeToString,
+            privacy__pb2.DPResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def DPChunkedMean(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/privacy.local.PrivacyService/DPChunkedMean',
+            privacy__pb2.DPChunkedMeanRequest.SerializeToString,
+            privacy__pb2.DPResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def DPChunkedHistogram(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/privacy.local.PrivacyService/DPChunkedHistogram',
+            privacy__pb2.DPChunkedHistogramRequest.SerializeToString,
             privacy__pb2.DPHistogramResponse.FromString,
             options,
             channel_credentials,

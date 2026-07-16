@@ -116,6 +116,67 @@ class DPHistogramRequest(BaseModel):
     params: Dict[str, object] = {}
 
 
+class DPNoisyCountRequest(BaseModel):
+    """对已聚合计数进行 DP 加噪的请求模型。"""
+
+    true_count: float
+    params: Dict[str, object] = {}
+
+
+class DPNoisySumRequest(BaseModel):
+    """对已聚合求和进行 DP 加噪的请求模型。
+
+    params 中需提供 sensitivity，或同时提供 clip_lower 与 clip_upper。
+    """
+
+    true_sum: float
+    params: Dict[str, object] = {}
+
+
+class DPNoisyMeanRequest(BaseModel):
+    """对已聚合 sum/count 进行 DP 加噪得到均值的请求模型。"""
+
+    true_sum: float
+    true_count: float
+    params: Dict[str, object] = {}
+
+
+class DPNoisyHistogramRequest(BaseModel):
+    """对已聚合直方图计数进行 DP 加噪的请求模型。"""
+
+    true_counts: Dict[str, float]
+    params: Dict[str, object] = {}
+
+
+class DPChunkedCountRequest(BaseModel):
+    """分块流式 DP 计数请求模型。"""
+
+    chunks: List[List[float]]
+    params: Dict[str, object] = {}
+
+
+class DPChunkedSumRequest(BaseModel):
+    """分块流式 DP 求和请求模型。"""
+
+    chunks: List[List[float]]
+    params: Dict[str, object] = {}
+
+
+class DPChunkedMeanRequest(BaseModel):
+    """分块流式 DP 均值请求模型。"""
+
+    chunks: List[List[float]]
+    params: Dict[str, object] = {}
+
+
+class DPChunkedHistogramRequest(BaseModel):
+    """分块流式 DP 直方图请求模型。"""
+
+    chunks: List[List[str]]
+    categories: List[str]
+    params: Dict[str, object] = {}
+
+
 
 class KAnonRequest(BaseModel):
     """K-匿名单条记录请求模型。"""
@@ -312,6 +373,78 @@ def dp_histogram(req: DPHistogramRequest):
     """差分隐私直方图聚合接口。"""
     try:
         return {"result": service.dp_histogram(req.values, req.categories, req.params)}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/v1/privacy/dp/noisy_count", dependencies=[*SECURITY_DEPS, require_permission("privacy:dp")])
+def dp_noisy_count(req: DPNoisyCountRequest):
+    """对已聚合计数注入 DP 噪声。"""
+    try:
+        return {"result": service.dp_noisy_count(req.true_count, req.params)}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/v1/privacy/dp/noisy_sum", dependencies=[*SECURITY_DEPS, require_permission("privacy:dp")])
+def dp_noisy_sum(req: DPNoisySumRequest):
+    """对已聚合求和注入 DP 噪声。"""
+    try:
+        return {"result": service.dp_noisy_sum(req.true_sum, req.params)}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/v1/privacy/dp/noisy_mean", dependencies=[*SECURITY_DEPS, require_permission("privacy:dp")])
+def dp_noisy_mean(req: DPNoisyMeanRequest):
+    """对已聚合 sum/count 注入 DP 噪声后得到均值。"""
+    try:
+        return {"result": service.dp_noisy_mean(req.true_sum, req.true_count, req.params)}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/v1/privacy/dp/noisy_histogram", dependencies=[*SECURITY_DEPS, require_permission("privacy:dp")])
+def dp_noisy_histogram(req: DPNoisyHistogramRequest):
+    """对已聚合直方图计数注入 DP 噪声。"""
+    try:
+        return {"result": service.dp_noisy_histogram(req.true_counts, req.params)}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/v1/privacy/dp/chunked_count", dependencies=[*SECURITY_DEPS, require_permission("privacy:dp")])
+def dp_chunked_count(req: DPChunkedCountRequest):
+    """分块流式差分隐私计数。"""
+    try:
+        return {"result": service.dp_chunked_count(req.chunks, req.params)}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/v1/privacy/dp/chunked_sum", dependencies=[*SECURITY_DEPS, require_permission("privacy:dp")])
+def dp_chunked_sum(req: DPChunkedSumRequest):
+    """分块流式差分隐私求和。"""
+    try:
+        return {"result": service.dp_chunked_sum(req.chunks, req.params)}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/v1/privacy/dp/chunked_mean", dependencies=[*SECURITY_DEPS, require_permission("privacy:dp")])
+def dp_chunked_mean(req: DPChunkedMeanRequest):
+    """分块流式差分隐私均值。"""
+    try:
+        return {"result": service.dp_chunked_mean(req.chunks, req.params)}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/v1/privacy/dp/chunked_histogram", dependencies=[*SECURITY_DEPS, require_permission("privacy:dp")])
+def dp_chunked_histogram(req: DPChunkedHistogramRequest):
+    """分块流式差分隐私直方图计数。"""
+    try:
+        return {"result": service.dp_chunked_histogram(req.chunks, req.categories, req.params)}
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
