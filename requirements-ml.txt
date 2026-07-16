@@ -1,0 +1,5 @@
+# ML 扩展依赖（ml 镜像），在 core 基础上安装
+torch>=2.2.0
+transformers>=4.38.0
+onnxruntime>=1.17.0
+pillow>=10.2.0

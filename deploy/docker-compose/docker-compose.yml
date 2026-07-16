@@ -1,0 +1,37 @@
+version: "3.9"
+
+services:
+  privacy-local-agent:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+      target: core
+    image: privacy-local-agent:0.1.0
+    container_name: privacy-local-agent
+    ports:
+      - "8079:8079"
+      - "50051:50051"
+    environment:
+      PRIVACY_REST_HOST: "0.0.0.0"
+      PRIVACY_REST_PORT: "8079"
+      PRIVACY_GRPC_HOST: "0.0.0.0"
+      PRIVACY_GRPC_PORT: "50051"
+      PRIVACY_PROFILE: "/etc/privacy-local-agent/privacy-profile.yaml"
+      PRIVACY_LOG_LEVEL: "INFO"
+      PRIVACY_LOG_FORMAT: "text"
+      # 如需启用 TLS/认证，取消下面注释并挂载对应文件
+      # PRIVACY_TLS_ENABLED: "true"
+      # PRIVACY_TLS_CERT_FILE: "/certs/tls.crt"
+      # PRIVACY_TLS_KEY_FILE: "/certs/tls.key"
+      # PRIVACY_AUTH_ENABLED: "true"
+      # PRIVACY_AUTH_EXTERNAL_KEYS_JSON: '{"dev-key":{"name":"local","scopes":["*"]}}'
+    volumes:
+      - ./privacy-profile.yaml:/etc/privacy-local-agent/privacy-profile.yaml:ro
+      # - ./certs:/certs:ro
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8079/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    restart: unless-stopped

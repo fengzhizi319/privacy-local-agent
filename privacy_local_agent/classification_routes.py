@@ -1,0 +1,97 @@
+"""数据分类 REST 路由模块。
+
+基于 FastAPI APIRouter 提供字段级、记录级、表级数据分类的 HTTP 接口，
+与处理原语（masking/dp/k-anonymity/qol）在代码层面完全分离。
+
+REST routing module for data classification. Exposes field/record/table
+classification endpoints via FastAPI APIRouter, physically separated from the
+processing primitives.
+"""
+
+import os
+from typing import Any, Dict, List
+
+from fastapi import APIRouter, Depends
+from pydantic import BaseModel, Field
+
+from .classification_service import ClassificationService
+from .security.auth import get_current_identity, require_permission
+from .security.ratelimit import rate_limit_dependency
+
+# 从环境变量读取配置文件路径，便于在不同部署环境间切换
+PROFILE_PATH = os.environ.get("PRIVACY_PROFILE", "privacy-profile.yaml")
+
+# 模块级单例服务，供各路由处理函数复用
+classification_service = ClassificationService(profile_path=PROFILE_PATH)
+
+# 数据分类专用路由；主应用在 main.py 中通过 include_router 挂载。
+# 认证、限速、分类读权限统一在路由器级别应用，避免每个端点重复声明。
+classification_router = APIRouter(
+    dependencies=[
+        Depends(get_current_identity),
+        Depends(rate_limit_dependency),
+        require_permission("classification:read"),
+    ]
+)
+
+
+class ClassifyFieldRequest(BaseModel):
+    """单字段分类请求模型。"""
+
+    field_name: str
+    value: Any
+    params: Dict[str, Any] = {}
+
+
+class ClassifyRecordRequest(BaseModel):
+    """单条记录分类请求模型。"""
+
+    record: Dict[str, Any]
+    params: Dict[str, Any] = {}
+
+
+class ClassifyTableRequest(BaseModel):
+    """整张表分类请求模型。"""
+
+    schema_: List[str] = Field(alias="schema")
+    rows: List[Dict[str, Any]]
+    params: Dict[str, Any] = {}
+
+
+@classification_router.post("/v1/privacy/classify/field")
+def classify_field(req: ClassifyFieldRequest):
+    """单字段分类接口。
+
+    Args:
+        req: ClassifyFieldRequest 请求体。
+
+    Returns:
+        字段分类结果字典。
+    """
+    return {"result": classification_service.classify_field(req.field_name, req.value, req.params)}
+
+
+@classification_router.post("/v1/privacy/classify/record")
+def classify_record(req: ClassifyRecordRequest):
+    """单条记录分类接口。
+
+    Args:
+        req: ClassifyRecordRequest 请求体。
+
+    Returns:
+        记录分类结果字典。
+    """
+    return {"result": classification_service.classify_record(req.record, req.params)}
+
+
+@classification_router.post("/v1/privacy/classify/table")
+def classify_table(req: ClassifyTableRequest):
+    """整张表分类接口。
+
+    Args:
+        req: ClassifyTableRequest 请求体。
+
+    Returns:
+        表分类结果字典。
+    """
+    return {"result": classification_service.classify_table(req.schema_, req.rows, req.params)}

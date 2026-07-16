@@ -1,0 +1,160 @@
+# 默认开发 values，TLS/auth 关闭，便于本地测试。
+
+replicaCount: 1
+
+namespace:
+  create: false
+
+# 镜像选择：core 为轻量镜像，ml 包含 torch/transformers/onnxruntime
+flavor: core
+
+image:
+  repository: privacy-local-agent
+  pullPolicy: IfNotPresent
+  # 留空时默认使用 Chart.appVersion
+  tag: ""
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  # 是否创建 ServiceAccount
+  create: true
+  # 自定义 ServiceAccount 名称
+  name: ""
+  annotations: {}
+
+podAnnotations: {}
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  fsGroup: 1000
+
+securityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+      - ALL
+  readOnlyRootFilesystem: false
+  runAsNonRoot: true
+  runAsUser: 1000
+
+service:
+  type: ClusterIP
+  restPort: 8079
+  grpcPort: 50051
+  # REST/gRPC 是否在同一 Service 中暴露
+  exposeGrpc: true
+  annotations: {}
+
+# 应用配置
+agent:
+  logLevel: info
+  logFormat: text
+  profile: |
+    server:
+      rest_host: "0.0.0.0"
+      rest_port: 8079
+      grpc_host: "0.0.0.0"
+      grpc_port: 50051
+    privacy:
+      default_epsilon: 1.0
+      default_delta: 1e-6
+      default_k: 5
+
+# 安全开关
+security:
+  enabled: false
+  tls:
+    enabled: false
+    # 用户自管 TLS Secret（包含 tls.crt / tls.key）
+    existingSecret: ""
+    # 也可直接填写证书内容（不推荐用于生产）
+    cert: ""
+    key: ""
+    certFile: /certs/tls.crt
+    keyFile: /certs/tls.key
+  auth:
+    enabled: false
+    # 用户自管 API Key Secret（包含 api_keys 文件）
+    apiKeysSecret: ""
+    # 也可直接填写 api_keys 文件内容（不推荐用于生产）
+    apiKeys: ""
+    keysFile: /secrets/api_keys
+  # 哪些路径可跳过认证，建议保留 /health
+  publicPaths:
+    - /health
+
+# 资源限制
+resources:
+  limits:
+    cpu: 1000m
+    memory: 1Gi
+  requests:
+    cpu: 100m
+    memory: 256Mi
+
+# 探针
+probes:
+  liveness:
+    path: /health
+    port: http
+    initialDelaySeconds: 10
+    periodSeconds: 10
+    failureThreshold: 3
+  readiness:
+    path: /health
+    port: http
+    initialDelaySeconds: 5
+    periodSeconds: 5
+    failureThreshold: 3
+
+# HPA
+autoscaling:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 5
+  targetCPUUtilizationPercentage: 80
+  targetMemoryUtilizationPercentage: 80
+  behavior: {}
+
+# Ingress
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts:
+    - host: privacy-local-agent.local
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+
+# NetworkPolicy
+networkPolicy:
+  enabled: false
+  ingress:
+    # 允许访问的 Pod label selector 列表
+    from: []
+
+# Prometheus ServiceMonitor
+serviceMonitor:
+  enabled: false
+  namespace: ""
+  interval: 30s
+  scrapeTimeout: 10s
+  labels: {}
+
+# 节点亲和/容忍
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+# 额外环境变量
+extraEnv: []
+
+# 额外 volume/volumeMounts
+extraVolumes: []
+extraVolumeMounts: []

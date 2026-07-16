@@ -1,0 +1,16 @@
+apiVersion: v2
+name: privacy-local-agent
+description: A Helm chart for deploying privacy-local-agent on Kubernetes.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+keywords:
+  - privacy
+  - secretflow
+  - sidecar
+  - k-anonymity
+  - differential-privacy
+home: https://github.com/fengzhizi319/privacy-local-agent
+maintainers:
+  - name: sfwork
+    email: maintainer@example.com

@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: privacy-local-agent-config
+  namespace: privacy-local-agent
+data:
+  privacy-profile.yaml: |
+    server:
+      rest_host: "0.0.0.0"
+      rest_port: 8079
+      grpc_host: "0.0.0.0"
+      grpc_port: 50051
+    privacy:
+      default_epsilon: 1.0
+      default_delta: 1e-6
+      default_k: 5

@@ -1,0 +1,15 @@
+privacy-local-agent has been installed.
+
+Release name: {{ .Release.Name }}
+Namespace: {{ .Release.Namespace }}
+Flavor: {{ .Values.flavor }}
+
+REST service: {{ include "privacy-local-agent.fullname" . }}.{{ .Release.Namespace }}.svc:{{ .Values.service.restPort }}
+gRPC service: {{ include "privacy-local-agent.fullname" . }}.{{ .Release.Namespace }}.svc:{{ .Values.service.grpcPort }}
+
+{{- if .Values.security.tls.enabled }}
+TLS is enabled. Make sure the certificate secret is mounted correctly.
+{{- end }}
+{{- if .Values.security.auth.enabled }}
+Auth is enabled. Make sure the API key secret is configured.
+{{- end }}

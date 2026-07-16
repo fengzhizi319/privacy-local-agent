@@ -1,0 +1,49 @@
+# 生产环境 values
+# 使用说明：
+#   helm install pla ./deploy/helm/privacy-local-agent \
+#     -f ./deploy/helm/privacy-local-agent/values-production.yaml \
+#     --set security.tls.existingSecret=your-tls-secret \
+#     --set security.auth.apiKeysSecret=your-apikeys-secret
+
+replicaCount: 2
+
+flavor: core
+
+agent:
+  logLevel: info
+  logFormat: json
+
+security:
+  enabled: true
+  tls:
+    enabled: true
+    existingSecret: ""  # 必填
+  auth:
+    enabled: true
+    apiKeysSecret: ""   # 必填
+
+resources:
+  limits:
+    cpu: 2000m
+    memory: 2Gi
+  requests:
+    cpu: 500m
+    memory: 512Mi
+
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 70
+  targetMemoryUtilizationPercentage: 80
+
+networkPolicy:
+  enabled: true
+  ingress:
+    from:
+      - podSelector:
+          matchLabels:
+            app.kubernetes.io/part-of: privacy-local-agent
+
+serviceMonitor:
+  enabled: true

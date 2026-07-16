@@ -1,0 +1,176 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "privacy-local-agent.fullname" . }}
+  labels:
+    {{- include "privacy-local-agent.labels" . | nindent 4 }}
+spec:
+  {{- if not .Values.autoscaling.enabled }}
+  replicas: {{ .Values.replicaCount }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "privacy-local-agent.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      labels:
+        {{- include "privacy-local-agent.selectorLabels" . | nindent 8 }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "privacy-local-agent.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: {{ .Chart.Name }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          image: "{{ .Values.image.repository }}:{{ include "privacy-local-agent.imageTag" . }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.service.restPort }}
+              protocol: TCP
+            - name: grpc
+              containerPort: {{ .Values.service.grpcPort }}
+              protocol: TCP
+          env:
+            - name: PRIVACY_REST_HOST
+              value: "0.0.0.0"
+            - name: PRIVACY_REST_PORT
+              value: "{{ .Values.service.restPort }}"
+            - name: PRIVACY_GRPC_HOST
+              value: "0.0.0.0"
+            - name: PRIVACY_GRPC_PORT
+              value: "{{ .Values.service.grpcPort }}"
+            - name: PRIVACY_PROFILE
+              value: "/etc/privacy-local-agent/privacy-profile.yaml"
+            - name: PRIVACY_LOG_LEVEL
+              value: {{ .Values.agent.logLevel | upper | quote }}
+            - name: PRIVACY_LOG_FORMAT
+              value: {{ .Values.agent.logFormat | quote }}
+            - name: PRIVACY_SERVICE_NAME
+              value: {{ include "privacy-local-agent.fullname" . | quote }}
+            {{- with .Values.agent.serviceName }}
+            - name: OTEL_SERVICE_NAME
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .Values.agent.otelExporterOtlpEndpoint }}
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: {{ . | quote }}
+            {{- end }}
+            {{- if .Values.security.tls.enabled }}
+            - name: PRIVACY_TLS_ENABLED
+              value: "true"
+            - name: PRIVACY_TLS_CERT_FILE
+              value: {{ .Values.security.tls.certFile | quote }}
+            - name: PRIVACY_TLS_KEY_FILE
+              value: {{ .Values.security.tls.keyFile | quote }}
+            {{- end }}
+            {{- if .Values.security.auth.enabled }}
+            - name: PRIVACY_AUTH_ENABLED
+              value: "true"
+            {{- if .Values.security.auth.apiKeysSecret }}
+            - name: PRIVACY_AUTH_EXTERNAL_KEYS_JSON
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.security.auth.apiKeysSecret | quote }}
+                  key: api-keys.json
+            {{- else if .Values.security.auth.apiKeys }}
+            - name: PRIVACY_AUTH_EXTERNAL_KEYS_JSON
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "privacy-local-agent.fullname" . }}-secrets
+                  key: api-keys.json
+            {{- end }}
+            {{- end }}
+            {{- if .Values.security.enabled }}
+            - name: PRIVACY_RATE_LIMIT_ENABLED
+              value: "true"
+            {{- end }}
+            {{- with .Values.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          volumeMounts:
+            - name: config
+              mountPath: /etc/privacy-local-agent
+              readOnly: true
+            {{- if .Values.security.tls.enabled }}
+            - name: tls-certs
+              mountPath: /certs
+              readOnly: true
+            {{- end }}
+            {{- with .Values.extraVolumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- if .Values.security.tls.enabled }}
+          livenessProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -c
+                - "curl -fsS -k https://localhost:{{ .Values.service.restPort }}{{ .Values.probes.liveness.path }} || wget -qO- --no-check-certificate https://localhost:{{ .Values.service.restPort }}{{ .Values.probes.liveness.path }}"
+            initialDelaySeconds: {{ .Values.probes.liveness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.probes.liveness.periodSeconds }}
+            failureThreshold: {{ .Values.probes.liveness.failureThreshold }}
+          readinessProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -c
+                - "curl -fsS -k https://localhost:{{ .Values.service.restPort }}{{ .Values.probes.readiness.path }} || wget -qO- --no-check-certificate https://localhost:{{ .Values.service.restPort }}{{ .Values.probes.readiness.path }}"
+            initialDelaySeconds: {{ .Values.probes.readiness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.probes.readiness.periodSeconds }}
+            failureThreshold: {{ .Values.probes.readiness.failureThreshold }}
+          {{- else }}
+          livenessProbe:
+            httpGet:
+              path: {{ .Values.probes.liveness.path }}
+              port: http
+            initialDelaySeconds: {{ .Values.probes.liveness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.probes.liveness.periodSeconds }}
+            failureThreshold: {{ .Values.probes.liveness.failureThreshold }}
+          readinessProbe:
+            httpGet:
+              path: {{ .Values.probes.readiness.path }}
+              port: http
+            initialDelaySeconds: {{ .Values.probes.readiness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.probes.readiness.periodSeconds }}
+            failureThreshold: {{ .Values.probes.readiness.failureThreshold }}
+          {{- end }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "privacy-local-agent.fullname" . }}-config
+        {{- if .Values.security.tls.enabled }}
+        - name: tls-certs
+          secret:
+            {{- if .Values.security.tls.existingSecret }}
+            secretName: {{ .Values.security.tls.existingSecret | quote }}
+            {{- else }}
+            secretName: {{ include "privacy-local-agent.fullname" . }}-secrets
+            {{- end }}
+        {{- end }}
+        {{- with .Values.extraVolumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

@@ -1,0 +1,25 @@
+{{- if .Values.networkPolicy.enabled -}}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "privacy-local-agent.fullname" . }}
+  labels:
+    {{- include "privacy-local-agent.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "privacy-local-agent.selectorLabels" . | nindent 6 }}
+  policyTypes:
+    - Ingress
+  ingress:
+    # 允许同命名空间所有 Pod 访问 REST/gRPC 端口
+    - ports:
+        - protocol: TCP
+          port: {{ .Values.service.restPort }}
+        - protocol: TCP
+          port: {{ .Values.service.grpcPort }}
+      {{- if .Values.networkPolicy.ingress.from }}
+      from:
+        {{- toYaml .Values.networkPolicy.ingress.from | nindent 8 }}
+      {{- end }}
+{{- end }}

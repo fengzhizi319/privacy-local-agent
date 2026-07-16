@@ -1,0 +1,89 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: privacy-local-agent
+  namespace: privacy-local-agent
+  labels:
+    app: privacy-local-agent
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: privacy-local-agent
+  template:
+    metadata:
+      labels:
+        app: privacy-local-agent
+    spec:
+      containers:
+        - name: agent
+          image: privacy-local-agent:0.1.0
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8079
+            - name: grpc
+              containerPort: 50051
+          env:
+            - name: PRIVACY_REST_HOST
+              value: "0.0.0.0"
+            - name: PRIVACY_REST_PORT
+              value: "8079"
+            - name: PRIVACY_GRPC_HOST
+              value: "0.0.0.0"
+            - name: PRIVACY_GRPC_PORT
+              value: "50051"
+            - name: PRIVACY_PROFILE
+              value: "/etc/privacy-local-agent/privacy-profile.yaml"
+            - name: PRIVACY_LOG_LEVEL
+              value: "INFO"
+            - name: PRIVACY_LOG_FORMAT
+              value: "text"
+            # 如需启用 TLS，取消下面注释并确保证书 Secret 已创建
+            # - name: PRIVACY_TLS_ENABLED
+            #   value: "true"
+            # - name: PRIVACY_TLS_CERT_FILE
+            #   value: "/certs/tls.crt"
+            # - name: PRIVACY_TLS_KEY_FILE
+            #   value: "/certs/tls.key"
+            # 如需启用认证，取消下面注释并确保 API Key Secret 已创建
+            # - name: PRIVACY_AUTH_ENABLED
+            #   value: "true"
+            # - name: PRIVACY_AUTH_EXTERNAL_KEYS_JSON
+            #   valueFrom:
+            #     secretKeyRef:
+            #       name: privacy-local-agent-apikeys
+            #       key: api-keys.json
+          volumeMounts:
+            - name: config
+              mountPath: /etc/privacy-local-agent
+              readOnly: true
+            # - name: tls-certs
+            #   mountPath: /certs
+            #   readOnly: true
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 1000m
+              memory: 1Gi
+      volumes:
+        - name: config
+          configMap:
+            name: privacy-local-agent-config
+        # - name: tls-certs
+        #   secret:
+        #     secretName: privacy-local-agent-tls
