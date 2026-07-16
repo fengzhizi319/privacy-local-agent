@@ -64,6 +64,11 @@ class PrivacyServiceStub:
                 request_serializer=privacy__pb2.DPRequest.SerializeToString,
                 response_deserializer=privacy__pb2.DPResponse.FromString,
                 _registered_method=True)
+        self.DPHistogram = channel.unary_unary(
+                '/privacy.local.PrivacyService/DPHistogram',
+                request_serializer=privacy__pb2.DPHistogramRequest.SerializeToString,
+                response_deserializer=privacy__pb2.DPHistogramResponse.FromString,
+                _registered_method=True)
         self.KAnonymizeRecord = channel.unary_unary(
                 '/privacy.local.PrivacyService/KAnonymizeRecord',
                 request_serializer=privacy__pb2.KAnonymizeRequest.SerializeToString,
@@ -104,6 +109,26 @@ class PrivacyServiceStub:
                 request_serializer=privacy__pb2.RecommendRequest.SerializeToString,
                 response_deserializer=privacy__pb2.RecommendResponse.FromString,
                 _registered_method=True)
+        self.PerturbBinaryBatch = channel.unary_unary(
+                '/privacy.local.PrivacyService/PerturbBinaryBatch',
+                request_serializer=privacy__pb2.PerturbBinaryBatchRequest.SerializeToString,
+                response_deserializer=privacy__pb2.PerturbBinaryBatchResponse.FromString,
+                _registered_method=True)
+        self.PerturbCategoricalBatch = channel.unary_unary(
+                '/privacy.local.PrivacyService/PerturbCategoricalBatch',
+                request_serializer=privacy__pb2.PerturbCategoricalBatchRequest.SerializeToString,
+                response_deserializer=privacy__pb2.PerturbCategoricalBatchResponse.FromString,
+                _registered_method=True)
+        self.EstimateBinaryFrequency = channel.unary_unary(
+                '/privacy.local.PrivacyService/EstimateBinaryFrequency',
+                request_serializer=privacy__pb2.EstimateBinaryFrequencyRequest.SerializeToString,
+                response_deserializer=privacy__pb2.EstimateBinaryFrequencyResponse.FromString,
+                _registered_method=True)
+        self.EstimateCategoricalHistogram = channel.unary_unary(
+                '/privacy.local.PrivacyService/EstimateCategoricalHistogram',
+                request_serializer=privacy__pb2.EstimateCategoricalHistogramRequest.SerializeToString,
+                response_deserializer=privacy__pb2.EstimateCategoricalHistogramResponse.FromString,
+                _registered_method=True)
 
 
 class PrivacyServiceServicer:
@@ -140,6 +165,12 @@ class PrivacyServiceServicer:
         raise NotImplementedError('Method not implemented!')
 
     def DPMean(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def DPHistogram(self, request, context):
         """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
@@ -193,6 +224,30 @@ class PrivacyServiceServicer:
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def PerturbBinaryBatch(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def PerturbCategoricalBatch(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def EstimateBinaryFrequency(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def EstimateCategoricalHistogram(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
 
 def add_PrivacyServiceServicer_to_server(servicer, server):
     rpc_method_handlers = {
@@ -225,6 +280,11 @@ def add_PrivacyServiceServicer_to_server(servicer, server):
                     servicer.DPMean,
                     request_deserializer=privacy__pb2.DPRequest.FromString,
                     response_serializer=privacy__pb2.DPResponse.SerializeToString,
+            ),
+            'DPHistogram': grpc.unary_unary_rpc_method_handler(
+                    servicer.DPHistogram,
+                    request_deserializer=privacy__pb2.DPHistogramRequest.FromString,
+                    response_serializer=privacy__pb2.DPHistogramResponse.SerializeToString,
             ),
             'KAnonymizeRecord': grpc.unary_unary_rpc_method_handler(
                     servicer.KAnonymizeRecord,
@@ -265,6 +325,26 @@ def add_PrivacyServiceServicer_to_server(servicer, server):
                     servicer.RecommendParams,
                     request_deserializer=privacy__pb2.RecommendRequest.FromString,
                     response_serializer=privacy__pb2.RecommendResponse.SerializeToString,
+            ),
+            'PerturbBinaryBatch': grpc.unary_unary_rpc_method_handler(
+                    servicer.PerturbBinaryBatch,
+                    request_deserializer=privacy__pb2.PerturbBinaryBatchRequest.FromString,
+                    response_serializer=privacy__pb2.PerturbBinaryBatchResponse.SerializeToString,
+            ),
+            'PerturbCategoricalBatch': grpc.unary_unary_rpc_method_handler(
+                    servicer.PerturbCategoricalBatch,
+                    request_deserializer=privacy__pb2.PerturbCategoricalBatchRequest.FromString,
+                    response_serializer=privacy__pb2.PerturbCategoricalBatchResponse.SerializeToString,
+            ),
+            'EstimateBinaryFrequency': grpc.unary_unary_rpc_method_handler(
+                    servicer.EstimateBinaryFrequency,
+                    request_deserializer=privacy__pb2.EstimateBinaryFrequencyRequest.FromString,
+                    response_serializer=privacy__pb2.EstimateBinaryFrequencyResponse.SerializeToString,
+            ),
+            'EstimateCategoricalHistogram': grpc.unary_unary_rpc_method_handler(
+                    servicer.EstimateCategoricalHistogram,
+                    request_deserializer=privacy__pb2.EstimateCategoricalHistogramRequest.FromString,
+                    response_serializer=privacy__pb2.EstimateCategoricalHistogramResponse.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -429,6 +509,33 @@ class PrivacyService:
             '/privacy.local.PrivacyService/DPMean',
             privacy__pb2.DPRequest.SerializeToString,
             privacy__pb2.DPResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def DPHistogram(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/privacy.local.PrivacyService/DPHistogram',
+            privacy__pb2.DPHistogramRequest.SerializeToString,
+            privacy__pb2.DPHistogramResponse.FromString,
             options,
             channel_credentials,
             insecure,
@@ -645,6 +752,114 @@ class PrivacyService:
             '/privacy.local.PrivacyService/RecommendParams',
             privacy__pb2.RecommendRequest.SerializeToString,
             privacy__pb2.RecommendResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def PerturbBinaryBatch(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/privacy.local.PrivacyService/PerturbBinaryBatch',
+            privacy__pb2.PerturbBinaryBatchRequest.SerializeToString,
+            privacy__pb2.PerturbBinaryBatchResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def PerturbCategoricalBatch(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/privacy.local.PrivacyService/PerturbCategoricalBatch',
+            privacy__pb2.PerturbCategoricalBatchRequest.SerializeToString,
+            privacy__pb2.PerturbCategoricalBatchResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def EstimateBinaryFrequency(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/privacy.local.PrivacyService/EstimateBinaryFrequency',
+            privacy__pb2.EstimateBinaryFrequencyRequest.SerializeToString,
+            privacy__pb2.EstimateBinaryFrequencyResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def EstimateCategoricalHistogram(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/privacy.local.PrivacyService/EstimateCategoricalHistogram',
+            privacy__pb2.EstimateCategoricalHistogramRequest.SerializeToString,
+            privacy__pb2.EstimateCategoricalHistogramResponse.FromString,
             options,
             channel_credentials,
             insecure,

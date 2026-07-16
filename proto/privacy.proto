@@ -13,6 +13,7 @@ service PrivacyService {
   rpc DPCount (DPRequest) returns (DPResponse);
   rpc DPSum (DPRequest) returns (DPResponse);
   rpc DPMean (DPRequest) returns (DPResponse);
+  rpc DPHistogram (DPHistogramRequest) returns (DPHistogramResponse);
   rpc KAnonymizeRecord (KAnonymizeRequest) returns (KAnonymizeResponse);
   rpc KAnonymizeTable (KAnonymizeTableRequest) returns (KAnonymizeTableResponse);
   rpc ObfuscateQuery (ObfuscateQueryRequest) returns (ObfuscateQueryResponse);
@@ -21,6 +22,10 @@ service PrivacyService {
   rpc ClassifyTable (ClassifyTableRequest) returns (ClassifyTableResponse);
   rpc Health (HealthRequest) returns (HealthResponse);
   rpc RecommendParams (RecommendRequest) returns (RecommendResponse);
+  rpc PerturbBinaryBatch (PerturbBinaryBatchRequest) returns (PerturbBinaryBatchResponse);
+  rpc PerturbCategoricalBatch (PerturbCategoricalBatchRequest) returns (PerturbCategoricalBatchResponse);
+  rpc EstimateBinaryFrequency (EstimateBinaryFrequencyRequest) returns (EstimateBinaryFrequencyResponse);
+  rpc EstimateCategoricalHistogram (EstimateCategoricalHistogramRequest) returns (EstimateCategoricalHistogramResponse);
 }
 
 message MaskRequest {
@@ -147,3 +152,55 @@ message RecommendResponse {
   string namespace = 2;
   string recommended_params_json = 3;
 }
+
+message PerturbBinaryBatchRequest {
+  repeated int32 values = 1;
+  double epsilon = 2;
+}
+
+message PerturbBinaryBatchResponse {
+  repeated int32 results = 1;
+}
+
+message PerturbCategoricalBatchRequest {
+  repeated string values = 1;
+  repeated string categories = 2;
+  double epsilon = 3;
+}
+
+message PerturbCategoricalBatchResponse {
+  repeated string results = 1;
+}
+
+message EstimateBinaryFrequencyRequest {
+  repeated int32 reported_values = 1;
+  double epsilon = 2;
+}
+
+message EstimateBinaryFrequencyResponse {
+  double estimated_frequency = 1;
+}
+
+message EstimateCategoricalHistogramRequest {
+  repeated string reported_values = 1;
+  repeated string categories = 2;
+  double epsilon = 3;
+}
+
+message EstimateCategoricalHistogramResponse {
+  map<string, double> estimated_histogram = 1;
+}
+
+message DPHistogramRequest {
+  repeated string values = 1;
+  repeated string categories = 2;
+  double epsilon = 3;
+  string mechanism = 4;
+  double delta = 5;
+}
+
+message DPHistogramResponse {
+  map<string, double> result = 1;
+}
+
+

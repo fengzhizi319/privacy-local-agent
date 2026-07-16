@@ -246,3 +246,83 @@ def test_recommend_and_apply_personalized_profile(monkeypatch, tmp_path):
     )
     assert response.status_code == 200, response.json()
     assert "result" in response.json()
+
+
+def test_ldp_perturb_and_estimate():
+    """测试二值与类别型本地 DP 扰动与估计接口。"""
+    # 1. Perturb Binary Batch
+    resp = client.post(
+        "/v1/privacy/ldp/perturb/binary",
+        json={"values": [1, 0, 1, 1], "epsilon": 10.0}
+    )
+    assert resp.status_code == 200
+    results = resp.json()["results"]
+    assert len(results) == 4
+    assert all(r in (0, 1) for r in results)
+
+    # 2. Estimate Binary Frequency
+    resp_est = client.post(
+        "/v1/privacy/ldp/estimate/binary",
+        json={"reported_values": [1, 1, 0, 1], "epsilon": 5.0}
+    )
+    assert resp_est.status_code == 200
+    assert 0.0 <= resp_est.json()["estimated_frequency"] <= 1.0
+
+    # 3. Perturb Categorical Batch
+    resp_cat = client.post(
+        "/v1/privacy/ldp/perturb/categorical",
+        json={"values": ["A", "B", "A"], "categories": ["A", "B", "C"], "epsilon": 10.0}
+    )
+    assert resp_cat.status_code == 200
+    cat_results = resp_cat.json()["results"]
+    assert len(cat_results) == 3
+    assert all(c in ("A", "B", "C") for c in cat_results)
+
+    # 4. Estimate Categorical Histogram
+    resp_cat_est = client.post(
+        "/v1/privacy/ldp/estimate/categorical",
+        json={"reported_values": ["A", "B", "C", "A"], "categories": ["A", "B", "C"], "epsilon": 5.0}
+    )
+    assert resp_cat_est.status_code == 200
+    hist = resp_cat_est.json()["estimated_histogram"]
+    assert all(c in hist for c in ("A", "B", "C"))
+    assert abs(sum(hist.values()) - 1.0) < 1e-9
+
+
+def test_dp_mean_with_threshold():
+    """测试带有 min_count 低频阈值保护的差分隐私均值接口。"""
+    resp = client.post(
+        "/v1/privacy/dp/mean",
+        json={
+            "values": [10.0, 10.0, 10.0],
+            "params": {
+                "epsilon": 10.0,
+                "clip_lower": 0.0,
+                "clip_upper": 20.0,
+                "min_count": 5.0,
+            }
+        }
+    )
+    assert resp.status_code == 200
+    assert resp.json()["result"] == 0.0
+
+
+def test_dp_histogram_rest():
+    """测试差分隐私直方图聚合接口。"""
+    resp = client.post(
+        "/v1/privacy/dp/histogram",
+        json={
+            "values": ["A", "B", "A", "C"],
+            "categories": ["A", "B", "C", "D"],
+            "params": {
+                "epsilon": 10.0,
+                "mechanism": "laplace",
+            }
+        }
+    )
+    assert resp.status_code == 200
+    res_dict = resp.json()["result"]
+    assert all(c in res_dict for c in ("A", "B", "C", "D"))
+    assert res_dict["A"] >= 0.0
+
+

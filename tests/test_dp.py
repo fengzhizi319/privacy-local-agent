@@ -148,10 +148,12 @@ class TestDPBudget:
             mechanism="gaussian",
             clip_lower=0.0,
             clip_upper=10.0,
+            min_count=0.0,  # 避免因计数较小触发低频保护提前返回，确保消耗完整预算
         )
         remaining = accountant.remaining()
         assert remaining["epsilon"] == pytest.approx(8.0, abs=1e-9)
         assert remaining["delta"] == pytest.approx(9e-5, abs=1e-9)
+
 
     def test_exhausted_budget_raises(self) -> None:
         ns = "test-budget-exhaust"
@@ -279,3 +281,43 @@ class TestStatisticalProperties:
             trials.append(est - 0.5)
 
         assert abs(statistics.mean(trials)) < 0.02
+
+
+class TestAnalyticGaussianAndMeanThreshold:
+    def test_calibrate_analytic_gaussian_basic(self) -> None:
+        from privacy_local_agent.privacy.dp import calibrate_analytic_gaussian
+        sigma = calibrate_analytic_gaussian(epsilon=1.0, delta=1e-5, sensitivity=1.0)
+        assert sigma > 0
+        # 经典公式为 ~4.84，解析高斯一般更小
+        assert sigma < 5.0
+
+    def test_mean_thresholding_protection(self) -> None:
+        ns = "test-mean-thresh"
+        BudgetAccountant(ns, epsilon_total=100.0, delta_total=1.0)
+        api = DPApi(namespace=ns)
+        # 正常计算
+        res = api.mean([10.0] * 10, epsilon=10.0, min_count=2.0)
+        assert res > 0.0
+        # 计数过小，触发低频保护返回 0.0
+        res_shielded = api.mean([10.0] * 3, epsilon=10.0, min_count=5.0)
+        assert res_shielded == 0.0
+
+    def test_dp_histogram_joint_sensitivity(self) -> None:
+        ns = "test-hist-joint"
+        BudgetAccountant(ns, epsilon_total=100.0, delta_total=1.0)
+        api = DPApi(namespace=ns)
+        values = ["A"] * 100 + ["B"] * 200 + ["C"] * 50
+        categories = ["A", "B", "C", "D"]
+        res = api.histogram(values, categories, epsilon=10.0, mechanism="laplace")
+        assert len(res) == 4
+        assert res["A"] > 50
+        assert res["B"] > 100
+        assert res["C"] > 20
+        assert res["D"] >= 0.0
+        
+        # 测试高斯机制下直方图
+        res_g = api.histogram(values, categories, epsilon=10.0, delta=1e-5, mechanism="gaussian")
+        assert len(res_g) == 4
+        assert res_g["A"] > 50
+
+

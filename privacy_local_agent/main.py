@@ -108,6 +108,15 @@ class DPRequest(BaseModel):
     params: Dict[str, object] = {}
 
 
+class DPHistogramRequest(BaseModel):
+    """差分隐私直方图请求模型。"""
+
+    values: List[str]
+    categories: List[str]
+    params: Dict[str, object] = {}
+
+
+
 class KAnonRequest(BaseModel):
     """K-匿名单条记录请求模型。"""
 
@@ -133,6 +142,33 @@ class QolRequest(BaseModel):
     domain: str = "medical"
     medical_pool: Optional[List[str]] = None
     generic_pool: Optional[List[str]] = None
+
+
+class LdpPerturbBinaryRequest(BaseModel):
+    """二值本地 DP 扰动请求模型。"""
+    values: List[int]
+    epsilon: float
+
+
+class LdpPerturbCategoricalRequest(BaseModel):
+    """类别型本地 DP 扰动请求模型。"""
+    values: List[str]
+    categories: List[str]
+    epsilon: float
+
+
+class LdpEstimateBinaryRequest(BaseModel):
+    """二值本地 DP 估计请求模型。"""
+    reported_values: List[int]
+    epsilon: float
+
+
+class LdpEstimateCategoricalRequest(BaseModel):
+    """类别型本地 DP 估计请求模型。"""
+    reported_values: List[str]
+    categories: List[str]
+    epsilon: float
+
 
 
 @app.get("/health", dependencies=[Depends(get_current_identity), Depends(rate_limit_dependency)])
@@ -269,6 +305,53 @@ def dp_mean(req: DPRequest):
         return {"result": service.dp_mean(req.values, req.params)}
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/v1/privacy/dp/histogram", dependencies=[*SECURITY_DEPS, require_permission("privacy:dp")])
+def dp_histogram(req: DPHistogramRequest):
+    """差分隐私直方图聚合接口。"""
+    try:
+        return {"result": service.dp_histogram(req.values, req.categories, req.params)}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+
+@app.post("/v1/privacy/ldp/perturb/binary", dependencies=[*SECURITY_DEPS, require_permission("privacy:dp")])
+def ldp_perturb_binary(req: LdpPerturbBinaryRequest):
+    """二值本地 DP 扰动接口。"""
+    try:
+        return {"results": service.perturb_binary_batch(req.values, req.epsilon)}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/v1/privacy/ldp/perturb/categorical", dependencies=[*SECURITY_DEPS, require_permission("privacy:dp")])
+def ldp_perturb_categorical(req: LdpPerturbCategoricalRequest):
+    """类别型本地 DP 扰动接口。"""
+    try:
+        return {"results": service.perturb_categorical_batch(req.values, req.categories, req.epsilon)}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/v1/privacy/ldp/estimate/binary", dependencies=[*SECURITY_DEPS, require_permission("privacy:dp")])
+def ldp_estimate_binary(req: LdpEstimateBinaryRequest):
+    """二值本地 DP 估计接口。"""
+    try:
+        return {"estimated_frequency": service.estimate_binary_frequency(req.reported_values, req.epsilon)}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/v1/privacy/ldp/estimate/categorical", dependencies=[*SECURITY_DEPS, require_permission("privacy:dp")])
+def ldp_estimate_categorical(req: LdpEstimateCategoricalRequest):
+    """类别型本地 DP 估计接口。"""
+    try:
+        return {"estimated_histogram": service.estimate_categorical_histogram(req.reported_values, req.categories, req.epsilon)}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
 
 
 @app.post("/v1/privacy/k_anonymize/record", dependencies=[*SECURITY_DEPS, require_permission("privacy:kano")])

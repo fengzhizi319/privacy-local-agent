@@ -13,7 +13,7 @@ from typing import Any, Dict, List, Optional
 
 from .privacy.budget import BudgetAccountant
 from .privacy.classification import ClassificationAPI
-from .privacy.dp import DPApi
+from .privacy.dp import DPApi, LocalDPApi
 from .privacy.kano import BUILTIN_HIERARCHIES, anonymize_record
 from .privacy.kano_table import k_anonymize_table
 from .privacy.masking import hash_value, mask_record, mask_value, truncate
@@ -45,6 +45,7 @@ class PrivacyService:
         self.namespace = namespace
         self.dp_api = DPApi(namespace)
         self.classification_api = ClassificationAPI(resolver=self.resolver)
+        self.local_dp_api = LocalDPApi()
 
     def mask(self, field_name: str, value: str, context: str = "") -> str:
         """对单个字段值进行脱敏。
@@ -138,7 +139,7 @@ class PrivacyService:
 
         Args:
             values: 输入数值列表。
-            params: 请求级 DP 参数，可包含 clip_lower/clip_upper。
+            params: 请求级 DP 参数，可包含 clip_lower/clip_upper、min_count。
 
         Returns:
             带噪声的均值。
@@ -151,6 +152,52 @@ class PrivacyService:
             str(p.get("mechanism", "laplace")),
             clip_lower=p.get("clip_lower"),
             clip_upper=p.get("clip_upper"),
+            min_count=float(p.get("min_count", 5.0)),
+        )
+
+    def dp_histogram(
+        self, values: List[Any], categories: List[Any], params: Dict[str, Any] = None
+    ) -> Dict[Any, float]:
+        """差分隐私直方图计数（使用联合敏感度为 1）。
+
+        Args:
+            values: 输入类别列表。
+            categories: 目标类别集合。
+            params: 请求级 DP 参数。
+
+        Returns:
+            分桶名到带噪计数的字典。
+        """
+        p = self.resolver.resolve("dp", params, namespace=self.namespace)
+        return self.dp_api.histogram(
+            values,
+            categories,
+            float(p["epsilon"]),
+            float(p.get("delta", 0.0)),
+            str(p.get("mechanism", "laplace")),
+        )
+
+
+    def perturb_binary_batch(self, values: List[int], epsilon: float) -> List[int]:
+        """批量对二值数据进行本地 DP 扰动。"""
+        return self.local_dp_api.perturb_binary_batch(values, epsilon)
+
+    def perturb_categorical_batch(
+        self, values: List[Any], categories: List[Any], epsilon: float
+    ) -> List[Any]:
+        """批量对类别型数据进行本地 DP 扰动。"""
+        return self.local_dp_api.perturb_categorical_batch(values, categories, epsilon)
+
+    def estimate_binary_frequency(self, reported_values: List[int], epsilon: float) -> float:
+        """根据扰动后的二值样本估计真实比例为 1 的频率。"""
+        return self.local_dp_api.estimate_binary_frequency(reported_values, epsilon)
+
+    def estimate_categorical_histogram(
+        self, reported_values: List[Any], categories: List[Any], epsilon: float
+    ) -> Dict[Any, float]:
+        """根据扰动后的类别样本估计各类别的真实频率。"""
+        return self.local_dp_api.estimate_categorical_histogram(
+            reported_values, categories, epsilon
         )
 
     def k_anonymize_record(

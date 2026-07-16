@@ -83,3 +83,63 @@ def test_grpc_recommend_params():
     assert "dp" in rec_dict
     assert "k_anonymity" in rec_dict
     assert rec_dict["dp"]["clip_lower"] < rec_dict["dp"]["clip_upper"]
+
+
+def test_grpc_ldp_operations():
+    """验证 gRPC 本地 DP 扰动与估计接口。"""
+    servicer = PrivacyServicer()
+
+    # 1. Perturb Binary Batch
+    req_bin = privacy_pb2.PerturbBinaryBatchRequest(
+        values=[1, 0, 1, 1],
+        epsilon=10.0
+    )
+    resp_bin = servicer.PerturbBinaryBatch(req_bin, None)
+    assert len(resp_bin.results) == 4
+    assert all(r in (0, 1) for r in resp_bin.results)
+
+    # 2. Estimate Binary Frequency
+    req_est_bin = privacy_pb2.EstimateBinaryFrequencyRequest(
+        reported_values=[1, 1, 0, 1],
+        epsilon=5.0
+    )
+    resp_est_bin = servicer.EstimateBinaryFrequency(req_est_bin, None)
+    assert 0.0 <= resp_est_bin.estimated_frequency <= 1.0
+
+    # 3. Perturb Categorical Batch
+    req_cat = privacy_pb2.PerturbCategoricalBatchRequest(
+        values=["A", "B", "A"],
+        categories=["A", "B", "C"],
+        epsilon=10.0
+    )
+    resp_cat = servicer.PerturbCategoricalBatch(req_cat, None)
+    assert len(resp_cat.results) == 3
+    assert all(c in ("A", "B", "C") for c in resp_cat.results)
+
+    # 4. Estimate Categorical Histogram
+    req_est_cat = privacy_pb2.EstimateCategoricalHistogramRequest(
+        reported_values=["A", "B", "C", "A"],
+        categories=["A", "B", "C"],
+        epsilon=5.0
+    )
+    resp_est_cat = servicer.EstimateCategoricalHistogram(req_est_cat, None)
+    hist = resp_est_cat.estimated_histogram
+    assert all(c in hist for c in ("A", "B", "C"))
+    assert abs(sum(hist.values()) - 1.0) < 1e-9
+
+
+def test_grpc_dp_histogram():
+    """验证 gRPC 差分隐私直方图接口。"""
+    servicer = PrivacyServicer()
+    request = privacy_pb2.DPHistogramRequest(
+        values=["A", "B", "A", "C"],
+        categories=["A", "B", "C", "D"],
+        epsilon=10.0,
+        mechanism="laplace",
+    )
+    response = servicer.DPHistogram(request, None)
+    assert len(response.result) == 4
+    assert all(c in response.result for c in ("A", "B", "C", "D"))
+    assert response.result["A"] >= 0.0
+
+

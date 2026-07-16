@@ -19,6 +19,65 @@ from ..observability.metrics import DP_QUERIES_TOTAL
 from .budget import BudgetAccountant, PrivacyBudgetExhausted
 
 
+def calibrate_analytic_gaussian(epsilon: float, delta: float, sensitivity: float, tol: float = 1e-12) -> float:
+    """使用 Balle & Wang (ICML'18) 提出的解析高斯机制计算噪声的标准差 sigma。
+
+    在任意 epsilon 和 delta > 0 下计算出理论最小的噪声方差，比经典高斯机制的界更紧。
+    """
+    if sensitivity == 0.0:
+        return 0.0
+
+    def Phi(t: float) -> float:
+        return 0.5 * (1.0 + math.erf(float(t) / math.sqrt(2.0)))
+
+    def caseA(eps: float, s: float) -> float:
+        return Phi(math.sqrt(eps * s)) - math.exp(eps) * Phi(-math.sqrt(eps * (s + 2.0)))
+
+    def caseB(eps: float, s: float) -> float:
+        return Phi(-math.sqrt(eps * s)) - math.exp(eps) * Phi(-math.sqrt(eps * (s + 2.0)))
+
+    def doubling_trick(predicate_stop, s_inf: float, s_sup: float) -> tuple[float, float]:
+        while not predicate_stop(s_sup):
+            s_inf = s_sup
+            s_sup = 2.0 * s_inf
+        return s_inf, s_sup
+
+    def binary_search(predicate_stop, predicate_left, s_inf: float, s_sup: float) -> float:
+        s_mid = s_inf + (s_sup - s_inf) / 2.0
+        while not predicate_stop(s_mid):
+            if predicate_left(s_mid):
+                s_sup = s_mid
+            else:
+                s_inf = s_mid
+            s_mid = s_inf + (s_sup - s_inf) / 2.0
+        return s_mid
+
+    delta_thr = caseA(epsilon, 0.0)
+    if delta == delta_thr:
+        alpha = 1.0
+    else:
+        if delta > delta_thr:
+            predicate_stop_DT = lambda s: caseA(epsilon, s) >= delta
+            function_s_to_delta = lambda s: caseA(epsilon, s)
+            predicate_left_BS = lambda s: function_s_to_delta(s) > delta
+        else:
+            predicate_stop_DT = lambda s: caseB(epsilon, s) <= delta
+            function_s_to_delta = lambda s: caseB(epsilon, s)
+            predicate_left_BS = lambda s: function_s_to_delta(s) < delta
+
+        predicate_stop_BS = lambda s: abs(function_s_to_delta(s) - delta) <= tol
+
+        s_inf, s_sup = doubling_trick(predicate_stop_DT, 0.0, 1.0)
+        s_final = binary_search(predicate_stop_BS, predicate_left_BS, s_inf, s_sup)
+
+        if delta > delta_thr:
+            alpha = math.sqrt(1.0 + s_final / 2.0) - math.sqrt(s_final / 2.0)
+        else:
+            alpha = math.sqrt(1.0 + s_final / 2.0) + math.sqrt(s_final / 2.0)
+
+    return alpha * sensitivity / math.sqrt(2.0 * epsilon)
+
+
 class DPApi:
     """差分隐私计算接口。
 
@@ -123,8 +182,8 @@ class DPApi:
         if mechanism == "laplace":
             noise = self._sample_laplace(1.0 / epsilon)
         else:
-            # count L2 sensitivity = 1
-            sigma = math.sqrt(2.0 * math.log(1.25 / delta)) * 1.0 / epsilon
+            # count L2 sensitivity = 1，使用更紧的解析高斯机制
+            sigma = calibrate_analytic_gaussian(epsilon, delta, 1.0)
             noise = self._sample_gaussian(sigma)
         return max(0.0, true_count + noise)
 
@@ -172,13 +231,11 @@ class DPApi:
             scale = sensitivity / epsilon if epsilon > 0 else 0.0
             noise = self._sample_laplace(scale)
         else:
-            # sum L2 sensitivity = upper - lower
+            # sum L2 sensitivity = upper - lower，使用更紧的解析高斯机制
             if sensitivity == 0:
                 noise = 0.0
             else:
-                sigma = (
-                    math.sqrt(2.0 * math.log(1.25 / delta)) * sensitivity / epsilon
-                )
+                sigma = calibrate_analytic_gaussian(epsilon, delta, sensitivity)
                 noise = self._sample_gaussian(sigma)
         return true_sum + noise
 
@@ -190,11 +247,13 @@ class DPApi:
         mechanism: str = "laplace",
         clip_lower: Optional[float] = None,
         clip_upper: Optional[float] = None,
+        min_count: float = 5.0,
     ) -> float:
         """差分隐私均值。
 
         使用组合定理：将 (epsilon, delta) 拆分为两份，分别用于 count 与 sum，
         最后用 noisy_sum / noisy_count 得到差分隐私均值。
+        为了防除以接近零的值导致结果发散，当 noisy_count < min_count 时返回 0.0。
         """
         if not values:
             return 0.0
@@ -209,11 +268,56 @@ class DPApi:
         noisy_count = self.count(
             [1.0] * len(values), epsilon / 2.0, delta / 2.0, mechanism
         )
+        if noisy_count < min_count or noisy_count <= 0.0:
+            return 0.0
+
         noisy_sum = self.sum(
             values, epsilon / 2.0, delta / 2.0, mechanism, clip_lower, clip_upper
         )
         DP_QUERIES_TOTAL.labels(mechanism=mechanism, aggregation="mean").inc()
-        return noisy_sum / noisy_count if noisy_count > 0 else 0.0
+        return noisy_sum / noisy_count
+
+    def histogram(
+        self,
+        values: List[Any],
+        categories: Sequence[Any],
+        epsilon: float,
+        delta: float = 0.0,
+        mechanism: str = "laplace",
+    ) -> Dict[Any, float]:
+        """差分隐私直方图计数（使用联合敏感度为 1）。
+
+        对于互斥分类，每个个体最多贡献到一个分桶。因此，整个直方图的 L1 / L2 敏感度均为 1。
+        只需消耗一次 (epsilon, delta) 预算即可对所有类别并行加噪，大幅提升多分类查询效用。
+        """
+        mechanism = mechanism.lower()
+        if mechanism not in ("laplace", "gaussian"):
+            raise ValueError("mechanism must be 'laplace' or 'gaussian'")
+        if mechanism == "gaussian" and delta <= 0:
+            raise ValueError("delta must be positive for Gaussian mechanism")
+
+        self.budget.spend(epsilon, delta)
+        DP_QUERIES_TOTAL.labels(mechanism=mechanism, aggregation="histogram").inc()
+
+        # 计算真实计数
+        counts = {c: 0.0 for c in categories}
+        for v in values:
+            if v in counts:
+                counts[v] += 1.0
+
+        # 由于联合敏感度为 1，直接对每个 Bin 加噪
+        if mechanism == "laplace":
+            scale = 1.0 / epsilon
+            for c in counts:
+                noise = self._sample_laplace(scale)
+                counts[c] = max(0.0, counts[c] + noise)
+        else:
+            sigma = calibrate_analytic_gaussian(epsilon, delta, 1.0)
+            for c in counts:
+                noise = self._sample_gaussian(sigma)
+                counts[c] = max(0.0, counts[c] + noise)
+
+        return counts
 
 
 class LocalDPApi:

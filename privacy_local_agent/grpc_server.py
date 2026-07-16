@@ -93,6 +93,21 @@ class PrivacyServicer(
         result = self.service.dp_mean(list(request.values), self._dp_params_from_request(request))
         return privacy_pb2.DPResponse(result=result)
 
+    def DPHistogram(self, request, context):
+        """差分隐私直方图 gRPC 方法。"""
+        params = {
+            "epsilon": request.epsilon,
+            "mechanism": request.mechanism,
+        }
+        if request.delta != 0.0:
+            params["delta"] = request.delta
+        res_dict = self.service.dp_histogram(
+            list(request.values), list(request.categories), params
+        )
+        result = {str(k): float(v) for k, v in res_dict.items()}
+        return privacy_pb2.DPHistogramResponse(result=result)
+
+
     def KAnonymizeRecord(self, request, context):
         """单条记录 K-匿名泛化 gRPC 方法。"""
         result = self.service.k_anonymize_record(dict(request.record), list(request.qi_cols), request.k)
@@ -132,6 +147,37 @@ class PrivacyServicer(
             namespace=request.namespace,
             recommended_params_json=json.dumps(recommended)
         )
+
+    def PerturbBinaryBatch(self, request, context):
+        """二值本地 DP 扰动 gRPC 方法。"""
+        results = self.service.perturb_binary_batch(list(request.values), request.epsilon)
+        return privacy_pb2.PerturbBinaryBatchResponse(results=results)
+
+    def PerturbCategoricalBatch(self, request, context):
+        """类别型本地 DP 扰动 gRPC 方法。"""
+        results = self.service.perturb_categorical_batch(
+            list(request.values), list(request.categories), request.epsilon
+        )
+        return privacy_pb2.PerturbCategoricalBatchResponse(results=results)
+
+    def EstimateBinaryFrequency(self, request, context):
+        """二值估计 gRPC 方法。"""
+        estimated = self.service.estimate_binary_frequency(
+            list(request.reported_values), request.epsilon
+        )
+        return privacy_pb2.EstimateBinaryFrequencyResponse(estimated_frequency=estimated)
+
+    def EstimateCategoricalHistogram(self, request, context):
+        """类别直方图估计 gRPC 方法。"""
+        est_dict = self.service.estimate_categorical_histogram(
+            list(request.reported_values), list(request.categories), request.epsilon
+        )
+        # 将 key 转换为 str，value 转换为 float，以契合 map<string, double>
+        estimated_histogram = {str(k): float(v) for k, v in est_dict.items()}
+        return privacy_pb2.EstimateCategoricalHistogramResponse(
+            estimated_histogram=estimated_histogram
+        )
+
 
 
 def serve(port: int = 50051, max_workers: int = 10, wait_for_termination: bool = True):

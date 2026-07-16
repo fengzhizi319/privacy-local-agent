@@ -84,6 +84,7 @@ mean(
     mechanism: str = "laplace",
     clip_lower: Optional[float] = None,
     clip_upper: Optional[float] = None,
+    min_count: float = 5.0,
 ) -> float
 ```
 
@@ -97,6 +98,7 @@ mean(
 | `mechanism` | `str` | 否 | `"laplace"` 或 `"gaussian"` |
 | `clip_lower` | `Optional[float]` | 否 | 截断下界；Gaussian 必须提供 |
 | `clip_upper` | `Optional[float]` | 否 | 截断上界；Gaussian 必须提供 |
+| `min_count` | `float` | 否 | 低频计数阈值，当估计的计数小于此值时返回 0.0 避免结果发散，默认 `5.0` |
 
 **返回值**：带噪声的均值。
 
@@ -105,6 +107,35 @@ mean(
 **总隐私消耗**：$(\varepsilon, \delta)$。
 
 ---
+
+#### `histogram`
+
+```python
+histogram(
+    values: List[Any],
+    categories: Sequence[Any],
+    epsilon: float,
+    delta: float = 0.0,
+    mechanism: str = "laplace",
+) -> Dict[Any, float]
+```
+
+差分隐私直方图计数。使用联合敏感度为 1（若一个记录仅能属于一个分桶），仅消耗单次 `(epsilon, delta)` 预算。
+
+| 参数 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `values` | `List[Any]` | 是 | 原始类别特征值列表 |
+| `categories` | `Sequence[Any]` | 是 | 分桶的目标类别集合 |
+| `epsilon` | `float` | 是 | 隐私预算 ε |
+| `delta` | `float` | 否 | 隐私预算 δ；Gaussian 机制必须 > 0 |
+| `mechanism` | `str` | 否 | `"laplace"` 或 `"gaussian"` |
+
+**返回值**：类别名称到带噪计数的字典（已做 `max(0, ...)` 截断）。
+
+**敏感度**：L1 = L2 = 1。
+
+---
+
 
 ### `LocalDPApi`
 
@@ -322,7 +353,119 @@ BudgetAccountant(
 }
 ```
 
+### POST `/v1/privacy/dp/histogram`
+
+请求体：
+
+```json
+{
+  "values": ["A", "B", "A", "C"],
+  "categories": ["A", "B", "C", "D"],
+  "params": {
+    "epsilon": 10.0,
+    "mechanism": "laplace"
+  }
+}
+```
+
+响应体：
+
+```json
+{
+  "result": {
+    "A": 2.14,
+    "B": 0.95,
+    "C": 1.05,
+    "D": 0.0
+  }
+}
+```
+
+
+### POST `/v1/privacy/ldp/perturb/binary`
+
+二值本地差分隐私扰动。
+
+请求体：
+```json
+{
+  "values": [1, 0, 1, 1],
+  "epsilon": 10.0
+}
+```
+
+响应体：
+```json
+{
+  "results": [1, 0, 1, 1]
+}
+```
+
+### POST `/v1/privacy/ldp/perturb/categorical`
+
+类别型本地差分隐私扰动。
+
+请求体：
+```json
+{
+  "values": ["A", "B", "A"],
+  "categories": ["A", "B", "C"],
+  "epsilon": 10.0
+}
+```
+
+响应体：
+```json
+{
+  "results": ["A", "B", "C"]
+}
+```
+
+### POST `/v1/privacy/ldp/estimate/binary`
+
+二值扰动样本频率估计。
+
+请求体：
+```json
+{
+  "reported_values": [1, 1, 0, 1],
+  "epsilon": 5.0
+}
+```
+
+响应体：
+```json
+{
+  "estimated_frequency": 0.75
+}
+```
+
+### POST `/v1/privacy/ldp/estimate/categorical`
+
+类别型扰动样本直方图估计。
+
+请求体：
+```json
+{
+  "reported_values": ["A", "B", "C", "A"],
+  "categories": ["A", "B", "C"],
+  "epsilon": 5.0
+}
+```
+
+响应体：
+```json
+{
+  "estimated_histogram": {
+    "A": 0.5,
+    "B": 0.25,
+    "C": 0.25
+  }
+}
+```
+
 ---
+
 
 ## 3. gRPC API
 
@@ -333,6 +476,11 @@ BudgetAccountant(
 | `DPCount` | `DPRequest` | `DPResponse` | 差分隐私计数 |
 | `DPSum` | `DPRequest` | `DPResponse` | 差分隐私求和 |
 | `DPMean` | `DPRequest` | `DPResponse` | 差分隐私均值 |
+| `DPHistogram` | `DPHistogramRequest` | `DPHistogramResponse` | 差分隐私直方图 |
+| `PerturbBinaryBatch` | `PerturbBinaryBatchRequest` | `PerturbBinaryBatchResponse` | 二值本地 DP 扰动 |
+| `PerturbCategoricalBatch` | `PerturbCategoricalBatchRequest` | `PerturbCategoricalBatchResponse` | 类别型本地 DP 扰动 |
+| `EstimateBinaryFrequency` | `EstimateBinaryFrequencyRequest` | `EstimateBinaryFrequencyResponse` | 二值扰动样本频率估计 |
+| `EstimateCategoricalHistogram` | `EstimateCategoricalHistogramRequest` | `EstimateCategoricalHistogramResponse` | 类别型扰动直方图估计 |
 
 ### `DPRequest` 字段
 
@@ -346,6 +494,56 @@ BudgetAccountant(
 | 字段 | 类型 | 说明 |
 |---|---|---|
 | `result` | `double` | 带噪声的查询结果 |
+
+### `DPHistogramRequest` 字段
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `values` | `repeated string` | 输入值列表 |
+| `categories` | `repeated string` | 目标类别集合 |
+| `epsilon` | `double` | 隐私预算 ε |
+| `mechanism` | `string` | `"laplace"` 或 `"gaussian"` |
+| `delta` | `double` | 隐私预算 δ |
+
+### `DPHistogramResponse` 字段
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `result` | `map<string, double>` | 直方图分类计数结果 |
+
+
+### LDP 相关 Message 字段
+
+#### `PerturbBinaryBatchRequest`
+*   `values` (`repeated int32`): 待扰动二值列表。
+*   `epsilon` (`double`): 本地隐私预算。
+
+#### `PerturbBinaryBatchResponse`
+*   `results` (`repeated int32`): 扰动后二值结果列表。
+
+#### `PerturbCategoricalBatchRequest`
+*   `values` (`repeated string`): 待扰动类别列表。
+*   `categories` (`repeated string`): 所有可用类别集合。
+*   `epsilon` (`double`): 本地隐私预算。
+
+#### `PerturbCategoricalBatchResponse`
+*   `results` (`repeated string`): 扰动后类别结果列表。
+
+#### `EstimateBinaryFrequencyRequest`
+*   `reported_values` (`repeated int32`): 已扰动的报告样本列表。
+*   `epsilon` (`double`): 扰动时使用的本地隐私预算。
+
+#### `EstimateBinaryFrequencyResponse`
+*   `estimated_frequency` (`double`): 估计的真实频率（0~1）。
+
+#### `EstimateCategoricalHistogramRequest`
+*   `reported_values` (`repeated string`): 已扰动的报告样本列表。
+*   `categories` (`repeated string`): 所有可用类别集合。
+*   `epsilon` (`double`): 扰动时使用的本地隐私预算。
+
+#### `EstimateCategoricalHistogramResponse`
+*   `estimated_histogram` (`map<string, double>`): 各类别的纠偏估计频率。
+
 
 ---
 
