@@ -189,9 +189,30 @@ def mask_dataframe(
     Returns:
         脱敏后的 DataFrame（pandas DataFrame）。
     """
-    from .data_adapters import to_records, from_records
-
     MASKING_OPERATIONS_TOTAL.labels(operation="mask_dataframe").inc()
+    # 优先采用 Pandas 向量化机制进行高性能脱敏，避免 to_records 内存爆炸
+    try:
+        import pandas as pd
+        if isinstance(df, pd.DataFrame):
+            if columns is None:
+                # 识别所有 object 或者是 string 类型的列
+                columns = [
+                    col for col in df.columns 
+                    if df[col].dtype == object or pd.api.types.is_string_dtype(df[col])
+                ]
+            result_df = df.copy()
+            for col in columns:
+                if col in result_df.columns:
+                    # 使用 pandas 向量化 apply，规避 Python 行级别 dict 循环
+                    result_df[col] = result_df[col].apply(
+                        lambda val: mask_value(col, str(val), context) if pd.notna(val) else val
+                    )
+            return result_df
+    except ImportError:
+        pass
+
+    # 降级方案：对于不支持直接 pandas 操作的复杂类型/未安装 pandas 环境，采用 to_records/from_records 兜底
+    from .data_adapters import to_records, from_records
     records = to_records(df)
     if not records:
         return from_records(records, df)

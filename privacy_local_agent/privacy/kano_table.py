@@ -139,6 +139,72 @@ def k_anonymize_table(
     if missing_cols:
         raise ValueError(f"qi_cols not found in rows: {missing_cols}")
 
+    try:
+        import pandas as pd
+        
+        # 使用 Pandas 向量化优化版 Mondrian 算法，避免递归的 Python list sorting 开销
+        df = pd.DataFrame(rows)
+        
+        def _mondrian_pd(sub_df: pd.DataFrame, depth: int) -> pd.DataFrame:
+            if len(sub_df) < 2 * k or depth <= 0:
+                # 泛化当前等价组
+                gen_df = sub_df.copy()
+                for col in qi_cols:
+                    col_vals = gen_df[col]
+                    # 判断是否全为数值类型
+                    is_num = pd.api.types.is_numeric_dtype(col_vals) and not pd.api.types.is_bool_dtype(col_vals)
+                    if is_num:
+                        low = col_vals.min()
+                        high = col_vals.max()
+                        if pd.isna(low):
+                            pass
+                        elif low == high:
+                            gen_df[col] = low
+                        else:
+                            gen_df[col] = f"[{low}-{high}]"
+                    else:
+                        unique_vals = sorted(set(col_vals.dropna().astype(str)))
+                        if len(unique_vals) == 1:
+                            gen_df[col] = unique_vals[0]
+                        elif len(unique_vals) > 1:
+                            gen_df[col] = "{" + ",".join(unique_vals) + "}"
+                return gen_df
+
+            # 选择跨度最大的分割列
+            max_span = -1.0
+            best_dim = None
+            for col in qi_cols:
+                col_vals = sub_df[col].dropna()
+                if not col_vals.empty:
+                    is_num = pd.api.types.is_numeric_dtype(col_vals) and not pd.api.types.is_bool_dtype(col_vals)
+                    if is_num:
+                        span = float(col_vals.max() - col_vals.min())
+                    else:
+                        span = float(col_vals.nunique() - 1)
+                    if span > max_span:
+                        max_span = span
+                        best_dim = col
+
+            if best_dim is None:
+                return sub_df
+
+            # 按选定维度进行中位数划分，并满足左右两部分均不少于 k 条记录
+            sorted_sub = sub_df.sort_values(by=best_dim)
+            mid = len(sorted_sub) // 2
+            split_idx = max(k, min(mid, len(sorted_sub) - k))
+            if split_idx < k or len(sorted_sub) - split_idx < k:
+                # 无法满足边界要求，直接泛化
+                return _mondrian_pd(sub_df, 0)
+
+            left = _mondrian_pd(sorted_sub.iloc[:split_idx], depth - 1)
+            right = _mondrian_pd(sorted_sub.iloc[split_idx:], depth - 1)
+            return pd.concat([left, right])
+
+        result_df = _mondrian_pd(df, max_depth)
+        return result_df.to_dict(orient="records")
+    except ImportError:
+        pass
+
     def _mondrian(
         records: List[Dict[str, Any]], depth: int
     ) -> List[Dict[str, Any]]:
@@ -184,6 +250,77 @@ def k_anonymize_dataframe(
     from .data_adapters import from_records, to_records
 
     KANO_OPERATIONS_TOTAL.labels(operation="dataframe").inc()
+
+    try:
+        import pandas as pd
+        if isinstance(df, pd.DataFrame):
+            if len(df) < k:
+                raise ValueError(
+                    f"Input table has {len(df)} rows, but k-anonymity requires at least {k}"
+                )
+            if not qi_cols:
+                raise ValueError("qi_cols must not be empty")
+            missing_cols = [col for col in qi_cols if col not in df.columns]
+            if missing_cols:
+                raise ValueError(f"qi_cols not found in rows: {missing_cols}")
+
+            def _mondrian_pd(sub_df: pd.DataFrame, depth: int) -> pd.DataFrame:
+                if len(sub_df) < 2 * k or depth <= 0:
+                    # 泛化当前等价组
+                    gen_df = sub_df.copy()
+                    for col in qi_cols:
+                        col_vals = gen_df[col]
+                        is_num = pd.api.types.is_numeric_dtype(col_vals) and not pd.api.types.is_bool_dtype(col_vals)
+                        if is_num:
+                            low = col_vals.min()
+                            high = col_vals.max()
+                            if pd.isna(low):
+                                pass
+                            elif low == high:
+                                gen_df[col] = low
+                            else:
+                                gen_df[col] = f"[{low}-{high}]"
+                        else:
+                            unique_vals = sorted(set(col_vals.dropna().astype(str)))
+                            if len(unique_vals) == 1:
+                                gen_df[col] = unique_vals[0]
+                            elif len(unique_vals) > 1:
+                                gen_df[col] = "{" + ",".join(unique_vals) + "}"
+                    return gen_df
+
+                # 选择跨度最大的分割列
+                max_span = -1.0
+                best_dim = None
+                for col in qi_cols:
+                    col_vals = sub_df[col].dropna()
+                    if not col_vals.empty:
+                        is_num = pd.api.types.is_numeric_dtype(col_vals) and not pd.api.types.is_bool_dtype(col_vals)
+                        if is_num:
+                            span = float(col_vals.max() - col_vals.min())
+                        else:
+                            span = float(col_vals.nunique() - 1)
+                        if span > max_span:
+                            max_span = span
+                            best_dim = col
+
+                if best_dim is None:
+                    return sub_df
+
+                # 按选定维度进行中位数划分，并满足左右两部分均不少于 k 条记录
+                sorted_sub = sub_df.sort_values(by=best_dim)
+                mid = len(sorted_sub) // 2
+                split_idx = max(k, min(mid, len(sorted_sub) - k))
+                if split_idx < k or len(sorted_sub) - split_idx < k:
+                    return _mondrian_pd(sub_df, 0)
+
+                left = _mondrian_pd(sorted_sub.iloc[:split_idx], depth - 1)
+                right = _mondrian_pd(sorted_sub.iloc[split_idx:], depth - 1)
+                return pd.concat([left, right])
+
+            return _mondrian_pd(df, max_depth)
+    except ImportError:
+        pass
+
     records = to_records(df)
     anonymized = k_anonymize_table(records, qi_cols, k=k, max_depth=max_depth)
     return from_records(anonymized, df)

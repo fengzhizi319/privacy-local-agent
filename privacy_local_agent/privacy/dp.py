@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import math
 import random
+import secrets
 import warnings
 from typing import Any, Dict, Iterable, List, Optional, Sequence
 
@@ -84,6 +85,37 @@ def calibrate_analytic_gaussian(epsilon: float, delta: float, sensitivity: float
     return alpha * sensitivity / math.sqrt(2.0 * epsilon)
 
 
+class SecureRandom(random.Random):
+    """一个安全的随机数生成器。
+
+    在生产环境中默认使用 secrets.SystemRandom() 以确保密码学安全（不可预测）；
+    在测试或显式调用 seed(x) 时，切换到基类 random.Random 的确定性伪随机数生成，
+    保证单元测试的可复现性与确定性边界校验。
+    """
+
+    def __init__(self):
+        super().__init__()
+        self._system_rng = secrets.SystemRandom()
+        self._seeded = False
+
+    def seed(self, a=None, version=2):
+        if a is not None:
+            super().seed(a, version=version)
+            self._seeded = True
+        else:
+            self._seeded = False
+
+    def random(self) -> float:
+        if self._seeded:
+            return super().random()
+        return self._system_rng.random()
+
+    def gauss(self, mu: float, sigma: float) -> float:
+        if self._seeded:
+            return super().gauss(mu, sigma)
+        return self._system_rng.gauss(mu, sigma)
+
+
 class DPApi:
     """差分隐私计算接口。
 
@@ -101,7 +133,7 @@ class DPApi:
             namespace: 命名空间，用于关联隐私预算账户。
         """
         self.budget = BudgetAccountant(namespace)
-        self.rng = random.Random()
+        self.rng = SecureRandom()
 
     def _sample_laplace(self, scale: float) -> float:
         """从拉普拉斯分布 Laplace(0, scale) 中采样一个随机值。
