@@ -142,6 +142,48 @@ class RecordClassificationResult(BaseModel):
     needs_human_review: bool = Field(default=False, alias="needsHumanReview")
 
 
+class ShadowDiff(BaseModel):
+    """影子模式差异信息。
+
+    Records the difference between current rule set and shadow rule set.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    field_name: str = Field(default="", alias="fieldName")
+    record_index: int = Field(default=0, alias="recordIndex")
+    current_level: SensitivityLevel = Field(alias="currentLevel")
+    shadow_level: SensitivityLevel = Field(alias="shadowLevel")
+    current_tags: List[str] = Field(default_factory=list, alias="currentTags")
+    shadow_tags: List[str] = Field(default_factory=list, alias="shadowTags")
+
+
+class ReviewStatus(str, Enum):
+    """复核条目状态。"""
+
+    PENDING = "PENDING"
+    CONFIRMED = "CONFIRMED"
+
+
+class ReviewEntry(BaseModel):
+    """人工复核条目。"""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    review_id: str = Field(alias="reviewId")
+    record_index: int = Field(default=0, alias="recordIndex")
+    field_name: str = Field(alias="fieldName")
+    field_value: Optional[str] = Field(default=None, alias="fieldValue")
+    predicted_level: Optional[SensitivityLevel] = Field(default=None, alias="predictedLevel")
+    predicted_tags: List[str] = Field(default_factory=list, alias="predictedTags")
+    corrected_level: Optional[str] = Field(default=None, alias="correctedLevel")
+    reviewer: str = ""
+    comment: str = ""
+    status: ReviewStatus = ReviewStatus.PENDING
+    created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat(), alias="createdAt")
+    updated_at: Optional[str] = Field(default=None, alias="updatedAt")
+
+
 class TableClassificationResult(BaseModel):
     """整张表/批次的分类结果。
 
@@ -158,6 +200,8 @@ class TableClassificationResult(BaseModel):
     final_level: SensitivityLevel = Field(alias="finalLevel")
     confidence: float = Field(ge=0.0, le=1.0, default=0.0)
     needs_human_review: bool = Field(default=False, alias="needsHumanReview")
+    review_entries: List[ReviewEntry] = Field(default_factory=list, alias="reviewEntries")
+    shadow_diff: List[ShadowDiff] = Field(default_factory=list, alias="shadowDiff")
 
 
 class AuditInfo(BaseModel):
@@ -172,7 +216,55 @@ class AuditInfo(BaseModel):
     profile_version: str = Field(default="default", alias="profileVersion")
     timestamp: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     rule_engine_version: str = Field(default="1.0.0", alias="ruleEngineVersion")
+    rule_set_version: str = Field(default="1.0.0", alias="ruleSetVersion")
     parameter_source: str = Field(default="default", alias="parameterSource")
+
+
+class ClassificationJobStatus(str, Enum):
+    """异步分类任务状态。"""
+
+    PENDING = "PENDING"
+    RUNNING = "RUNNING"
+    DONE = "DONE"
+    FAILED = "FAILED"
+
+
+class ClassificationJobResult(BaseModel):
+    """异步分类任务结果包装器。"""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    result: Any = None
+
+
+class ClassificationJob(BaseModel):
+    """异步分类任务状态。"""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    job_id: str = Field(alias="jobId")
+    status: ClassificationJobStatus = ClassificationJobStatus.PENDING
+    result: Optional[ClassificationJobResult] = None
+    error: Optional[str] = None
+    created_at: str = Field(alias="createdAt")
+    finished_at: Optional[str] = Field(default=None, alias="finishedAt")
+
+
+class CompositeRule(BaseModel):
+    """复合规则定义。
+
+    当记录中同时命中 `min_matches` 个字段模式时，
+    将记录敏感度升级为 `target_level`，并附加 `category` 标签。
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    name: str = ""
+    field_patterns: List[str] = Field(alias="fieldPatterns")
+    min_matches: int = Field(alias="minMatches")
+    target_level: SensitivityLevel = Field(alias="targetLevel")
+    category: str = "COMPOSITE"
+    rule_id: str = Field(default="COMPOSITE_001", alias="ruleId")
 
 
 class ClassificationResult(BaseModel):
@@ -240,6 +332,14 @@ class ClassificationParams(BaseModel):
     manual_override: Dict[str, SensitivityLevel] = Field(
         default_factory=dict, alias="manualOverride"
     )
+    template: Optional[str] = Field(default=None, alias="template")
+    rule_set_version: str = Field(default="1.0.0", alias="ruleSetVersion")
+    shadow_mode: bool = Field(default=False, alias="shadowMode")
+    shadow_version: Optional[str] = Field(default=None, alias="shadowVersion")
+    return_field_values: bool = Field(default=True, alias="returnFieldValues")
+    composite_rules: List[Any] = Field(default_factory=list, alias="compositeRules")
+    enable_review: bool = Field(default=True, alias="enableReview")
+    review_export_mask: bool = Field(default=False, alias="reviewExportMask")
 
     def apply_manual_override(self, field_name: str, level: SensitivityLevel) -> SensitivityLevel:
         """应用字段级人工覆盖。

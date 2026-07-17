@@ -99,6 +99,40 @@ QOL_OPERATIONS_TOTAL = Counter(
     ["domain"],
 )
 
+# Classification async jobs counter.
+CLASSIFICATION_JOBS_TOTAL = Counter(
+    "privacy_classification_jobs_total",
+    "Total number of classification async jobs by status.",
+    ["status"],
+)
+
+# Classification async job duration histogram.
+CLASSIFICATION_JOBS_DURATION = Histogram(
+    "privacy_classification_jobs_duration_seconds",
+    "Classification async job execution latency in seconds.",
+    ["status"],
+    buckets=[0.1, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0, 120.0, 300.0],
+)
+
+# Classification human-review queue size.
+CLASSIFICATION_REVIEW_QUEUE_SIZE = Gauge(
+    "privacy_classification_review_queue_size",
+    "Current number of pending classification review entries.",
+)
+
+# Classification shadow mode diff counter.
+CLASSIFICATION_SHADOW_DIFF_TOTAL = Counter(
+    "privacy_classification_shadow_diff_total",
+    "Total number of shadow mode classification differences.",
+)
+
+# Classification compliance template usage counter.
+CLASSIFICATION_TEMPLATES_TOTAL = Counter(
+    "privacy_classification_templates_total",
+    "Total number of classification requests using a compliance template.",
+    ["template"],
+)
+
 
 def make_asgi_app() -> Any:
     """Return the Prometheus metrics ASGI application to mount on FastAPI."""

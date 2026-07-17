@@ -17,17 +17,22 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from .classification_models import (
     AuditInfo,
+    ClassificationJob,
     ClassificationParams,
     ClassificationResult,
+    CompositeRule,
     EngineLayer,
     FieldClassificationResult,
     RecordClassificationResult,
     SecurityTag,
     SensitivityLevel,
+    ShadowDiff,
     TableClassificationResult,
     max_level,
     parse_level,
 )
+from .classification_composite import CompositeRuleEngine, apply_composite_tags
+from .classification_zero_knowledge import redact
 from .profile import ParameterResolver, get_resolver
 
 # ---------------------------------------------------------------------------
@@ -393,7 +398,7 @@ def _resolve_classification_params(
     resolver: Optional[ParameterResolver] = None,
     request_params: Optional[Dict[str, Any]] = None,
 ) -> Tuple[ClassificationParams, str]:
-    """合并默认、YAML profile、请求参数得到最终分类参数。
+    """合并默认、合规模板、YAML profile、请求参数得到最终分类参数。
 
     Returns:
         (ClassificationParams, parameter_source) 元组。
@@ -401,12 +406,28 @@ def _resolve_classification_params(
     params: Dict[str, Any] = {}
     source = "default"
 
+    # 1. YAML profile
     if resolver is not None:
         profile_params = resolver.resolve("classification", request_params=None) or {}
         if profile_params:
             params.update(profile_params)
             source = "profile"
 
+    # 2. 合规模板：根据 request/template 或 profile 中的 template 激活
+    from .classification_templates import get_template_params
+    template_name = None
+    if request_params and request_params.get("template"):
+        template_name = request_params.get("template")
+    elif params.get("template"):
+        template_name = params.get("template")
+    if template_name:
+        template_defaults = get_template_params(template_name)
+        # 模板默认值只在未设置时使用
+        for key, value in template_defaults.items():
+            if key not in params:
+                params[key] = value
+
+    # 3. 请求参数覆盖
     if request_params:
         params.update(request_params)
         source = "request"
@@ -443,9 +464,22 @@ class ClassificationAPI:
         small_ner: Optional[SmallNerEngine] = None,
         llm: Optional[LlmClassifier] = None,
         resolver: Optional[ParameterResolver] = None,
+        composite_engine: Optional[CompositeRuleEngine] = None,
+        async_manager: Optional[Any] = None,
+        review_store: Optional[Any] = None,
     ):
         self.resolver = resolver or get_resolver(profile_path)
         self.rule_engine = rule_engine or DefaultRuleEngine()
+        self.composite_engine = composite_engine or CompositeRuleEngine()
+        # 延迟导入可选模块，避免循环依赖
+        if async_manager is None:
+            from .classification_async import AsyncClassificationManager
+            async_manager = AsyncClassificationManager()
+        self.async_manager = async_manager
+        if review_store is None:
+            from .classification_review import ReviewStore
+            review_store = ReviewStore()
+        self.review_store = review_store
         if small_ner is None:
             # 自动选择最合适的本地 NER 引擎 (优先选择高性能 ONNX，其次选择 ModelScope 官方管道)
             import os
@@ -549,7 +583,7 @@ class ClassificationAPI:
 
         return FieldClassificationResult(
             field_name=field_name,
-            field_value=str(value) if value is not None else None,
+            field_value=str(value) if value is not None and cp.return_field_values else None,
             tags=tags,
             final_level=final_level,
             confidence=confidence,
@@ -672,7 +706,7 @@ class ClassificationAPI:
             else 0.0
         )
 
-        return RecordClassificationResult(
+        record_result = RecordClassificationResult(
             record_index=record_index,
             field_results=field_results,
             aggregated_tags=aggregated_tags,
@@ -680,6 +714,20 @@ class ClassificationAPI:
             confidence=confidence,
             needs_human_review=any(fr.needs_human_review for fr in field_results.values()),
         )
+
+        # 复合/上下文敏感规则后处理
+        cp, _ = _resolve_classification_params(self.resolver, params)
+        custom_rules = None
+        if cp.composite_rules:
+            custom_rules = [CompositeRule.model_validate(r) for r in cp.composite_rules]
+        engine = (
+            CompositeRuleEngine(custom_rules)
+            if custom_rules
+            else self.composite_engine
+        )
+        composite_tags = engine.evaluate(record, field_results)
+        record_result = apply_composite_tags(record_result, composite_tags)
+        return record_result
 
     def classify_table(
         self,
@@ -697,8 +745,10 @@ class ClassificationAPI:
         Returns:
             TableClassificationResult。
         """
+        cp, _ = _resolve_classification_params(self.resolver, params)
         record_results: List[RecordClassificationResult] = []
         aggregated_tags: List[SecurityTag] = []
+        review_entries: List[Any] = []
 
         for idx, row in enumerate(rows):
             # 仅保留 schema 中存在的字段 / keep only columns present in schema
@@ -706,6 +756,10 @@ class ClassificationAPI:
             record_result = self.classify_record(filtered, params, record_index=idx)
             record_results.append(record_result)
             aggregated_tags.extend(record_result.aggregated_tags)
+            if cp.enable_review:
+                review_entries.extend(
+                    self.review_store.add_from_record(record_result, original_record=row)
+                )
 
         aggregated_tags = _unique_tags(aggregated_tags)
         final_level = (
@@ -717,6 +771,14 @@ class ClassificationAPI:
             max(rr.confidence for rr in record_results) if record_results else 0.0
         )
 
+        shadow_diff: List[ShadowDiff] = []
+        if cp.shadow_mode and cp.shadow_version:
+            shadow_params = dict(params) if params else {}
+            shadow_params["rule_set_version"] = cp.shadow_version
+            shadow_params["shadow_mode"] = False
+            shadow_result = self.classify_table(schema, rows, shadow_params)
+            shadow_diff = self._compute_shadow_diff(record_results, shadow_result.record_results)
+
         return TableClassificationResult(
             schema=schema,
             record_results=record_results,
@@ -724,7 +786,35 @@ class ClassificationAPI:
             final_level=final_level,
             confidence=confidence,
             needs_human_review=any(rr.needs_human_review for rr in record_results),
+            review_entries=review_entries,
+            shadow_diff=shadow_diff,
         )
+
+    def _compute_shadow_diff(
+        self,
+        current_results: List[RecordClassificationResult],
+        shadow_results: List[RecordClassificationResult],
+    ) -> List[ShadowDiff]:
+        """计算当前结果与影子结果的差异。"""
+        diffs: List[ShadowDiff] = []
+        for cur, shw in zip(current_results, shadow_results):
+            for field_name in set(cur.field_results.keys()) | set(shw.field_results.keys()):
+                cur_field = cur.field_results.get(field_name)
+                shw_field = shw.field_results.get(field_name)
+                if not cur_field or not shw_field:
+                    continue
+                if cur_field.final_level != shw_field.final_level:
+                    diffs.append(
+                        ShadowDiff(
+                            field_name=field_name,
+                            record_index=cur.record_index,
+                            current_level=cur_field.final_level,
+                            shadow_level=shw_field.final_level,
+                            current_tags=[str(tag) for tag in cur_field.tags],
+                            shadow_tags=[str(tag) for tag in shw_field.tags],
+                        )
+                    )
+        return diffs
 
     # ------------------------------------------------------------------
     # 多格式适配器 / Format adapters
@@ -860,6 +950,91 @@ class ClassificationAPI:
             audit_info=_build_audit_info(cp, source),
         )
 
+    def classify_secretflow(
+        self,
+        sf_data: Any,
+        params: Optional[Dict[str, Any]] = None,
+        party: Optional[str] = None,
+    ) -> ClassificationResult:
+        """对 SecretFlow 联邦数据结构进行分类。
+
+        Args:
+            sf_data: SecretFlow DataFrame / HDataFrame / VDataFrame / FedNdarray。
+            params: 请求级分类参数。
+            party: HDataFrame 参与方。
+
+        Returns:
+            ClassificationResult。
+        """
+        from .classification_secretflow import classify_secretflow as _classify_secretflow
+        table_result = _classify_secretflow(self, sf_data, params=params, party=party)
+        cp, source = _resolve_classification_params(self.resolver, params)
+        return ClassificationResult(
+            table_result=table_result,
+            audit_info=_build_audit_info(cp, source),
+        )
+
+    def submit_classify_table_async(
+        self,
+        schema: List[str],
+        rows: List[Dict[str, Any]],
+        params: Optional[Dict[str, Any]] = None,
+    ) -> str:
+        """提交异步表分类任务。
+
+        Args:
+            schema: 列名列表。
+            rows: 记录列表。
+            params: 请求级参数。
+
+        Returns:
+            异步任务 ID。
+        """
+        return self.async_manager.submit(self.classify_table, schema, rows, params)
+
+    def get_job_result(self, job_id: str) -> ClassificationJob:
+        """查询异步分类任务结果。
+
+        Args:
+            job_id: 任务 ID。
+
+        Returns:
+            ClassificationJob。
+        """
+        return self.async_manager.get(job_id)
+
+    def confirm_review(
+        self,
+        review_id: str,
+        corrected_level: str,
+        reviewer: str = "",
+        comment: str = "",
+    ) -> Any:
+        """确认或修正复核条目。
+
+        Args:
+            review_id: 复核条目 ID。
+            corrected_level: 修正后的等级。
+            reviewer: 复核人。
+            comment: 说明。
+
+        Returns:
+            ReviewEntry。
+        """
+        return self.review_store.confirm(review_id, corrected_level, reviewer, comment)
+
+    def export_reviews(self, format: str = "jsonl", mask_input: bool = False) -> str:
+        """导出复核样本。
+
+        Args:
+            format: `jsonl` 或 `csv`。
+            mask_input: 是否对 input 掩码。
+
+        Returns:
+            导出内容字符串。
+        """
+        return self.review_store.export(format=format, mask_input=mask_input)
+
 
 def _build_audit_info(params: ClassificationParams, parameter_source: str) -> AuditInfo:
     """构建审计信息。"""
@@ -868,5 +1043,6 @@ def _build_audit_info(params: ClassificationParams, parameter_source: str) -> Au
         profile_version=params.version,
         timestamp=datetime.now(timezone.utc).isoformat(),
         rule_engine_version=_RULE_ENGINE_VERSION,
+        rule_set_version=params.rule_set_version,
         parameter_source=parameter_source,
     )

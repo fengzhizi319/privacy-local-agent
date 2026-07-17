@@ -32,6 +32,11 @@ service PrivacyService {
   rpc ClassifyField (ClassifyFieldRequest) returns (ClassifyFieldResponse);
   rpc ClassifyRecord (ClassifyRecordRequest) returns (ClassifyRecordResponse);
   rpc ClassifyTable (ClassifyTableRequest) returns (ClassifyTableResponse);
+  rpc ClassifyTableAsync (ClassifyTableAsyncRequest) returns (ClassifyTableAsyncResponse);
+  rpc GetClassificationJob (GetClassificationJobRequest) returns (GetClassificationJobResponse);
+  rpc ClassifySecretFlow (ClassifySecretFlowRequest) returns (ClassifySecretFlowResponse);
+  rpc ConfirmReview (ConfirmReviewRequest) returns (ConfirmReviewResponse);
+  rpc ExportReviews (ExportReviewsRequest) returns (ExportReviewsResponse);
   rpc Health (HealthRequest) returns (HealthResponse);
   rpc RecommendParams (RecommendRequest) returns (RecommendResponse);
   rpc PerturbBinaryBatch (PerturbBinaryBatchRequest) returns (PerturbBinaryBatchResponse);
@@ -190,6 +195,61 @@ message ClassifyTableRequest {
 
 message ClassifyTableResponse {
   string result_json = 1;
+}
+
+message ClassifyTableAsyncRequest {
+  repeated string schema = 1;
+  repeated RecordEntry rows = 2;
+  string params_json = 3;
+}
+
+message ClassifyTableAsyncResponse {
+  string job_id = 1;
+  string status = 2;
+  string created_at = 3;
+}
+
+message GetClassificationJobRequest {
+  string job_id = 1;
+}
+
+message GetClassificationJobResponse {
+  string job_id = 1;
+  string status = 2;
+  string result_json = 3;
+  string error = 4;
+  string created_at = 5;
+  string finished_at = 6;
+}
+
+message ClassifySecretFlowRequest {
+  string party = 1;
+  string params_json = 2;
+  string data_json = 3;
+}
+
+message ClassifySecretFlowResponse {
+  string result_json = 1;
+}
+
+message ConfirmReviewRequest {
+  string review_id = 1;
+  string corrected_level = 2;
+  string reviewer = 3;
+  string comment = 4;
+}
+
+message ConfirmReviewResponse {
+  string result_json = 1;
+}
+
+message ExportReviewsRequest {
+  string format = 1;
+  bool mask_input = 2;
+}
+
+message ExportReviewsResponse {
+  string data = 1;
 }
 
 message HealthRequest {}

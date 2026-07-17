@@ -49,7 +49,7 @@ class PrivacyServicer(
     def __init__(self):
         """初始化 gRPC servicer，创建 PrivacyService 实例并复用它。"""
         self.service = PrivacyService(profile_path=PROFILE_PATH, namespace=NAMESPACE)
-        ClassificationGrpcServicer.__init__(self, classification_service=self.service)
+        ClassificationGrpcServicer.__init__(self)
 
     def Mask(self, request, context):
         """单字段脱敏 gRPC 方法。"""

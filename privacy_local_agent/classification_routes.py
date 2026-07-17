@@ -2,14 +2,10 @@
 
 基于 FastAPI APIRouter 提供字段级、记录级、表级数据分类的 HTTP 接口，
 与处理原语（masking/dp/k-anonymity/qol）在代码层面完全分离。
-
-REST routing module for data classification. Exposes field/record/table
-classification endpoints via FastAPI APIRouter, physically separated from the
-processing primitives.
 """
 
 import os
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
@@ -58,40 +54,95 @@ class ClassifyTableRequest(BaseModel):
     params: Dict[str, Any] = {}
 
 
+class ClassifySecretFlowRequest(BaseModel):
+    """SecretFlow 分类请求模型。"""
+
+    party: Optional[str] = None
+    params_json: str = "{}"
+    data_json: str = "{}"
+
+
+class ConfirmReviewRequest(BaseModel):
+    """复核确认请求模型。"""
+
+    review_id: str
+    corrected_level: str
+    reviewer: str = ""
+    comment: str = ""
+
+
+class ExportReviewsRequest(BaseModel):
+    """复核导出请求模型。"""
+
+    format: str = "jsonl"
+    mask_input: bool = False
+
+
 @classification_router.post("/v1/privacy/classify/field")
 def classify_field(req: ClassifyFieldRequest):
-    """单字段分类接口。
-
-    Args:
-        req: ClassifyFieldRequest 请求体。
-
-    Returns:
-        字段分类结果字典。
-    """
+    """单字段分类接口。"""
     return {"result": classification_service.classify_field(req.field_name, req.value, req.params)}
 
 
 @classification_router.post("/v1/privacy/classify/record")
 def classify_record(req: ClassifyRecordRequest):
-    """单条记录分类接口。
-
-    Args:
-        req: ClassifyRecordRequest 请求体。
-
-    Returns:
-        记录分类结果字典。
-    """
+    """单条记录分类接口。"""
     return {"result": classification_service.classify_record(req.record, req.params)}
 
 
 @classification_router.post("/v1/privacy/classify/table")
 def classify_table(req: ClassifyTableRequest):
-    """整张表分类接口。
-
-    Args:
-        req: ClassifyTableRequest 请求体。
-
-    Returns:
-        表分类结果字典。
-    """
+    """整张表分类接口（同步）。"""
     return {"result": classification_service.classify_table(req.schema_, req.rows, req.params)}
+
+
+@classification_router.post("/v1/privacy/classify/table/async")
+def classify_table_async(req: ClassifyTableRequest):
+    """整张表分类接口（异步）。"""
+    job_id = classification_service.submit_classify_table_async(
+        req.schema_, req.rows, req.params
+    )
+    return {"job_id": job_id}
+
+
+@classification_router.get("/v1/privacy/classify/jobs/{job_id}")
+def get_classification_job(job_id: str):
+    """查询异步分类任务结果。"""
+    return classification_service.get_job_result(job_id)
+
+
+@classification_router.post("/v1/privacy/classify/secretflow")
+def classify_secretflow(req: ClassifySecretFlowRequest):
+    """SecretFlow 数据结构分类接口。"""
+    import json
+    params = json.loads(req.params_json) if req.params_json else {}
+    data = json.loads(req.data_json) if req.data_json else {}
+    result = classification_service.classify_table(
+        schema=list(data.get("schema", [])),
+        rows=data.get("rows", []),
+        params=params,
+    )
+    return {"result": result}
+
+
+@classification_router.post("/v1/privacy/classify/review/confirm")
+def confirm_review(req: ConfirmReviewRequest):
+    """确认或修正复核结果。"""
+    return {
+        "result": classification_service.confirm_review(
+            req.review_id,
+            req.corrected_level,
+            req.reviewer,
+            req.comment,
+        )
+    }
+
+
+@classification_router.post("/v1/privacy/classify/review/export")
+def export_reviews(req: ExportReviewsRequest):
+    """导出复核样本。"""
+    return {
+        "data": classification_service.export_reviews(
+            format=req.format, mask_input=req.mask_input
+        )
+    }

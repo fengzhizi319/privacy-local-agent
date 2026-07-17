@@ -13,6 +13,7 @@ from typing import Any, Dict, Optional
 
 from .classification import LlmClassifier
 from .classification_models import SensitivityLevel
+from .classification_zero_knowledge import redact
 
 logger = logging.getLogger("privacy.classification_llm")
 
@@ -107,7 +108,7 @@ class Qwen2VLClassifier(LlmClassifier):
                     try:
                         return Image.open(text_stripped)
                     except Exception as e:
-                        logger.warning(f"加载本地图片失败 {text_stripped}: {e}")
+                        logger.warning(f"加载本地图片失败 {redact(text_stripped)}: {e}")
 
         # 2. 检测 Base64 图片 (Data URI)
         # 例如 data:image/png;base64,iVBORw0KGgoAAA...
@@ -237,7 +238,7 @@ class Qwen2VLClassifier(LlmClassifier):
             if "final_level" in res:
                 return res
         except Exception as e:
-            logger.warning(f"大模型输出 JSON 解析失败，原始输出: {output_text}, 错误: {e}")
+            logger.warning(f"大模型输出 JSON 解析失败，错误: {e}")
 
         # 解析失败则返回 None 触发降级
         return None

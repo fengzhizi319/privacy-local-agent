@@ -159,6 +159,31 @@ class PrivacyServiceStub:
                 request_serializer=privacy__pb2.ClassifyTableRequest.SerializeToString,
                 response_deserializer=privacy__pb2.ClassifyTableResponse.FromString,
                 _registered_method=True)
+        self.ClassifyTableAsync = channel.unary_unary(
+                '/privacy.local.PrivacyService/ClassifyTableAsync',
+                request_serializer=privacy__pb2.ClassifyTableAsyncRequest.SerializeToString,
+                response_deserializer=privacy__pb2.ClassifyTableAsyncResponse.FromString,
+                _registered_method=True)
+        self.GetClassificationJob = channel.unary_unary(
+                '/privacy.local.PrivacyService/GetClassificationJob',
+                request_serializer=privacy__pb2.GetClassificationJobRequest.SerializeToString,
+                response_deserializer=privacy__pb2.GetClassificationJobResponse.FromString,
+                _registered_method=True)
+        self.ClassifySecretFlow = channel.unary_unary(
+                '/privacy.local.PrivacyService/ClassifySecretFlow',
+                request_serializer=privacy__pb2.ClassifySecretFlowRequest.SerializeToString,
+                response_deserializer=privacy__pb2.ClassifySecretFlowResponse.FromString,
+                _registered_method=True)
+        self.ConfirmReview = channel.unary_unary(
+                '/privacy.local.PrivacyService/ConfirmReview',
+                request_serializer=privacy__pb2.ConfirmReviewRequest.SerializeToString,
+                response_deserializer=privacy__pb2.ConfirmReviewResponse.FromString,
+                _registered_method=True)
+        self.ExportReviews = channel.unary_unary(
+                '/privacy.local.PrivacyService/ExportReviews',
+                request_serializer=privacy__pb2.ExportReviewsRequest.SerializeToString,
+                response_deserializer=privacy__pb2.ExportReviewsResponse.FromString,
+                _registered_method=True)
         self.Health = channel.unary_unary(
                 '/privacy.local.PrivacyService/Health',
                 request_serializer=privacy__pb2.HealthRequest.SerializeToString,
@@ -344,6 +369,36 @@ class PrivacyServiceServicer:
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def ClassifyTableAsync(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def GetClassificationJob(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def ClassifySecretFlow(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def ConfirmReview(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def ExportReviews(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
     def Health(self, request, context):
         """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
@@ -507,6 +562,31 @@ def add_PrivacyServiceServicer_to_server(servicer, server):
                     servicer.ClassifyTable,
                     request_deserializer=privacy__pb2.ClassifyTableRequest.FromString,
                     response_serializer=privacy__pb2.ClassifyTableResponse.SerializeToString,
+            ),
+            'ClassifyTableAsync': grpc.unary_unary_rpc_method_handler(
+                    servicer.ClassifyTableAsync,
+                    request_deserializer=privacy__pb2.ClassifyTableAsyncRequest.FromString,
+                    response_serializer=privacy__pb2.ClassifyTableAsyncResponse.SerializeToString,
+            ),
+            'GetClassificationJob': grpc.unary_unary_rpc_method_handler(
+                    servicer.GetClassificationJob,
+                    request_deserializer=privacy__pb2.GetClassificationJobRequest.FromString,
+                    response_serializer=privacy__pb2.GetClassificationJobResponse.SerializeToString,
+            ),
+            'ClassifySecretFlow': grpc.unary_unary_rpc_method_handler(
+                    servicer.ClassifySecretFlow,
+                    request_deserializer=privacy__pb2.ClassifySecretFlowRequest.FromString,
+                    response_serializer=privacy__pb2.ClassifySecretFlowResponse.SerializeToString,
+            ),
+            'ConfirmReview': grpc.unary_unary_rpc_method_handler(
+                    servicer.ConfirmReview,
+                    request_deserializer=privacy__pb2.ConfirmReviewRequest.FromString,
+                    response_serializer=privacy__pb2.ConfirmReviewResponse.SerializeToString,
+            ),
+            'ExportReviews': grpc.unary_unary_rpc_method_handler(
+                    servicer.ExportReviews,
+                    request_deserializer=privacy__pb2.ExportReviewsRequest.FromString,
+                    response_serializer=privacy__pb2.ExportReviewsResponse.SerializeToString,
             ),
             'Health': grpc.unary_unary_rpc_method_handler(
                     servicer.Health,
@@ -1214,6 +1294,141 @@ class PrivacyService:
             '/privacy.local.PrivacyService/ClassifyTable',
             privacy__pb2.ClassifyTableRequest.SerializeToString,
             privacy__pb2.ClassifyTableResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def ClassifyTableAsync(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/privacy.local.PrivacyService/ClassifyTableAsync',
+            privacy__pb2.ClassifyTableAsyncRequest.SerializeToString,
+            privacy__pb2.ClassifyTableAsyncResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def GetClassificationJob(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/privacy.local.PrivacyService/GetClassificationJob',
+            privacy__pb2.GetClassificationJobRequest.SerializeToString,
+            privacy__pb2.GetClassificationJobResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def ClassifySecretFlow(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/privacy.local.PrivacyService/ClassifySecretFlow',
+            privacy__pb2.ClassifySecretFlowRequest.SerializeToString,
+            privacy__pb2.ClassifySecretFlowResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def ConfirmReview(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/privacy.local.PrivacyService/ConfirmReview',
+            privacy__pb2.ConfirmReviewRequest.SerializeToString,
+            privacy__pb2.ConfirmReviewResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def ExportReviews(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/privacy.local.PrivacyService/ExportReviews',
+            privacy__pb2.ExportReviewsRequest.SerializeToString,
+            privacy__pb2.ExportReviewsResponse.FromString,
             options,
             channel_credentials,
             insecure,
