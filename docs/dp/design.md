@@ -10,6 +10,11 @@
 - 实现 Gaussian 机制，提供 $(\varepsilon, \delta)$-DP 保证。
 - 通过显式 clipping 控制 sum/mean 的敏感度，使敏感度在数据观测前即可确定。
 - 提供 BudgetAccountant，支持内存与 SQLite 两种预算存储后端。
+- 实现 NumPy 向量化 clipping，提升大规模数据裁剪效率。
+- 提供 noisify 接口，对已由外部引擎聚合好的中间结果直接加噪。
+- 提供 chunked 流式聚合接口，避免一次性加载全部数据到内存。
+- 提供统一数据适配器，支持 pandas / NumPy / SecretFlow 等输入格式。
+- 暴露 `privacy_traffic_bytes_total` 指标，用于监控 REST/gRPC 流量。
 - 保证 REST/gRPC 接口参数语义一致，便于审计与集成。
 
 ## 3. 算法原理
@@ -747,6 +752,107 @@ $$\hat{f}_j = \frac{\hat{f}_{j,\text{reported}} - q}{p - q}, \quad q = \frac{1 -
 - 本地 DP 的噪声通常远大于中心式 DP，因此只适合**大样本下的频率/分布估计**。
 - 不能用于需要精确个体值或复杂聚合（如 sum/mean）的场景；这些场景应使用中心式 DP 或安全聚合（Secure Aggregation）。
 
+### 3.8 Noisify 接口设计
+
+Noisify 接口面向"外部引擎已完成聚合，sidecar 仅负责注入噪声与预算扣减"的工作模式。典型场景包括：
+
+- Spark / Flink / DuckDB / SQL 在数据源侧完成 `COUNT` / `SUM` / 直方图分桶。
+- 调用方将中间聚合结果（如 `true_sum`、`true_count`、`true_counts`）发送到 sidecar。
+- sidecar 根据调用方提供的敏感度计算噪声，加入结果后返回，并扣减命名空间预算。
+
+#### 为什么需要调用方提供敏感度
+
+中心式 DP 的噪声尺度由查询敏感度决定。Noisify 接口不再接触原始记录，因此无法自行推断 `sum` 的 clip 区间或 `count` 的邻接变化量。调用方必须提供以下二者之一：
+
+- `sensitivity`：直接给出 L1/L2 敏感度。
+- `clip_lower` + `clip_upper`：sidecar 计算 `sensitivity = clip_upper - clip_lower`。
+
+#### 接口映射
+
+| 接口 | 输入 | 输出 | 敏感度 |
+|---|---|---|---|
+| `noisy_count` | `true_count` | 带噪计数 | 1 |
+| `noisy_sum` | `true_sum` | 带噪求和 | `sensitivity`（或 clip 区间长度） |
+| `noisy_mean` | `true_sum`, `true_count` | 带噪均值 | count 部分为 1；sum 部分为 `sensitivity` |
+| `noisy_histogram` | `true_counts` | 带噪直方图 | 1（联合敏感度） |
+
+`noisy_mean` 同样使用组合定理：将 `(epsilon, delta)` 平分为两份，分别用于 `noisy_count` 与 `noisy_sum`。
+
+### 3.9 Chunked 流式聚合
+
+Chunked 接口允许调用方以多个 chunk（生成器/迭代器/列表）分批传入数据，sidecar 在内部完成增量聚合，最终只注入一次噪声、消耗一次隐私预算。
+
+#### 适用场景
+
+- 数据量超过单台机器内存，无法一次性构造 `values` 列表。
+- 数据从流式源（Kafka、文件流）逐批读取。
+- 希望降低网络单次传输的峰值负载。
+
+#### 实现要点
+
+1. **单遍遍历**：每个 chunk 只被遍历一次，边读边累加真实计数/求和/直方图。
+2. **统一 clip**：`chunked_sum` / `chunked_mean` 必须显式提供全局 `clip_lower` / `clip_upper`，所有 chunk 使用同一边界裁剪。
+3. **单次预算**：真实聚合完成后，只调用一次 `BudgetAccountant.spend(epsilon, delta)`，然后注入噪声。
+4. **数据格式**：每个 chunk 支持 list/tuple/ndarray/Series/DataFrame/SecretFlow 格式，通过 `data_adapters.extract_values` 统一转换。
+
+#### 与 noisify 的协作
+
+对于真正海量（亿级）数据，推荐模式是：
+
+1. 在分布式引擎（Spark/SQL）中完成预聚合，得到 `true_sum` / `true_count`。
+2. 调用 `noisy_sum` / `noisy_mean` 对中间结果加噪。
+
+Chunked 接口适合"数据能放进单台 sidecar 内存分批处理，但不想一次性全量传输"的场景。
+
+### 3.10 数据适配器
+
+`privacy_local_agent/privacy/data_adapters.py` 为 DP 原语提供统一输入适配，将多种数据格式转换为 Python `List[float]`。
+
+#### 支持格式
+
+| 类型 | 说明 | 所需参数 |
+|---|---|---|
+| `list` / `tuple` | 原生序列 | 无 |
+| `np.ndarray` | NumPy 数组 | 无 |
+| `pd.Series` | pandas Series | 无 |
+| `pd.DataFrame` | pandas DataFrame | `column` |
+| `sf.data.DataFrame` | SecretFlow 本地 DataFrame | `column` |
+| `HDataFrame` | 水平分割联邦数据 | `column`，可选 `party` |
+| `VDataFrame` | 垂直分割联邦数据 | `column` |
+| `MixDataFrame` | 混合联邦数据 | 不支持直接提取，需先转换 |
+| `FedNdarray` | 联邦 ndarray | 按 H/V 方式处理 |
+
+#### SecretFlow 支持
+
+SecretFlow 为可选依赖。未安装时，适配器跳过 SecretFlow 分支，仅处理 list/NumPy/pandas；已安装时自动识别联邦数据结构。
+
+- **VDataFrame**：列分布在不同参与方，系统自动遍历 partitions 找到包含 `column` 的 partition。
+- **HDataFrame**：样本水平分割，单 partition 时自动提取；多 partition 时必须通过 `party` 指定参与方。
+- **MixDataFrame**：结构复杂，直接抛出错误，要求调用方先转换为 H/V DataFrame 或手动提取。
+
+#### 使用方式
+
+Python SDK 中 `column` / `party` 作为 `DPApi.count/sum/mean/histogram` 的命名参数传入；REST/gRPC 中通过 `params.column` / `params.party` 透传。
+
+### 3.11 流量监控指标
+
+为便于运维审计与容量规划，REST 中间件与 gRPC 拦截器均接入了 `privacy_traffic_bytes_total` Counter。
+
+#### 指标定义
+
+```text
+privacy_traffic_bytes_total{method, path, direction}
+```
+
+- `method`：HTTP 方法（如 `POST`）或 `gRPC`。
+- `path`：HTTP 路径（如 `/v1/privacy/dp/sum`）或 gRPC 完整方法名（如 `/privacy.local.PrivacyService/DPSum`）。
+- `direction`：`request` 或 `response`。
+
+#### 实现位置
+
+- REST：`privacy_local_agent/observability/middleware.py` 中的 `ObservabilityMiddleware`，读取请求体长度与响应内容长度。
+- gRPC：`GrpcObservabilityInterceptor` 中对 unary 调用使用 `protobuf.Message.ByteSize()` 估算请求/响应字节数；stream 调用因消息流不可预知，request/response 字节数计为 0。
+
 ## 4. 模块设计
 
 ### 4.1 `privacy_local_agent/privacy/dp.py`
@@ -755,6 +861,9 @@ $$\hat{f}_j = \frac{\hat{f}_{j,\text{reported}} - q}{p - q}, \quad q = \frac{1 -
 - `DPApi.sum(...)`：sum 查询入口，先 clipping 再计算。
 - `DPApi.mean(...)`：mean 查询入口，组合 count 与 sum，支持 `min_count` 低频保护。
 - `DPApi.histogram(...)`：直方图查询入口，利用互斥划分的联合敏感度为 1，仅消耗一次预算。
+- `DPApi.noisy_count/noisy_sum/noisy_mean/noisy_histogram(...)`：对已由外部引擎聚合好的中间结果加噪。
+- `DPApi.chunked_count/chunked_sum/chunked_mean/chunked_histogram(...)`：分块流式聚合。
+- `DPApi._clip_values(...)`：NumPy 向量化 clip，失败回退纯 Python。
 - `LocalDPApi.perturb_binary/perturb_categorical(...)`：二值/类别型本地 DP 扰动。
 - `LocalDPApi.estimate_binary_frequency/estimate_categorical_histogram(...)`：本地 DP 频率/直方图纠偏估计。
 - `calibrate_analytic_gaussian(...)`：解析高斯机制噪声校准。
@@ -769,14 +878,24 @@ $$\hat{f}_j = \frac{\hat{f}_{j,\text{reported}} - q}{p - q}, \quad q = \frac{1 -
 ### 4.3 proto / REST / gRPC
 
 - `DPRequest` 包含 `epsilon`、`delta`、`mechanism`、`clip_lower`、`clip_upper`。
-- REST `DPRequest.params` 透传上述字段，mean 查询额外支持 `min_count`。
+- REST `DPRequest.params` 透传上述字段，mean 查询额外支持 `min_count`；表格型输入额外支持 `column` / `party`。
 - 新增 `DPHistogramRequest` / `POST /v1/privacy/dp/histogram`：差分隐私直方图。
+- 新增 noisify REST 接口：
+  - `POST /v1/privacy/dp/noisy_count`
+  - `POST /v1/privacy/dp/noisy_sum`
+  - `POST /v1/privacy/dp/noisy_mean`
+  - `POST /v1/privacy/dp/noisy_histogram`
+- 新增 chunked REST 接口：
+  - `POST /v1/privacy/dp/chunked_count`
+  - `POST /v1/privacy/dp/chunked_sum`
+  - `POST /v1/privacy/dp/chunked_mean`
+  - `POST /v1/privacy/dp/chunked_histogram`
 - 新增本地 DP REST 接口：
   - `POST /v1/privacy/ldp/perturb/binary`
   - `POST /v1/privacy/ldp/perturb/categorical`
   - `POST /v1/privacy/ldp/estimate/binary`
   - `POST /v1/privacy/ldp/estimate/categorical`
-- 对应 gRPC 方法：`DPHistogram`、`PerturbBinaryBatch`、`PerturbCategoricalBatch`、`EstimateBinaryFrequency`、`EstimateCategoricalHistogram`。
+- 对应 gRPC 方法：`DPHistogram`、`DPNoisyCount`、`DPNoisySum`、`DPNoisyMean`、`DPNoisyHistogram`、`DPChunkedCount`、`DPChunkedSum`、`DPChunkedMean`、`DPChunkedHistogram`、`PerturbBinaryBatch`、`PerturbCategoricalBatch`、`EstimateBinaryFrequency`、`EstimateCategoricalHistogram`。
 
 ## 5. BudgetAccountant 设计
 
@@ -889,7 +1008,7 @@ $$\approx 4.48$$
 
 ## 7. 接口定义
 
-### 7.1 REST 请求示例
+### 7.1 REST 请求示例（标准聚合）
 
 ```json
 {
@@ -904,23 +1023,81 @@ $$\approx 4.48$$
 }
 ```
 
-### 7.2 gRPC 字段
+表格型输入可指定 `column`（以及 SecretFlow HDataFrame 所需的 `party`）：
+
+```json
+{
+  "values": [[1.0, 2.0], [3.0, 4.0]],
+  "params": {
+    "column": "salary",
+    "epsilon": 1.0,
+    "clip_lower": 0.0,
+    "clip_upper": 100000.0
+  }
+}
+```
+
+### 7.2 REST 请求示例（Noisify）
+
+```json
+{
+  "true_sum": 5000000.0,
+  "params": {
+    "epsilon": 1.0,
+    "delta": 1e-6,
+    "mechanism": "gaussian",
+    "sensitivity": 100000.0
+  }
+}
+```
+
+### 7.3 REST 请求示例（Chunked）
+
+```json
+{
+  "chunks": [
+    [1.0, 2.0, 3.0],
+    [4.0, 5.0, 6.0]
+  ],
+  "params": {
+    "epsilon": 1.0,
+    "delta": 1e-6,
+    "mechanism": "gaussian",
+    "clip_lower": 0.0,
+    "clip_upper": 10.0
+  }
+}
+```
+
+### 7.4 gRPC 字段
 
 `DPRequest` 包含 `epsilon`、`delta`、`mechanism`、`clip_lower`、`clip_upper`，与 REST 参数语义一致。
+
+新增消息：`DPNoisyCountRequest`、`DPNoisySumRequest`、`DPNoisyMeanRequest`、`DPNoisyHistogramRequest`、`DPChunkedCountRequest`、`DPChunkedSumRequest`、`DPChunkedMeanRequest`、`DPChunkedHistogramRequest`，以及 `DoubleChunk`、`StringChunk`。
 
 ## 8. 安全与兼容性设计
 
 - 默认 `mechanism=laplace`，$\delta = 0$。
 - sum/mean 必须提供 `clip_lower` / `clip_upper`；未提供时返回明确错误。
 - Gaussian 机制下 `delta` 必须大于 0。
+- 默认 `mechanism=laplace`，$δ = 0$。
+- sum/mean 必须提供 `clip_lower` / `clip_upper`；未提供时返回明确错误。
+- Gaussian 机制下 `delta` 必须大于 0。
+- **NumPy 依赖**：clip 操作优先使用 NumPy（`numpy>=1.24.0` 为核心依赖）；若 NumPy 不可用或转换失败，自动回退到纯 Python，保证核心功能可用。
+- **SecretFlow 可选依赖**：SecretFlow 相关数据适配为可选能力，未安装时不影响 list/NumPy/pandas 输入。
 - **浮点数安全（Mironov 攻击）**：当前实现使用 Python `float` 与标准伪随机数生成器（`random.Random`）进行连续 Laplace/Gaussian 采样。由于浮点数表示的不连续性，理论上攻击者可能通过观察输出浮点值的最低有效位推断部分信息（Mironov, 2012）。对于 POC/MVP 场景该风险可接受；若需高安全保证，应迁移到离散拉普拉斯/离散高斯机制，或使用具备 snapping mechanism 的专业库。
 
 ## 9. 测试策略
 
 - Laplace/Gaussian 机制单元测试（含解析高斯机制）。
+- NumPy 向量化 clip 与纯 Python 回退测试。
 - clipping 参数校验与敏感度计算测试。
 - delta 预算正确消耗、超支拒绝与时间窗口重置测试。
 - mean `min_count` 低频保护测试。
 - histogram 联合敏感度测试。
+- noisify 接口（count/sum/mean/histogram）单元测试与 REST/gRPC 测试。
+- chunked 接口（count/sum/mean/histogram）单元测试与 REST/gRPC 测试。
+- 数据适配器对 list/NumPy/pandas/SecretFlow 的测试。
 - REST/gRPC 接口参数透传测试。
 - 本地 DP REST/gRPC 接口测试。
+- `privacy_traffic_bytes_total` 指标接入测试。

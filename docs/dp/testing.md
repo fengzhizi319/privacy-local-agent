@@ -14,6 +14,10 @@
 - 验证 REST/gRPC 接口透传参数无误。
 - 验证 mean 组合实现满足组合定理，且 `min_count` 低频保护生效。
 - 验证直方图聚合使用联合敏感度为 1。
+- 验证 noisify 接口（count/sum/mean/histogram）在提供敏感度时正确加噪并扣减预算。
+- 验证 chunked 接口（count/sum/mean/histogram）增量聚合后只消耗一次预算。
+- 验证数据适配器对 list/NumPy/pandas/SecretFlow 的提取能力。
+- 验证 `privacy_traffic_bytes_total` 在 REST/gRPC 中被正确记录。
 - 验证本地 DP 扰动与估计接口（REST/gRPC）行为正确。
 
 ## 3. 单元测试策略
@@ -170,7 +174,109 @@ def test_local_dp_categorical_unbiased():
 PYTHONPATH=. pytest tests/test_dp.py -v -k "LocalDP or Randomized"
 ```
 
-### 3.7 时间窗口预算重置测试
+### 3.7 Noisify 接口测试
+
+```python
+from privacy_local_agent.privacy.dp import DPApi
+from privacy_local_agent.privacy.budget import BudgetAccountant
+
+
+def test_noisy_sum():
+    BudgetAccountant("test-noisy", epsilon_total=100.0, delta_total=1.0)
+    api = DPApi(namespace="test-noisy")
+    result = api.noisy_sum(
+        true_sum=1000.0,
+        sensitivity=10.0,
+        epsilon=1.0,
+        mechanism="laplace",
+    )
+    assert isinstance(result, float)
+
+
+def test_noisy_sum_requires_sensitivity():
+    api = DPApi(namespace="test-noisy-2")
+    with pytest.raises(ValueError, match="sensitivity"):
+        # 通过 REST service 调用时未提供 sensitivity 或 clip 应报错
+        from privacy_local_agent.service import PrivacyService
+        svc = PrivacyService(namespace="test-noisy-2")
+        svc.dp_noisy_sum(1000.0, {})
+```
+
+### 3.8 Chunked 接口测试
+
+```python
+from privacy_local_agent.privacy.dp import DPApi
+from privacy_local_agent.privacy.budget import BudgetAccountant
+
+
+def test_chunked_count():
+    BudgetAccountant("test-chunked", epsilon_total=100.0, delta_total=1.0)
+    api = DPApi(namespace="test-chunked")
+    chunks = [[1, 0, 1], [1, 0, 1, 1]]
+    result = api.chunked_count(chunks, epsilon=10.0, mechanism="laplace")
+    assert result >= 0.0
+
+
+def test_chunked_sum_requires_clip():
+    api = DPApi(namespace="test-chunked-2")
+    with pytest.raises(ValueError, match="chunked_sum requires explicit clip"):
+        api.chunked_sum([[1.0, 2.0]], epsilon=1.0)
+```
+
+### 3.9 数据适配器测试
+
+```python
+import numpy as np
+import pandas as pd
+from privacy_local_agent.privacy.data_adapters import extract_values
+
+
+def test_extract_from_list():
+    assert extract_values([1, 2, 3]) == [1, 2, 3]
+
+
+def test_extract_from_numpy():
+    arr = np.array([1.0, 2.0, 3.0])
+    assert extract_values(arr) == [1.0, 2.0, 3.0]
+
+
+def test_extract_from_pandas_dataframe():
+    df = pd.DataFrame({"salary": [1.0, 2.0], "age": [25.0, 34.0]})
+    assert extract_values(df, column="salary") == [1.0, 2.0]
+
+
+def test_extract_from_pandas_series():
+    s = pd.Series([1.0, 2.0, 3.0])
+    assert extract_values(s) == [1.0, 2.0, 3.0]
+```
+
+### 3.10 流量监控指标测试
+
+```python
+from prometheus_client import REGISTRY
+from fastapi.testclient import TestClient
+from privacy_local_agent.main import app
+
+
+def test_traffic_metric_recorded():
+    client = TestClient(app)
+    before = REGISTRY.get_sample_value(
+        "privacy_traffic_bytes_total",
+        {"method": "POST", "path": "/v1/privacy/dp/count", "direction": "request"},
+    ) or 0.0
+    resp = client.post(
+        "/v1/privacy/dp/count",
+        json={"values": [1, 0, 1], "params": {"epsilon": 1.0}},
+    )
+    assert resp.status_code == 200
+    after = REGISTRY.get_sample_value(
+        "privacy_traffic_bytes_total",
+        {"method": "POST", "path": "/v1/privacy/dp/count", "direction": "request"},
+    )
+    assert after > before
+```
+
+### 3.11 时间窗口预算重置测试
 
 ```python
 import time
@@ -257,13 +363,17 @@ PYTHONPATH=. pytest tests/test_dp.py -v --slow
 
 ## 7. 验收检查清单
 
-- [ ] count/sum/mean/histogram 四种聚合的单元测试覆盖。
-- [ ] Laplace 与 Gaussian 机制各至少一组测试。
-- [ ] 解析高斯机制噪声尺度测试覆盖。
-- [ ] 本地 DP 二值/类别随机响应与频率估计测试覆盖。
-- [ ] 本地 DP REST/gRPC 接口测试覆盖。
-- [ ] clipping 参数缺失/错误时抛出明确异常。
-- [ ] 预算超支时返回 `PrivacyBudgetExhausted` 或对应 HTTP/gRPC 错误。
-- [ ] 预算时间窗口重置测试覆盖。
-- [ ] REST/gRPC 接口参数透传测试通过。
-- [ ] 统计测试在 5000 次采样下通过。
+- [x] count/sum/mean/histogram 四种聚合的单元测试覆盖。
+- [x] Laplace 与 Gaussian 机制各至少一组测试。
+- [x] 解析高斯机制噪声尺度测试覆盖。
+- [x] noisify 接口（count/sum/mean/histogram）单元测试与 REST/gRPC 接口测试覆盖。
+- [x] chunked 接口（count/sum/mean/histogram）单元测试与 REST/gRPC 接口测试覆盖。
+- [x] 数据适配器对 list/NumPy/pandas/SecretFlow 的测试覆盖。
+- [x] 本地 DP 二值/类别随机响应与频率估计测试覆盖。
+- [x] 本地 DP REST/gRPC 接口测试覆盖。
+- [x] clipping 参数缺失/错误时抛出明确异常。
+- [x] 预算超支时返回 `PrivacyBudgetExhausted` 或对应 HTTP/gRPC 错误。
+- [x] 预算时间窗口重置测试覆盖。
+- [x] REST/gRPC 接口参数透传测试通过。
+- [x] `privacy_traffic_bytes_total` 指标接入测试通过。
+- [x] 统计测试在 5000 次采样下通过。

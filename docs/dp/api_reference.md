@@ -22,10 +22,12 @@ DPApi(namespace: str = "default")
 
 ```python
 count(
-    values: List[float],
+    values: Any,
     epsilon: float,
     delta: float = 0.0,
     mechanism: str = "laplace",
+    column: Optional[str] = None,
+    party: Optional[str] = None,
 ) -> float
 ```
 
@@ -33,10 +35,12 @@ count(
 
 | 参数 | 类型 | 必填 | 说明 |
 |---|---|---|---|
-| `values` | `List[float]` | 是 | 输入值列表，非零/非空元素被计入 |
+| `values` | `Any` | 是 | 输入值，支持 list/tuple/ndarray/Series/DataFrame/SecretFlow 格式 |
 | `epsilon` | `float` | 是 | 隐私预算 ε |
 | `delta` | `float` | 否 | 隐私预算 δ；Gaussian 机制必须 > 0 |
 | `mechanism` | `str` | 否 | `"laplace"` 或 `"gaussian"` |
+| `column` | `Optional[str]` | 否 | 表格型输入的目标列名 |
+| `party` | `Optional[str]` | 否 | SecretFlow HDataFrame 的参与方标识 |
 
 **返回值**：带噪声的计数值（已做 `max(0, ...)` 截断）。
 
@@ -48,12 +52,14 @@ count(
 
 ```python
 sum(
-    values: List[float],
+    values: Any,
     epsilon: float,
     delta: float = 0.0,
     mechanism: str = "laplace",
     clip_lower: Optional[float] = None,
     clip_upper: Optional[float] = None,
+    column: Optional[str] = None,
+    party: Optional[str] = None,
 ) -> float
 ```
 
@@ -61,12 +67,14 @@ sum(
 
 | 参数 | 类型 | 必填 | 说明 |
 |---|---|---|---|
-| `values` | `List[float]` | 是 | 输入值列表 |
+| `values` | `Any` | 是 | 输入值，支持多种数据格式 |
 | `epsilon` | `float` | 是 | 隐私预算 ε |
 | `delta` | `float` | 否 | 隐私预算 δ；Gaussian 机制必须 > 0 |
 | `mechanism` | `str` | 否 | `"laplace"` 或 `"gaussian"` |
 | `clip_lower` | `Optional[float]` | 否 | 截断下界；Gaussian 必须提供 |
 | `clip_upper` | `Optional[float]` | 否 | 截断上界；Gaussian 必须提供 |
+| `column` | `Optional[str]` | 否 | 表格型输入的目标列名 |
+| `party` | `Optional[str]` | 否 | SecretFlow HDataFrame 的参与方标识 |
 
 **返回值**：带噪声的求和结果。
 
@@ -78,13 +86,15 @@ sum(
 
 ```python
 mean(
-    values: List[float],
+    values: Any,
     epsilon: float,
     delta: float = 0.0,
     mechanism: str = "laplace",
     clip_lower: Optional[float] = None,
     clip_upper: Optional[float] = None,
     min_count: float = 5.0,
+    column: Optional[str] = None,
+    party: Optional[str] = None,
 ) -> float
 ```
 
@@ -92,13 +102,15 @@ mean(
 
 | 参数 | 类型 | 必填 | 说明 |
 |---|---|---|---|
-| `values` | `List[float]` | 是 | 输入值列表 |
+| `values` | `Any` | 是 | 输入值，支持多种数据格式 |
 | `epsilon` | `float` | 是 | 隐私预算 ε |
 | `delta` | `float` | 否 | 隐私预算 δ；Gaussian 机制必须 > 0 |
 | `mechanism` | `str` | 否 | `"laplace"` 或 `"gaussian"` |
 | `clip_lower` | `Optional[float]` | 否 | 截断下界；Gaussian 必须提供 |
 | `clip_upper` | `Optional[float]` | 否 | 截断上界；Gaussian 必须提供 |
 | `min_count` | `float` | 否 | 低频计数阈值，当估计的计数小于此值时返回 0.0 避免结果发散，默认 `5.0` |
+| `column` | `Optional[str]` | 否 | 表格型输入的目标列名 |
+| `party` | `Optional[str]` | 否 | SecretFlow HDataFrame 的参与方标识 |
 
 **返回值**：带噪声的均值。
 
@@ -112,11 +124,13 @@ mean(
 
 ```python
 histogram(
-    values: List[Any],
+    values: Any,
     categories: Sequence[Any],
     epsilon: float,
     delta: float = 0.0,
     mechanism: str = "laplace",
+    column: Optional[str] = None,
+    party: Optional[str] = None,
 ) -> Dict[Any, float]
 ```
 
@@ -124,11 +138,13 @@ histogram(
 
 | 参数 | 类型 | 必填 | 说明 |
 |---|---|---|---|
-| `values` | `List[Any]` | 是 | 原始类别特征值列表 |
+| `values` | `Any` | 是 | 原始类别特征值，支持多种数据格式 |
 | `categories` | `Sequence[Any]` | 是 | 分桶的目标类别集合 |
 | `epsilon` | `float` | 是 | 隐私预算 ε |
 | `delta` | `float` | 否 | 隐私预算 δ；Gaussian 机制必须 > 0 |
 | `mechanism` | `str` | 否 | `"laplace"` 或 `"gaussian"` |
+| `column` | `Optional[str]` | 否 | 表格型输入的目标列名 |
+| `party` | `Optional[str]` | 否 | SecretFlow HDataFrame 的参与方标识 |
 
 **返回值**：类别名称到带噪计数的字典（已做 `max(0, ...)` 截断）。
 
@@ -136,6 +152,230 @@ histogram(
 
 ---
 
+#### `noisy_count`
+
+```python
+noisy_count(
+    true_count: float,
+    epsilon: float,
+    delta: float = 0.0,
+    mechanism: str = "laplace",
+) -> float
+```
+
+对已经聚合好的计数结果直接注入 DP 噪声。
+
+| 参数 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `true_count` | `float` | 是 | 真实计数值 |
+| `epsilon` | `float` | 是 | 隐私预算 ε |
+| `delta` | `float` | 否 | 隐私预算 δ；Gaussian 机制必须 > 0 |
+| `mechanism` | `str` | 否 | `"laplace"` 或 `"gaussian"` |
+
+**返回值**：带噪声的计数值（已做 `max(0, ...)` 截断）。
+
+**敏感度**：1。
+
+---
+
+#### `noisy_sum`
+
+```python
+noisy_sum(
+    true_sum: float,
+    sensitivity: float,
+    epsilon: float,
+    delta: float = 0.0,
+    mechanism: str = "laplace",
+) -> float
+```
+
+对已经聚合好的求和结果直接注入 DP 噪声。调用方必须提供敏感度。
+
+| 参数 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `true_sum` | `float` | 是 | 真实求和值 |
+| `sensitivity` | `float` | 是 | L1/L2 敏感度（通常为 clip_upper - clip_lower） |
+| `epsilon` | `float` | 是 | 隐私预算 ε |
+| `delta` | `float` | 否 | 隐私预算 δ；Gaussian 机制必须 > 0 |
+| `mechanism` | `str` | 否 | `"laplace"` 或 `"gaussian"` |
+
+**返回值**：带噪声的求和结果。
+
+---
+
+#### `noisy_mean`
+
+```python
+noisy_mean(
+    true_sum: float,
+    true_count: float,
+    sensitivity: float,
+    epsilon: float,
+    delta: float = 0.0,
+    mechanism: str = "laplace",
+    min_count: float = 5.0,
+) -> float
+```
+
+对已经聚合好的 sum/count 分别注入 DP 噪声后得到均值。
+
+| 参数 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `true_sum` | `float` | 是 | 真实求和值 |
+| `true_count` | `float` | 是 | 真实计数值 |
+| `sensitivity` | `float` | 是 | sum 部分的敏感度 |
+| `epsilon` | `float` | 是 | 隐私预算 ε |
+| `delta` | `float` | 否 | 隐私预算 δ |
+| `mechanism` | `str` | 否 | `"laplace"` 或 `"gaussian"` |
+| `min_count` | `float` | 否 | 低频计数阈值，默认 `5.0` |
+
+**返回值**：带噪声的均值；当 `noisy_count < min_count` 时返回 `0.0`。
+
+---
+
+#### `noisy_histogram`
+
+```python
+noisy_histogram(
+    true_counts: Dict[Any, float],
+    epsilon: float,
+    delta: float = 0.0,
+    mechanism: str = "laplace",
+) -> Dict[Any, float]
+```
+
+对已经聚合好的直方图计数直接注入 DP 噪声。
+
+| 参数 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `true_counts` | `Dict[Any, float]` | 是 | 分桶名到真实计数的字典 |
+| `epsilon` | `float` | 是 | 隐私预算 ε |
+| `delta` | `float` | 否 | 隐私预算 δ |
+| `mechanism` | `str` | 否 | `"laplace"` 或 `"gaussian"` |
+
+**返回值**：分桶名到带噪计数的字典。
+
+---
+
+#### `chunked_count`
+
+```python
+chunked_count(
+    chunks: Iterable[Any],
+    epsilon: float,
+    delta: float = 0.0,
+    mechanism: str = "laplace",
+    column: Optional[str] = None,
+    party: Optional[str] = None,
+) -> float
+```
+
+分块流式差分隐私计数。
+
+| 参数 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `chunks` | `Iterable[Any]` | 是 | 数据块可迭代对象 |
+| `epsilon` | `float` | 是 | 隐私预算 ε |
+| `delta` | `float` | 否 | 隐私预算 δ |
+| `mechanism` | `str` | 否 | `"laplace"` 或 `"gaussian"` |
+| `column` | `Optional[str]` | 否 | 表格型 chunk 的目标列名 |
+| `party` | `Optional[str]` | 否 | SecretFlow HDataFrame 参与方标识 |
+
+---
+
+#### `chunked_sum`
+
+```python
+chunked_sum(
+    chunks: Iterable[Any],
+    epsilon: float,
+    delta: float = 0.0,
+    mechanism: str = "laplace",
+    clip_lower: float,
+    clip_upper: float,
+    column: Optional[str] = None,
+    party: Optional[str] = None,
+) -> float
+```
+
+分块流式差分隐私求和。**必须显式提供** `clip_lower` / `clip_upper`。
+
+---
+
+#### `chunked_mean`
+
+```python
+chunked_mean(
+    chunks: Iterable[Any],
+    epsilon: float,
+    delta: float = 0.0,
+    mechanism: str = "laplace",
+    clip_lower: float,
+    clip_upper: float,
+    min_count: float = 5.0,
+    column: Optional[str] = None,
+    party: Optional[str] = None,
+) -> float
+```
+
+分块流式差分隐私均值。**必须显式提供** `clip_lower` / `clip_upper`。
+
+---
+
+#### `chunked_histogram`
+
+```python
+chunked_histogram(
+    chunks: Iterable[Any],
+    categories: Sequence[Any],
+    epsilon: float,
+    delta: float = 0.0,
+    mechanism: str = "laplace",
+    column: Optional[str] = None,
+    party: Optional[str] = None,
+) -> Dict[Any, float]
+```
+
+分块流式差分隐私直方图计数。
+
+---
+
+### `extract_values`（数据适配器）
+
+位置：`privacy_local_agent.privacy.data_adapters.extract_values`
+
+```python
+extract_values(
+    data: Any,
+    column: Optional[str] = None,
+    party: Optional[str] = None,
+) -> List[float]
+```
+
+将多种数据格式统一转换为 Python 列表，供 DP 模块消费。
+
+| 参数 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `data` | `Any` | 是 | 输入数据 |
+| `column` | `Optional[str]` | 否 | 表格型输入的目标列名 |
+| `party` | `Optional[str]` | 否 | SecretFlow HDataFrame 参与方标识 |
+
+**支持格式**：
+
+| 类型 | 所需参数 |
+|---|---|
+| `list` / `tuple` | 无 |
+| `np.ndarray` | 无 |
+| `pd.Series` | 无 |
+| `pd.DataFrame` | `column` |
+| `sf.data.DataFrame` | `column` |
+| `HDataFrame` | `column`，多 partition 时需提供 `party` |
+| `VDataFrame` | `column`（自动定位 partition） |
+| `MixDataFrame` | 不支持直接提取 |
+| `FedNdarray` | 按 H/V 方式处理 |
+
+---
 
 ### `LocalDPApi`
 
@@ -381,6 +621,162 @@ BudgetAccountant(
 }
 ```
 
+### POST `/v1/privacy/dp/noisy_count`
+
+对已由外部引擎聚合好的计数结果加噪。
+
+请求体：
+```json
+{
+  "true_count": 1000.0,
+  "params": {
+    "epsilon": 1.0,
+    "mechanism": "laplace"
+  }
+}
+```
+
+响应体：
+```json
+{
+  "result": 1001.5
+}
+```
+
+### POST `/v1/privacy/dp/noisy_sum`
+
+对已由外部引擎聚合好的求和结果加噪。`params` 中需提供 `sensitivity`，或同时提供 `clip_lower` 与 `clip_upper`。
+
+请求体：
+```json
+{
+  "true_sum": 5000000.0,
+  "params": {
+    "epsilon": 1.0,
+    "delta": 1e-6,
+    "mechanism": "gaussian",
+    "sensitivity": 100000.0
+  }
+}
+```
+
+### POST `/v1/privacy/dp/noisy_mean`
+
+对已由外部引擎聚合好的 sum/count 加噪后得到均值。
+
+请求体：
+```json
+{
+  "true_sum": 5000000.0,
+  "true_count": 1000.0,
+  "params": {
+    "epsilon": 2.0,
+    "delta": 1e-6,
+    "mechanism": "gaussian",
+    "sensitivity": 100000.0,
+    "min_count": 5.0
+  }
+}
+```
+
+### POST `/v1/privacy/dp/noisy_histogram`
+
+对已由外部引擎聚合好的直方图计数加噪。
+
+请求体：
+```json
+{
+  "true_counts": {
+    "A": 100.0,
+    "B": 80.0,
+    "C": 50.0
+  },
+  "params": {
+    "epsilon": 1.0,
+    "mechanism": "laplace"
+  }
+}
+```
+
+### POST `/v1/privacy/dp/chunked_count`
+
+分块流式差分隐私计数。
+
+请求体：
+```json
+{
+  "chunks": [
+    [1, 0, 1],
+    [1, 0, 1, 1]
+  ],
+  "params": {
+    "epsilon": 1.0,
+    "mechanism": "laplace"
+  }
+}
+```
+
+### POST `/v1/privacy/dp/chunked_sum`
+
+分块流式差分隐私求和。`params` 中必须提供 `clip_lower` / `clip_upper`。
+
+请求体：
+```json
+{
+  "chunks": [
+    [1.0, 2.0, 3.0],
+    [4.0, 5.0, 6.0]
+  ],
+  "params": {
+    "epsilon": 1.0,
+    "delta": 1e-6,
+    "mechanism": "gaussian",
+    "clip_lower": 0.0,
+    "clip_upper": 10.0
+  }
+}
+```
+
+### POST `/v1/privacy/dp/chunked_mean`
+
+分块流式差分隐私均值。
+
+请求体：
+```json
+{
+  "chunks": [
+    [1.0, 2.0, 3.0],
+    [4.0, 5.0, 6.0]
+  ],
+  "params": {
+    "epsilon": 2.0,
+    "delta": 1e-6,
+    "mechanism": "gaussian",
+    "clip_lower": 0.0,
+    "clip_upper": 10.0,
+    "min_count": 2.0
+  }
+}
+```
+
+### POST `/v1/privacy/dp/chunked_histogram`
+
+分块流式差分隐私直方图计数。
+
+请求体：
+```json
+{
+  "chunks": [
+    ["A", "B", "A"],
+    ["C", "A", "B"]
+  ],
+  "categories": ["A", "B", "C", "D"],
+  "params": {
+    "epsilon": 10.0,
+    "mechanism": "laplace"
+  }
+}
+```
 
 ### POST `/v1/privacy/ldp/perturb/binary`
 
@@ -477,6 +873,14 @@ BudgetAccountant(
 | `DPSum` | `DPRequest` | `DPResponse` | 差分隐私求和 |
 | `DPMean` | `DPRequest` | `DPResponse` | 差分隐私均值 |
 | `DPHistogram` | `DPHistogramRequest` | `DPHistogramResponse` | 差分隐私直方图 |
+| `DPNoisyCount` | `DPNoisyCountRequest` | `DPResponse` | 对已聚合计数加噪 |
+| `DPNoisySum` | `DPNoisySumRequest` | `DPResponse` | 对已聚合求和加噪 |
+| `DPNoisyMean` | `DPNoisyMeanRequest` | `DPResponse` | 对已聚合 sum/count 加噪得均值 |
+| `DPNoisyHistogram` | `DPNoisyHistogramRequest` | `DPHistogramResponse` | 对已聚合直方图加噪 |
+| `DPChunkedCount` | `DPChunkedCountRequest` | `DPResponse` | 分块流式计数 |
+| `DPChunkedSum` | `DPChunkedSumRequest` | `DPResponse` | 分块流式求和 |
+| `DPChunkedMean` | `DPChunkedMeanRequest` | `DPResponse` | 分块流式均值 |
+| `DPChunkedHistogram` | `DPChunkedHistogramRequest` | `DPHistogramResponse` | 分块流式直方图 |
 | `PerturbBinaryBatch` | `PerturbBinaryBatchRequest` | `PerturbBinaryBatchResponse` | 二值本地 DP 扰动 |
 | `PerturbCategoricalBatch` | `PerturbCategoricalBatchRequest` | `PerturbCategoricalBatchResponse` | 类别型本地 DP 扰动 |
 | `EstimateBinaryFrequency` | `EstimateBinaryFrequencyRequest` | `EstimateBinaryFrequencyResponse` | 二值扰动样本频率估计 |
@@ -511,6 +915,72 @@ BudgetAccountant(
 |---|---|---|
 | `result` | `map<string, double>` | 直方图分类计数结果 |
 
+### Noisify 相关 Message 字段
+
+#### `DPNoisyCountRequest`
+*   `true_count` (`double`): 真实计数值。
+*   `epsilon` (`double`): 隐私预算 ε。
+*   `mechanism` (`string`): `"laplace"` 或 `"gaussian"`。
+*   `delta` (`double`): 隐私预算 δ。
+
+#### `DPNoisySumRequest`
+*   `true_sum` (`double`): 真实求和值。
+*   `epsilon` (`double`): 隐私预算 ε。
+*   `mechanism` (`string`): `"laplace"` 或 `"gaussian"`。
+*   `delta` (`double`): 隐私预算 δ。
+*   `sensitivity` (`double`): 敏感度；若为 0 则尝试通过 `clip_lower`/`clip_upper` 推导。
+*   `clip_lower` (`double`): 截断下界。
+*   `clip_upper` (`double`): 截断上界。
+
+#### `DPNoisyMeanRequest`
+*   `true_sum` (`double`): 真实求和值。
+*   `true_count` (`double`): 真实计数值。
+*   `epsilon` (`double`): 隐私预算 ε。
+*   `mechanism` (`string`): `"laplace"` 或 `"gaussian"`。
+*   `delta` (`double`): 隐私预算 δ。
+*   `sensitivity` (`double`): sum 部分敏感度。
+*   `clip_lower` (`double`): 截断下界。
+*   `clip_upper` (`double`): 截断上界。
+*   `min_count` (`double`): 低频计数阈值。
+
+#### `DPNoisyHistogramRequest`
+*   `true_counts` (`map<string, double>`): 分桶名到真实计数的映射。
+*   `epsilon` (`double`): 隐私预算 ε。
+*   `mechanism` (`string`): `"laplace"` 或 `"gaussian"`。
+*   `delta` (`double`): 隐私预算 δ。
+
+### Chunked 相关 Message 字段
+
+#### `DoubleChunk`
+*   `values` (`repeated double`): 数值型数据块。
+
+#### `StringChunk`
+*   `values` (`repeated string`): 类别型数据块。
+
+#### `DPChunkedCountRequest`
+*   `chunks` (`repeated DoubleChunk`): 数值型数据块列表。
+*   `epsilon` (`double`): 隐私预算 ε。
+*   `mechanism` (`string`): `"laplace"` 或 `"gaussian"`。
+*   `delta` (`double`): 隐私预算 δ。
+
+#### `DPChunkedSumRequest`
+*   `chunks` (`repeated DoubleChunk`): 数值型数据块列表。
+*   `epsilon` (`double`): 隐私预算 ε。
+*   `mechanism` (`string`): `"laplace"` 或 `"gaussian"`。
+*   `delta` (`double`): 隐私预算 δ。
+*   `clip_lower` (`double`): 截断下界。
+*   `clip_upper` (`double`): 截断上界。
+
+#### `DPChunkedMeanRequest`
+*   字段同 `DPChunkedSumRequest`，额外包含：
+*   `min_count` (`double`): 低频计数阈值。
+
+#### `DPChunkedHistogramRequest`
+*   `chunks` (`repeated StringChunk`): 类别型数据块列表。
+*   `categories` (`repeated string`): 目标类别集合。
+*   `epsilon` (`double`): 隐私预算 ε。
+*   `mechanism` (`string`): `"laplace"` 或 `"gaussian"`。
+*   `delta` (`double`): 隐私预算 δ。
 
 ### LDP 相关 Message 字段
 
@@ -552,6 +1022,11 @@ BudgetAccountant(
 | 异常/错误 | 触发条件 | HTTP 状态码 | gRPC 状态码 |
 |---|---|---|---|
 | `ValueError: clip_lower and clip_upper are required for Gaussian mechanism` | Gaussian sum/mean 缺少 clip | 400 | `INVALID_ARGUMENT` |
+| `ValueError: chunked_sum requires explicit clip_lower and clip_upper` | chunked sum/mean 缺少 clip | 400 | `INVALID_ARGUMENT` |
+| `ValueError: dp_noisy_sum requires 'sensitivity' or both 'clip_lower' and 'clip_upper'` | noisify sum/mean 缺少敏感度 | 400 | `INVALID_ARGUMENT` |
 | `ValueError: delta must be positive for Gaussian mechanism` | Gaussian 请求 delta ≤ 0 | 400 | `INVALID_ARGUMENT` |
+| `ValueError: sensitivity must be non-negative` | noisify sum/mean 敏感度为负 | 400 | `INVALID_ARGUMENT` |
+| `ValueError: column must be specified when input is a pandas DataFrame` | DataFrame 未指定 `column` | 400 | `INVALID_ARGUMENT` |
+| `TypeError: Unsupported data type for DP values` | 不支持的 `values` 输入类型 | 400 | `INVALID_ARGUMENT` |
 | `PrivacyBudgetExhausted` | 累计预算超过命名空间上限 | 429 | `RESOURCE_EXHAUSTED` |
 | `ValueError: mechanism must be 'laplace' or 'gaussian'` | mechanism 参数非法 | 400 | `INVALID_ARGUMENT` |

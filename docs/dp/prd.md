@@ -38,6 +38,14 @@
 | DP-BUDGET-3 | 预算一旦消耗即不可回退。 |
 | DP-BUDGET-4 | 支持按时间窗口自动重置已消耗预算，避免长期运行服务预算永久耗尽。 |
 | DP-DATASET-1 | DP 接口以**聚合查询**为单位，不直接对整个数据表（如 CSV）做中心式 DP 加噪；调用方需按列提取字段值作为 `values`，并显式指定查询类型（count/sum/mean）与 clip 参数。 |
+| DP-NOISY-1 | 提供 `noisy_count/noisy_sum/noisy_mean/noisy_histogram`，对已由外部引擎（Spark/SQL/DuckDB）聚合好的中间结果直接加噪并扣减预算。 |
+| DP-NOISY-2 | noisify 接口必须由调用方提供敏感度（`sensitivity`）或 clip 边界，因 sidecar 不再接触原始数据。 |
+| DP-CHUNK-1 | 提供 `chunked_count/chunked_sum/chunked_mean/chunked_histogram`，支持以多个 chunk 分批传入数据，sidecar 增量聚合后只加一次噪、消耗一次预算。 |
+| DP-CHUNK-2 | chunked sum/mean 必须显式提供 `clip_lower`/`clip_upper`。 |
+| DP-ADAPTER-1 | DP `values` 支持 Python list/tuple、NumPy ndarray、pandas Series/DataFrame、SecretFlow DataFrame / HDataFrame / VDataFrame / FedNdarray。 |
+| DP-ADAPTER-2 | 表格型输入通过 `column` 参数指定目标列；HDataFrame 通过 `party` 参数指定参与方；VDataFrame 自动定位包含目标列的 partition。 |
+| DP-CLIP-3 | clipping 优先使用 NumPy 向量化 `np.clip`，失败时回退到纯 Python，以提升大规模数据处理效率。 |
+| DP-METRIC-1 | 暴露 `privacy_traffic_bytes_total` Counter，按 `method`、`path`、`direction` 记录 REST/gRPC 请求与响应字节数。 |
 
 ## 4. 接口定义
 
@@ -80,9 +88,56 @@ resp = requests.post(
 )
 ```
 
-### 4.2 gRPC 字段
+### 4.2 Noisify 接口示例
+
+适用于外部计算引擎已完成聚合，仅需 sidecar 注入噪声并消耗预算的场景。
+
+```json
+{
+  "true_sum": 5000000.0,
+  "params": {
+    "epsilon": 1.0,
+    "delta": 1e-6,
+    "mechanism": "gaussian",
+    "sensitivity": 100000.0
+  }
+}
+```
+
+`params` 中需提供 `sensitivity`，或同时提供 `clip_lower` 与 `clip_upper`（系统会计算 `sensitivity = clip_upper - clip_lower`）。
+
+### 4.3 Chunked 接口示例
+
+适用于数据量过大无法一次性加载内存的场景。调用方将数据切分为多个 chunk，sidecar 增量聚合后只注入一次噪声。
+
+```json
+{
+  "chunks": [
+    [1.0, 2.0, 3.0],
+    [4.0, 5.0, 6.0]
+  ],
+  "params": {
+    "epsilon": 1.0,
+    "delta": 1e-6,
+    "mechanism": "gaussian",
+    "clip_lower": 0.0,
+    "clip_upper": 10.0
+  }
+}
+```
+
+### 4.4 gRPC 字段
 
 `DPRequest` 包含 `epsilon`、`delta`、`mechanism`、`clip_lower`、`clip_upper`。
+
+新增消息：
+- `DPNoisyCountRequest` / `DPNoisySumRequest` / `DPNoisyMeanRequest` / `DPNoisyHistogramRequest`
+- `DPChunkedCountRequest` / `DPChunkedSumRequest` / `DPChunkedMeanRequest` / `DPChunkedHistogramRequest`
+- `DoubleChunk` / `StringChunk`
+
+对应 gRPC 方法：
+- `DPNoisyCount` / `DPNoisySum` / `DPNoisyMean` / `DPNoisyHistogram`
+- `DPChunkedCount` / `DPChunkedSum` / `DPChunkedMean` / `DPChunkedHistogram`
 
 ## 5. 隐私预算设定指南
 
@@ -108,9 +163,13 @@ resp = requests.post(
 
 ## 6. 验收标准
 
-- [ ] count/sum/mean 的 Laplace 与 Gaussian 机制单元测试通过。
-- [ ] 本地 DP 二值/类别型随机响应与频率估计测试通过。
-- [ ] clipping 参数校验与敏感度计算测试通过。
-- [ ] delta 预算正确消耗与超支拒绝测试通过。
-- [ ] REST/gRPC 接口支持新参数（含 histogram 与本地 DP）。
-- [ ] 文档（PRD/design/ops/examples/testing/api_reference）与 `AGENTS.md` 已更新。
+- [x] count/sum/mean 的 Laplace 与 Gaussian 机制单元测试通过。
+- [x] noisify 接口（count/sum/mean/histogram）单元测试与 REST/gRPC 接口测试通过。
+- [x] chunked 接口（count/sum/mean/histogram）单元测试与 REST/gRPC 接口测试通过。
+- [x] 数据适配器支持 list/tuple/NumPy/pandas/SecretFlow 的测试通过。
+- [x] 本地 DP 二值/类别型随机响应与频率估计测试通过。
+- [x] clipping 参数校验与敏感度计算测试通过；NumPy 向量化 clip 已覆盖。
+- [x] delta 预算正确消耗与超支拒绝测试通过。
+- [x] REST/gRPC 接口支持新参数（含 histogram、本地 DP、noisy、chunked）。
+- [x] `privacy_traffic_bytes_total` 指标在 REST 中间件与 gRPC 拦截器中已接入并通过测试。
+- [x] 文档（PRD/design/ops/examples/testing/api_reference）与 `AGENTS.md` 已更新。

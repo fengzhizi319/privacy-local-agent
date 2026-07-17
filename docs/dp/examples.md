@@ -100,7 +100,84 @@ result = dp.sum(
 print(f"Gaussian 带噪声总收入: {result}")
 ```
 
-### 2.5 预算管理示例
+### 2.5 DataFrame 与 SecretFlow 输入示例
+
+```python
+from privacy_local_agent.privacy.dp import DPApi
+import pandas as pd
+
+api = DPApi(namespace="hr_dataset")
+
+# pandas DataFrame
+df = pd.DataFrame({
+    "salary": [5000.0, 8000.0, 12000.0],
+    "age": [25.0, 34.0, 45.0],
+})
+result = api.sum(df, column="salary", epsilon=1.0, clip_lower=0.0, clip_upper=100000.0)
+print(f"带噪声总工资: {result}")
+```
+
+SecretFlow 联邦数据（需安装 `secretflow`）：
+
+```python
+from privacy_local_agent.privacy.dp import DPApi
+
+api = DPApi(namespace="hr_dataset")
+
+# VDataFrame：列分布在不同参与方，自动定位 salary 所在 partition
+result = api.sum(vdf, column="salary", epsilon=1.0, clip_lower=0.0, clip_upper=100000.0)
+
+# HDataFrame：样本水平分割，需指定参与方
+result = api.sum(hdf, column="salary", party="alice", epsilon=1.0, clip_lower=0.0, clip_upper=100000.0)
+```
+
+### 2.6 Noisify 接口示例（Spark/SQL/DuckDB 工作流）
+
+```python
+from privacy_local_agent.privacy.dp import DPApi
+
+api = DPApi(namespace="monthly_report")
+
+# 假设外部 SQL 引擎已计算出真实总和
+true_sum = 5_000_000.0
+sensitivity = 100_000.0  # 对应 clip_upper - clip_lower
+
+result = api.noisy_sum(
+    true_sum=true_sum,
+    sensitivity=sensitivity,
+    epsilon=1.0,
+    delta=1e-6,
+    mechanism="gaussian",
+)
+print(f"带噪声总收入: {result}")
+```
+
+### 2.7 Chunked 流式聚合示例
+
+```python
+from privacy_local_agent.privacy.dp import DPApi
+
+api = DPApi(namespace="streaming_data")
+
+# 模拟从文件/流中分批读取的数据
+chunks = [
+    [1.0, 2.0, 3.0],
+    [4.0, 5.0, 6.0],
+    [7.0, 8.0, 9.0],
+]
+
+result = api.chunked_sum(
+    chunks=chunks,
+    epsilon=1.0,
+    delta=1e-6,
+    mechanism="gaussian",
+    clip_lower=0.0,
+    clip_upper=10.0,
+)
+print(f"分块带噪声求和: {result}")
+```
+
+### 2.8 预算管理示例
 
 ```python
 from privacy_local_agent.privacy.budget import BudgetAccountant
@@ -181,7 +258,45 @@ curl -X POST http://127.0.0.1:8079/v1/privacy/dp/histogram \
   }'
 ```
 
-### 3.5 Local DP via REST
+### 3.5 Noisify via REST
+
+```bash
+# 对已聚合求和加噪
+curl -X POST http://127.0.0.1:8079/v1/privacy/dp/noisy_sum \
+  -H "Content-Type: application/json" \
+  -d '{
+    "true_sum": 5000000.0,
+    "params": {
+      "epsilon": 1.0,
+      "delta": 1e-6,
+      "mechanism": "gaussian",
+      "sensitivity": 100000.0
+    }
+  }'
+```
+
+### 3.6 Chunked via REST
+
+```bash
+# 分块流式差分隐私求和
+curl -X POST http://127.0.0.1:8079/v1/privacy/dp/chunked_sum \
+  -H "Content-Type: application/json" \
+  -d '{
+    "chunks": [
+      [1.0, 2.0, 3.0],
+      [4.0, 5.0, 6.0]
+    ],
+    "params": {
+      "epsilon": 1.0,
+      "delta": 1e-6,
+      "mechanism": "gaussian",
+      "clip_lower": 0.0,
+      "clip_upper": 10.0
+    }
+  }'
+```
+
+### 3.7 Local DP via REST
 
 ```bash
 # 二值扰动
@@ -260,15 +375,21 @@ PYTHONPATH=. python docs/dp/examples/local_dp_usage.py
 3. **优先使用 Laplace 进行纯 ε-DP**：若业务不能接受 δ，选择 Laplace。
 4. **Gaussian 适合大量组合查询**：在需要高级组合定理时，Gaussian 机制更紧致。
 5. **本地 DP 适合大样本频率估计**：样本量较小时统计误差较大，不适合需要精确聚合的场景。
-6. **为长期运行服务配置预算时间窗口**：通过 `PRIVACY_BUDGET_WINDOW_SECONDS` 避免预算永久耗尽。
-7. **记录每次查询的预算消耗**：便于审计与后续预算调整。
+6. **海量数据优先使用 noisify 接口**：在 Spark/SQL/DuckDB 中完成聚合后，仅将中间结果发送到 sidecar 加噪。
+7. **分块输入使用 chunked 接口**：当数据无法一次性加载内存时，使用 chunked 聚合降低峰值内存。
+8. **为长期运行服务配置预算时间窗口**：通过 `PRIVACY_BUDGET_WINDOW_SECONDS` 避免预算永久耗尽。
+9. **记录每次查询的预算消耗**：便于审计与后续预算调整。
+10. **监控 `privacy_traffic_bytes_total`**：观察 REST/gRPC 流量，辅助容量规划。
 
 ## 6. 常见错误
 
 | 错误 | 原因 | 解决 |
-|---|---|---|
+|---|---|---|---|
 | `ValueError: clip_lower and clip_upper are required for Gaussian mechanism` | Gaussian sum/mean 未提供 clip | 提供 `clip_lower` 与 `clip_upper` |
+| `ValueError: chunked_sum requires explicit clip_lower and clip_upper` | chunked sum/mean 未提供 clip | 提供 `clip_lower` 与 `clip_upper` |
+| `ValueError: dp_noisy_sum requires 'sensitivity' or both 'clip_lower' and 'clip_upper'` | noisify sum/mean 未提供敏感度 | 提供 `sensitivity` 或 `clip_lower`/`clip_upper` |
 | `ValueError: delta must be positive for Gaussian mechanism` | Gaussian 请求中 `delta=0` | 设置 `delta > 0`，典型值 `1e-6` |
 | `PrivacyBudgetExhausted` | 命名空间预算已用完 | 提高总预算或减少查询次数 |
 | 结果出现负数 | 计数被噪声拉低 | count 已做 `max(0, ...)` 截断；其他场景可后处理 |
 | mean 返回 0.0 | 噪声计数低于 `min_count` | 降低 `min_count` 或增加样本量；注意过低会导致结果不稳定 |
+| `column must be specified when input is a pandas DataFrame` | DataFrame 未指定目标列 | 在 `params` 中传入 `column` |
