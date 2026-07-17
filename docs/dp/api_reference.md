@@ -1030,3 +1030,627 @@ BudgetAccountant(
 | `TypeError: Unsupported data type for DP values` | 不支持的 `values` 输入类型 | 400 | `INVALID_ARGUMENT` |
 | `PrivacyBudgetExhausted` | 累计预算超过命名空间上限 | 429 | `RESOURCE_EXHAUSTED` |
 | `ValueError: mechanism must be 'laplace' or 'gaussian'` | mechanism 参数非法 | 400 | `INVALID_ARGUMENT` |
+
+---
+
+## 5. 使用场景与参数建议
+
+### 5.1 典型应用场景
+
+#### 场景 1：医疗健康数据分析
+
+**背景**：医院需要对患者数据进行统计分析，同时保护患者隐私。
+
+**推荐配置**：
+- **总预算**：`epsilon_total = 1.0~2.0`, `delta_total = 1e-6`
+- **查询类型**：count（患者人数）、sum（医疗费用）、mean（平均年龄）
+- **机制选择**：Gaussian（适合多查询组合）
+- **Clip 区间**：根据业务先验设置
+  - 年龄：`clip_lower=0, clip_upper=120`
+  - 医疗费用：`clip_lower=0, clip_upper=100000`
+
+**示例**：
+```python
+from privacy_local_agent.privacy.dp import DPApi
+
+dp = DPApi(namespace="hospital_patients_2024")
+
+# 查询1：高血压患者人数
+count_result = dp.count(
+    values=[1 if age > 60 else 0 for age in ages],
+    epsilon=0.3,
+    delta=1e-7,
+    mechanism="gaussian"
+)
+
+# 查询2：总医疗费用
+sum_result = dp.sum(
+    values=charges,
+    epsilon=0.4,
+    delta=1e-7,
+    mechanism="gaussian",
+    clip_lower=0.0,
+    clip_upper=100000.0
+)
+
+# 查询3：平均住院天数
+mean_result = dp.mean(
+    values=stay_days,
+    epsilon=0.3,
+    delta=1e-6,
+    mechanism="gaussian",
+    clip_lower=1.0,
+    clip_upper=30.0,
+    min_count=5.0
+)
+```
+
+**注意事项**：
+- 医疗数据高度敏感，总 ε 应控制在较低水平（≤2.0）
+- 每次查询分配合理预算，避免单次消耗过多
+- 使用 Gaussian 机制便于后续高级组合分析
+
+---
+
+#### 场景 2：金融风控统计
+
+**背景**：银行需要发布客户交易统计数据用于风控模型训练。
+
+**推荐配置**：
+- **总预算**：`epsilon_total = 2.0~4.0`, `delta_total = 1e-6`
+- **查询类型**：sum（交易总额）、histogram（交易金额分布）
+- **机制选择**：Gaussian（高维直方图更适合）
+- **Clip 区间**：
+  - 单笔交易：`clip_lower=0, clip_upper=500000`
+  - 月收入：`clip_lower=0, clip_upper=1000000`
+
+**示例**：
+```python
+from privacy_local_agent.privacy.dp import DPApi
+
+dp = DPApi(namespace="bank_transactions_q1")
+
+# 查询1：信用卡消费总额
+sum_result = dp.sum(
+    values=credit_card_charges,
+    epsilon=1.0,
+    delta=5e-7,
+    mechanism="gaussian",
+    clip_lower=0.0,
+    clip_upper=500000.0
+)
+
+# 查询2：交易金额分布直方图
+bins = ["0-1k", "1k-5k", "5k-10k", "10k-50k", "50k+"]
+histogram_result = dp.histogram(
+    values=transaction_amounts,
+    categories=bins,
+    epsilon=1.0,
+    delta=5e-7,
+    mechanism="gaussian"
+)
+```
+
+**注意事项**：
+- 金融数据涉及合规要求（如 GDPR、个人信息保护法）
+- 直方图联合敏感度为 1，可一次性发布多个分桶
+- 考虑使用时间窗口重置预算（`PRIVACY_BUDGET_WINDOW_SECONDS=86400`）
+
+---
+
+#### 场景 3：用户行为分析（互联网产品）
+
+**背景**：互联网公司需要分析用户点击、浏览等行为数据。
+
+**推荐配置**：
+- **总预算**：`epsilon_total = 4.0~8.0`, `delta_total = 1e-5`
+- **查询类型**：count（活跃用户数）、histogram（功能使用分布）
+- **机制选择**：Laplace（简单查询优先纯 ε-DP）
+- **Clip 区间**：通常不需要（count/histogram 敏感度天然为 1）
+
+**示例**：
+```python
+from privacy_local_agent.privacy.dp import DPApi
+
+dp = DPApi(namespace="app_daily_active_users")
+
+# 查询1：日活跃用户数
+dau_count = dp.count(
+    values=user_ids,
+    epsilon=1.0,
+    mechanism="laplace"
+)
+
+# 查询2：功能模块使用分布
+features = ["search", "chat", "payment", "settings"]
+feature_usage = dp.histogram(
+    values=user_actions,
+    categories=features,
+    epsilon=2.0,
+    mechanism="laplace"
+)
+```
+
+**注意事项**：
+- 用户行为数据敏感度相对较低，可使用较高 ε
+- Laplace 机制提供纯 ε-DP，审计更简单
+- 如需长期监控，建议按天/周划分 namespace
+
+---
+
+#### 场景 4：联邦学习中的梯度扰动
+
+**背景**：在分布式训练中，对客户端上传的梯度添加噪声以满足差分隐私。
+
+**推荐配置**：
+- **总预算**：`epsilon_total = 5.0~10.0`, `delta_total = 1e-5`
+- **查询类型**：noisy_sum（聚合梯度）
+- **机制选择**：Gaussian（适合迭代算法）
+- **Clip 区间**：梯度裁剪范数上限（如 `clip_upper=1.0`）
+
+**示例**：
+```python
+from privacy_local_agent.privacy.dp import DPApi
+
+dp = DPApi(namespace="federated_training_round_1")
+
+# 假设外部聚合器已计算出梯度总和
+true_gradient_sum = 12.5
+gradient_norm_clip = 1.0
+
+noisy_gradient = dp.noisy_sum(
+    true_sum=true_gradient_sum,
+    sensitivity=gradient_norm_clip,
+    epsilon=0.5,
+    delta=1e-6,
+    mechanism="gaussian"
+)
+```
+
+**注意事项**：
+- 每轮训练消耗独立预算，需预留足够总预算
+- 梯度裁剪是控制敏感度的关键步骤
+- 推荐使用 RDP（Rényi Differential Privacy）进行更紧致的预算追踪（当前未实现）
+
+---
+
+#### 场景 5：本地差分隐私遥测收集
+
+**背景**：浏览器/移动设备在用户端完成数据扰动后上报，服务器无法反推个体值。
+
+**推荐配置**：
+- **本地 ε**：`epsilon = 5.0~10.0`（本地 DP 需要更高 ε 以保证效用）
+- **查询类型**：perturb_binary / perturb_categorical + estimate
+- **机制选择**：随机响应（Randomized Response）
+- **样本量要求**：至少数千条记录才能获得可靠估计
+
+**示例**：
+```python
+from privacy_local_agent.privacy.dp import LocalDPApi
+
+# === 客户端侧（用户设备）===
+local_api = LocalDPApi()
+
+# 用户真实偏好：是否启用某功能
+user_preference = 1  # 或 0
+
+# 本地扰动后上报
+reported_value = local_api.perturb_binary(user_preference, epsilon=8.0)
+
+# === 服务器侧（聚合分析）===
+# 收集所有用户的扰动报告
+reported_values = [1, 0, 1, 1, 0, ...]  # 来自大量用户
+
+# 纠偏估计真实比例
+estimated_ratio = local_api.estimate_binary_frequency(
+    reported_values=reported_values,
+    epsilon=8.0
+)
+print(f"估计启用率: {estimated_ratio:.2%}")
+```
+
+**注意事项**：
+- 本地 DP 噪声远大于中心式 DP，需要大样本（n ≥ 1000）
+- 适用于群体趋势分析，不适用于精确个体查询
+- ε 过低会导致估计方差过大，结果不可用
+
+---
+
+#### 场景 6：大数据流式处理（Spark/Flink）
+
+**背景**：海量数据在分布式引擎中预聚合，sidecar 仅负责注入噪声。
+
+**推荐配置**：
+- **总预算**：根据查询频率动态分配
+- **查询类型**：noisy_count / noisy_sum / noisy_mean
+- **机制选择**：Gaussian（适合批处理）
+- **工作流**：Spark SQL 聚合 → sidecar 加噪 → 发布结果
+
+**示例**：
+```python
+# === Spark 侧（Python/Scala）===
+# df = spark.read.parquet("hdfs://...")
+# aggregated = df.groupBy("department").agg(
+#     count("employee_id").alias("true_count"),
+#     sum("salary").alias("true_sum")
+# )
+# true_count = aggregated.collect()[0]["true_count"]
+# true_sum = aggregated.collect()[0]["true_sum"]
+
+# === Sidecar 侧（Python）===
+from privacy_local_agent.privacy.dp import DPApi
+
+dp = DPApi(namespace="hr_monthly_report")
+
+# 对已聚合结果加噪
+noisy_count = dp.noisy_count(
+    true_count=1500.0,
+    epsilon=0.5,
+    mechanism="laplace"
+)
+
+noisy_sum = dp.noisy_sum(
+    true_sum=75000000.0,
+    sensitivity=100000.0,  # clip_upper - clip_lower
+    epsilon=0.5,
+    delta=1e-6,
+    mechanism="gaussian"
+)
+
+noisy_mean = noisy_sum / max(noisy_count, 1)
+print(f"带噪声平均工资: {noisy_mean:.2f}")
+```
+
+**注意事项**：
+- Noisify 接口不接触原始数据，性能开销极低
+- 调用方必须准确提供敏感度（基于 clip 区间）
+- 适合亿级数据量的生产环境
+
+---
+
+#### 场景 7：内存受限的流式聚合
+
+**背景**：数据量超过单机内存，需要分批读取并增量聚合。
+
+**推荐配置**：
+- **总预算**：单次查询消耗，无需拆分
+- **查询类型**：chunked_count / chunked_sum / chunked_mean
+- **机制选择**：根据敏感度选择 Laplace/Gaussian
+- **Chunk 大小**：根据可用内存调整（如每批 10000 条）
+
+**示例**：
+```python
+from privacy_local_agent.privacy.dp import DPApi
+import pandas as pd
+
+dp = DPApi(namespace="streaming_logs")
+
+def read_chunks(file_path, chunk_size=10000):
+    """生成器：分批读取 CSV 文件"""
+    for chunk in pd.read_csv(file_path, chunksize=chunk_size):
+        yield chunk["response_time"].tolist()
+
+# 流式求和（只消耗一次预算）
+result = dp.chunked_sum(
+    chunks=read_chunks("server_logs.csv"),
+    epsilon=1.0,
+    delta=1e-6,
+    mechanism="gaussian",
+    clip_lower=0.0,
+    clip_upper=5000.0  # 响应时间上限 5 秒
+)
+print(f"带噪声总响应时间: {result:.2f}ms")
+```
+
+**注意事项**：
+- Chunked 接口内部完成增量聚合，最终只注入一次噪声
+- 必须提供全局 clip 区间（所有 chunk 共用）
+- 适合中等规模数据（能放入单台 sidecar 内存分批处理）
+
+---
+
+### 5.2 参数选择指南
+
+#### Epsilon (ε) 选择
+
+| 数据敏感度 | 推荐 ε 范围 | 适用场景 |
+|-----------|------------|---------|
+| 极高敏感 | 0.1 ~ 0.5 | 基因数据、心理健康记录 |
+| 高敏感 | 0.5 ~ 2.0 | 医疗诊断、金融征信 |
+| 中等敏感 | 2.0 ~ 5.0 | 用户行为、位置轨迹 |
+| 低敏感 | 5.0 ~ 10.0 | 公开统计、匿名调查 |
+
+**原则**：
+- ε 越小，隐私保护越强，但噪声越大
+- 总 ε 应在数据集级别严格控制（通过 BudgetAccountant）
+- 单次查询 ε 可根据查询重要性动态分配
+
+---
+
+#### Delta (δ) 选择
+
+| 数据集大小 n | 推荐 δ | 说明 |
+|-------------|--------|------|
+| n < 1,000 | 1e-8 ~ 1e-7 | 小数据集需更严格 |
+| 1,000 ≤ n < 100,000 | 1e-7 ~ 1e-6 | 典型企业级数据 |
+| n ≥ 100,000 | 1e-6 ~ 1e-5 | 大规模用户数据 |
+
+**原则**：
+- δ 应远小于 1/n（理想情况 δ << 1/n²）
+- Gaussian 机制必须提供 δ > 0
+- δ 表示隐私保证失败的概率（可理解为"例外情况"）
+
+---
+
+#### Mechanism 选择
+
+| 特性 | Laplace | Gaussian |
+|-----|---------|----------|
+| 隐私保证 | 纯 ε-DP（δ=0） | (ε, δ)-DP |
+| 噪声尺度 | b = Δf/ε | σ = Δ₂f·√(2ln(1.25/δ))/ε |
+| 适用查询 | 低维、简单聚合 | 高维、多次组合 |
+| 审计复杂度 | 低（直接相加） | 中（需追踪 δ） |
+| 推荐场景 | count、histogram | sum、mean、梯度扰动 |
+
+**决策流程**：
+1. 是否需要纯 ε-DP？→ 是：选 Laplace
+2. 是否涉及高维输出（如直方图多分桶）？→ 是：选 Gaussian
+3. 是否需要高级组合定理优化预算？→ 是：选 Gaussian
+4. 默认选择：简单查询用 Laplace，复杂场景用 Gaussian
+
+---
+
+#### Clip 区间选择
+
+**为什么需要 Clip**：
+- 限制单条记录对查询结果的最大影响（控制敏感度）
+- 避免极端值导致噪声过大
+
+**选择策略**：
+
+1. **基于业务先验**：
+   ```python
+   # 年龄不可能超过 150
+   clip_lower=0, clip_upper=150
+   
+   # 月薪通常在 0~100,000 之间
+   clip_lower=0, clip_upper=100000
+   ```
+
+2. **基于分位数估计**（离线分析）：
+   ```python
+   import numpy as np
+   
+   # 取 99% 分位数作为上界
+   upper_bound = np.percentile(data, 99)
+   clip_lower=min(data), clip_upper=upper_bound
+   ```
+
+3. **基于截断代价评估**：
+   - 计算被截断的数据比例
+   - 权衡隐私保护强度与统计偏差
+   - 若截断比例 > 5%，考虑提高 clip_upper
+
+**注意事项**：
+- Clip 会引入系统性偏差（低估总和/均值）
+- 过宽的 clip 区间导致噪声过大
+- 过窄的 clip 区间丢失极端值信息
+- 必须在查询前确定，不能根据数据动态调整（否则违反 DP）
+
+---
+
+#### Min_count 阈值选择
+
+**作用**：防止噪声计数接近 0 时，均值计算出现数值爆炸（Cauchy 分布长尾）。
+
+**推荐值**：
+- 保守场景：`min_count = 5.0`（默认）
+- 宽松场景：`min_count = 2.0`
+- 高风险场景：`min_count = 10.0`
+
+**触发条件**：
+```python
+if noisy_count < min_count:
+    return 0.0  # 拒绝返回不稳定结果
+```
+
+**权衡**：
+- 阈值过高：频繁返回 0.0，可用性降低
+- 阈值过低：可能返回极端异常值
+- 建议根据最小可接受样本量设定
+
+---
+
+#### Namespace 设计
+
+**原则**：不同数据集/业务域使用独立 namespace，避免预算混用。
+
+**推荐命名规范**：
+```python
+# 按数据集 + 时间粒度划分
+namespace = "hospital_patients_2024_q1"
+namespace = "bank_transactions_monthly_2024_03"
+namespace = "app_daily_active_users_2024_03_15"
+
+# 按业务域划分
+namespace = "hr_salary_analysis"
+namespace = "customer_behavior_tracking"
+namespace = "clinical_trial_group_a"
+```
+
+**预算管理**：
+- 每个 namespace 独立追踪 ε/δ 消耗
+- 可通过 `BudgetAccountant.remaining()` 查询剩余额度
+- 超支时抛出 `PrivacyBudgetExhausted` 异常
+
+---
+
+#### 时间窗口重置
+
+**适用场景**：长期运行的 Sidecar 服务，避免预算永久耗尽。
+
+**配置方式**：
+```bash
+# 每天自动重置预算
+export PRIVACY_BUDGET_WINDOW_SECONDS=86400
+
+# 每周重置
+export PRIVACY_BUDGET_WINDOW_SECONDS=604800
+```
+
+**工作原理**：
+- 每个 namespace 维护独立的窗口起始时间
+- 窗口到期后，`epsilon_spent` 和 `delta_spent` 清零
+- SQLite 持久化模式下，窗口状态跨实例共享
+
+**注意事项**：
+- 窗口长度应根据业务周期设定（日/周/月）
+- 窗口内的超支仍会被拒绝，不会提前重置
+- 首次消费时开始计时，非固定日历周期
+
+---
+
+### 5.3 性能优化建议
+
+#### 批量查询 vs 单次查询
+
+**问题**：多次小查询会快速消耗预算，且噪声累积效应明显。
+
+**优化方案**：
+1. **合并同类查询**：
+   ```python
+   # ❌ 不推荐：多次 count 查询
+   for dept in departments:
+       count = dp.count(dept_employees[dept], epsilon=0.1)
+   
+   # ✅ 推荐：单次 histogram 查询
+   counts = dp.histogram(all_departments, categories=departments, epsilon=1.0)
+   ```
+
+2. **利用联合敏感度**：
+   - Histogram 的联合敏感度为 1（互斥分桶）
+   - 一次性发布多个分桶，仅消耗一次预算
+
+---
+
+#### Noisify 接口性能优势
+
+**对比**：
+| 方式 | 数据传输量 | Sidecar 计算负载 | 适用数据规模 |
+|------|-----------|-----------------|------------|
+| 原始数据传入 | O(n) | O(n) clipping + 噪声 | < 10⁶ 条 |
+| Noisify 中间结果 | O(1) | O(1) 噪声注入 | 任意规模 |
+
+**推荐工作流**：
+```
+Spark/Flink/DuckDB → 聚合查询 → true_sum/true_count → Sidecar noisify → 发布
+```
+
+---
+
+#### Chunked 接口内存优化
+
+**适用条件**：
+- 数据量：10⁶ ~ 10⁸ 条
+- 可用内存：不足以一次性加载全部数据
+- 网络带宽：希望降低单次传输峰值
+
+**Chunk 大小调优**：
+```python
+# 根据可用内存估算
+available_memory_mb = 512
+bytes_per_record = 8  # float64
+chunk_size = (available_memory_mb * 1024 * 1024) // bytes_per_record // 2
+# 结果：约 33M 条/批（留一半余量）
+```
+
+---
+
+### 5.4 安全注意事项
+
+#### 浮点精度攻击（Mironov Attack）
+
+**风险**：连续 Laplace/Gaussian 采样基于 IEEE 754 浮点数，存在理论上的精度泄漏风险。
+
+**缓解措施**：
+- 高安全场景考虑离散机制（如 Geometric 机制）
+- 定期轮换密钥/种子
+- 监控异常查询模式
+
+**当前状态**：本模块使用 Python `random` 和 `numpy.random`，未实现离散机制。
+
+---
+
+#### 预算超支防护
+
+**多层防护**：
+1. **BudgetAccountant 强制检查**：每次查询前验证剩余预算
+2. **SQLite 事务锁**：多实例并发时通过 `BEGIN IMMEDIATE` 保证原子性
+3. **时间窗口重置**：避免长期运行后预算永久耗尽
+
+**监控建议**：
+```python
+accountant = BudgetAccountant(namespace="critical_dataset")
+remaining = accountant.remaining()
+if remaining["epsilon"] < 0.5:
+    logger.warning(f"Low budget remaining: {remaining}")
+```
+
+---
+
+#### 输入数据验证
+
+**潜在风险**：恶意构造的输入可能导致敏感度估计错误。
+
+**防护措施**：
+- Pydantic 模型自动校验参数类型
+- Clip 区间必须由调用方显式提供（Gaussian）
+- DataFrame 输入必须指定 `column` 参数
+- SecretFlow 多 partition 时必须指定 `party`
+
+---
+
+### 5.5 故障排查速查表
+
+| 现象 | 可能原因 | 解决方案 |
+|------|---------|---------|
+| `PrivacyBudgetExhausted` | 累计 ε/δ 超支 | 提高总预算 / 减少查询 / 等待窗口重置 |
+| mean 返回 0.0 | `noisy_count < min_count` | 降低 `min_count` / 增加样本量 / 提高 ε |
+| 结果负数 | count 被噪声拉低 | count 已做 `max(0, ...)` 截断；其他场景需后处理 |
+| Gaussian 报错 delta=0 | 未提供 δ 或 δ≤0 | 设置 `delta > 0`（典型值 1e-6） |
+| Clip bounds required | Gaussian sum/mean 缺少 clip | 提供 `clip_lower` 和 `clip_upper` |
+| column must be specified | DataFrame 未指定列 | 在 `params` 中传入 `column` |
+| 估计方差过大 | 本地 DP 样本量不足 | 增加用户数量（n ≥ 1000）/ 提高 ε |
+| 结果偏差明显 | Clip 区间过窄 | 扩大 `clip_upper` / 重新评估分位数 |
+
+---
+
+### 5.6 与其他隐私技术的对比
+
+| 技术 | 隐私保证强度 | 数据效用 | 适用场景 |
+|------|------------|---------|---------|
+| **差分隐私** | 最强（数学证明） | 中等（有噪声） | 统计发布、模型训练 |
+| **K-匿名** | 中等（启发式） | 较高 | 数据脱敏发布 |
+| **数据脱敏** | 较弱（可逆风险） | 高 | 测试数据生成 |
+| **同态加密** | 强（密码学） | 无损 | 安全多方计算 |
+| **联邦学习** | 依赖组合机制 | 高 | 分布式模型训练 |
+
+**组合建议**：
+- DP + K-匿名：先 K-匿名泛化，再对聚合结果加 DP 噪声
+- DP + 联邦学习：在梯度聚合阶段注入 DP 噪声
+- DP + 脱敏：脱敏用于微观数据，DP 用于宏观统计
+
+---
+
+## 6. 最佳实践总结
+
+1. **明确隐私目标**：根据数据敏感度和合规要求确定总 ε/δ 预算
+2. **合理选择机制**：简单查询用 Laplace，复杂场景用 Gaussian
+3. **严格控制 Clip**：基于业务先验或离线分位数设定 clip 区间
+4. **隔离命名空间**：不同数据集使用独立 namespace 管理预算
+5. **优先 Noisify**：海量数据在外部引擎聚合后加噪
+6. **监控预算消耗**：定期检查 `BudgetAccountant.remaining()`
+7. **配置时间窗口**：长期运行服务设置 `PRIVACY_BUDGET_WINDOW_SECONDS`
+8. **大样本本地 DP**：本地扰动需要 n ≥ 1000 才能获得可靠估计
+9. **审计日志记录**：记录每次查询的 ε/δ 消耗，便于追溯
+10. **持续评估效用**：定期对比带噪结果与真实值的误差，调整参数
