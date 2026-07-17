@@ -10,7 +10,7 @@
 SecretFlow 相关依赖为可选依赖，未安装时不会影响其他格式的支持。
 """
 
-from typing import Any, Iterable, List, Optional
+from typing import Any, Dict, Iterable, List, Optional
 
 
 def _is_secretflow_available() -> bool:
@@ -187,3 +187,110 @@ def extract_chunks(
 ) -> List[List[float]]:
     """对分块输入逐块调用 extract_values，返回 List[List[float]]。"""
     return [extract_values(chunk, column=column, party=party) for chunk in chunks]
+
+
+def _extract_dataframe_partition(data: Any) -> Any:
+    """从 SecretFlow HDataFrame / VDataFrame 中提取单个 pandas DataFrame。
+
+    - HDataFrame 多 partition 时需要指定 party；单 partition 自动选择。
+    - VDataFrame 所有列应在同一个 partition 中（目前只取第一个 partition）。
+    """
+    import secretflow as sf
+    from secretflow.data.horizontal import HDataFrame
+    from secretflow.data.vertical import VDataFrame
+
+    if isinstance(data, HDataFrame):
+        partitions = dict(data.partitions)
+        if len(partitions) == 1:
+            return next(iter(partitions.values())).data
+        raise ValueError(
+            "party must be specified when input HDataFrame has multiple partitions"
+        )
+
+    if isinstance(data, VDataFrame):
+        # VDataFrame 中所有列都在同一个参与方，取第一个 partition
+        return next(iter(data.partitions.values())).data
+
+    if isinstance(data, sf.data.DataFrame):
+        return data
+
+    raise TypeError(f"Unsupported SecretFlow data type: {type(data)}")
+
+
+def to_records(
+    data: Any,
+    party: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    """将多种表格型输入统一转换为 List[Dict[str, Any]]。
+
+    支持：
+    - list/tuple of dict
+    - pandas DataFrame
+    - SecretFlow DataFrame / HDataFrame / VDataFrame（可选依赖）
+
+    Args:
+        data: 输入数据。
+        party: SecretFlow HDataFrame 多 partition 时指定参与方。
+
+    Returns:
+        记录列表，每条记录为字段名到值的字典。
+    """
+    # 1. 原生 dict 列表
+    if isinstance(data, (list, tuple)):
+        if not data:
+            return []
+        if all(isinstance(r, dict) for r in data):
+            return list(data)
+        raise TypeError("list input must contain dict records")
+
+    # 2. pandas DataFrame
+    try:
+        import pandas as pd
+
+        if isinstance(data, pd.DataFrame):
+            return data.to_dict(orient="records")
+    except ImportError:
+        pass
+
+    # 3. SecretFlow 数据结构（可选依赖）
+    if _is_secretflow_available():
+        pdf = _extract_dataframe_partition(data)
+        if isinstance(pdf, pd.DataFrame):
+            return pdf.to_dict(orient="records")
+        # SecretFlow 本地 DataFrame 可能直接是 pandas-like
+        return pdf.to_dict(orient="records")
+
+    raise TypeError(f"Unsupported table input type: {type(data)}")
+
+
+def from_records(
+    records: List[Dict[str, Any]], original: Any
+) -> Any:
+    """根据原始输入类型将 records 转换回对应格式。
+
+    当前支持：
+    - pandas DataFrame -> pandas DataFrame
+    - SecretFlow DataFrame -> pandas DataFrame（返回本地副本）
+    - list/tuple of dict -> list of dict
+    """
+    # pandas / SecretFlow DataFrame 统一返回 pandas DataFrame
+    try:
+        import pandas as pd
+
+        if isinstance(original, pd.DataFrame):
+            return pd.DataFrame(records)
+    except ImportError:
+        pass
+
+    if _is_secretflow_available():
+        import pandas as pd
+        from secretflow.data.horizontal import HDataFrame
+        from secretflow.data.vertical import VDataFrame
+
+        if isinstance(original, (HDataFrame, VDataFrame)) or hasattr(original, "partitions"):
+            return pd.DataFrame(records)
+
+    if isinstance(original, (list, tuple)):
+        return records
+
+    return records

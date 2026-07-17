@@ -9,6 +9,8 @@ option go_package = "github.com/fengzhizi319/privacy-local-agent/proto";
 service PrivacyService {
   rpc Mask (MaskRequest) returns (MaskResponse);
   rpc MaskRecord (MaskRecordRequest) returns (MaskRecordResponse);
+  rpc MaskBatch (MaskBatchRequest) returns (MaskBatchResponse);
+  rpc MaskDataFrame (MaskDataFrameRequest) returns (MaskDataFrameResponse);
   rpc Hash (HashRequest) returns (HashResponse);
   rpc DPCount (DPRequest) returns (DPResponse);
   rpc DPSum (DPRequest) returns (DPResponse);
@@ -24,7 +26,9 @@ service PrivacyService {
   rpc DPChunkedHistogram (DPChunkedHistogramRequest) returns (DPHistogramResponse);
   rpc KAnonymizeRecord (KAnonymizeRequest) returns (KAnonymizeResponse);
   rpc KAnonymizeTable (KAnonymizeTableRequest) returns (KAnonymizeTableResponse);
+  rpc KAnonymizeDataFrame (KAnonymizeDataFrameRequest) returns (KAnonymizeDataFrameResponse);
   rpc ObfuscateQuery (ObfuscateQueryRequest) returns (ObfuscateQueryResponse);
+  rpc ObfuscateQueryBatch (ObfuscateQueryBatchRequest) returns (ObfuscateQueryBatchResponse);
   rpc ClassifyField (ClassifyFieldRequest) returns (ClassifyFieldResponse);
   rpc ClassifyRecord (ClassifyRecordRequest) returns (ClassifyRecordResponse);
   rpc ClassifyTable (ClassifyTableRequest) returns (ClassifyTableResponse);
@@ -53,6 +57,26 @@ message MaskRecordRequest {
 
 message MaskRecordResponse {
   map<string, string> result = 1;
+}
+
+message MaskBatchRequest {
+  repeated string field_names = 1;
+  repeated string values = 2;
+  string context = 3;
+}
+
+message MaskBatchResponse {
+  repeated string results = 1;
+}
+
+message MaskDataFrameRequest {
+  repeated RecordEntry data = 1;
+  repeated string columns = 2;
+  string context = 3;
+}
+
+message MaskDataFrameResponse {
+  repeated RecordEntry data = 1;
 }
 
 message HashRequest {
@@ -98,10 +122,37 @@ message KAnonymizeTableResponse {
   repeated RecordEntry rows = 1;
 }
 
+message KAnonymizeDataFrameRequest {
+  repeated RecordEntry data = 1;
+  repeated string qi_cols = 2;
+  int32 k = 3;
+  int32 max_depth = 4;
+}
+
+message KAnonymizeDataFrameResponse {
+  repeated RecordEntry data = 1;
+}
+
 message ObfuscateQueryRequest {
   string query = 1;
   int32 num_dummies = 2;
   string domain = 3;
+  repeated string medical_pool = 4;
+  repeated string generic_pool = 5;
+  int32 seed = 6;
+}
+
+message ObfuscateQueryBatchRequest {
+  repeated string queries = 1;
+  int32 num_dummies = 2;
+  string domain = 3;
+  repeated string medical_pool = 4;
+  repeated string generic_pool = 5;
+  int32 seed = 6;
+}
+
+message ObfuscateQueryBatchResponse {
+  repeated ObfuscateQueryResponse results = 1;
 }
 
 message ObfuscateQueryResponse {

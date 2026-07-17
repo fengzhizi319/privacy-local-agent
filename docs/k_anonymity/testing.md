@@ -12,6 +12,8 @@
 - 验证非 QI 敏感字段在泛化后保持不变。
 - 验证数值型 QI 泛化为区间、分类型 QI 泛化为取值集合。
 - 验证 REST/gRPC 接口参数透传无误。
+- 验证 DataFrame 输入/输出正确性。
+- 验证 `privacy_kano_operations_total` 指标正确递增。
 - 验证边界条件：空输入、记录数 < `k`、`qi_cols` 缺失、`max_depth=0`。
 
 ## 3. 单元测试策略
@@ -140,7 +142,45 @@ def test_rest_k_anonymize_table():
     assert {r["disease"] for r in result} == {"A", "B", "C", "D", "E", "F"}
 ```
 
-### 4.2 gRPC 接口测试
+### 3.3 DataFrame 测试
+
+```python
+import pandas as pd
+from privacy_local_agent.privacy.kano_table import k_anonymize_dataframe
+
+
+def test_k_anonymize_dataframe():
+    df = pd.DataFrame({
+        "age": [25, 26, 27, 55, 56, 57],
+        "zipcode": ["100001", "100002", "100003", "200001", "200002", "200003"],
+        "disease": ["A", "B", "C", "D", "E", "F"],
+    })
+    result = k_anonymize_dataframe(df, ["age", "zipcode"], k=3)
+    assert isinstance(result, pd.DataFrame)
+    assert len(result) == 6
+```
+
+### 3.4 指标测试
+
+```python
+from prometheus_client import REGISTRY
+from privacy_local_agent.privacy.kano_table import k_anonymize_table
+
+
+def test_kano_metric():
+    before = REGISTRY.get_sample_value(
+        "privacy_kano_operations_total", {"operation": "table"}
+    ) or 0.0
+    k_anonymize_table([{"age": 1}], ["age"], k=1)
+    after = REGISTRY.get_sample_value(
+        "privacy_kano_operations_total", {"operation": "table"}
+    )
+    assert after == before + 1
+```
+
+## 4. 集成测试策略
+
+### 4.1 REST 接口测试
 
 ```python
 import grpc
@@ -202,5 +242,7 @@ PYTHONPATH=. python docs/k_anonymity/examples/kano_usage.py
 - [ ] 数值型 QI 泛化为区间，分类型 QI 泛化为取值集合。
 - [ ] 非 QI 敏感字段保持不变。
 - [ ] 记录数 < `k` 或 `qi_cols` 缺失时抛出明确异常。
-- [ ] REST `/v1/privacy/k_anonymize/record` 与 `/v1/privacy/k_anonymize/table` 接口测试通过。
-- [ ] gRPC `KAnonymizeRecord` 与 `KAnonymizeTable` 接口测试通过。
+- [x] REST `/v1/privacy/k_anonymize/record`、 `/v1/privacy/k_anonymize/table`、 `/v1/privacy/k_anonymize/dataframe` 接口测试通过。
+- [x] gRPC `KAnonymizeRecord`、`KAnonymizeTable`、`KAnonymizeDataFrame` 接口测试通过。
+- [x] DataFrame 输入/输出测试通过。
+- [x] `privacy_kano_operations_total` 指标测试通过。

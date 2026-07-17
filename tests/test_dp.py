@@ -139,11 +139,13 @@ class TestDPBudget:
         assert remaining["epsilon"] == pytest.approx(9.0, abs=1e-9)
         assert remaining["delta"] == pytest.approx(9e-5, abs=1e-9)
 
-    def test_mean_composition_consumes_full_budget(self) -> None:
+    def test_mean_composition_consumes_full_budget(self, monkeypatch) -> None:
         ns = "test-budget-mean"
         BudgetAccountant._instances.pop(ns, None)
         api = DPApi(namespace=ns)
         accountant = BudgetAccountant(ns, epsilon_total=10.0, delta_total=1e-4)
+        # 固定高斯噪声，避免 count 被截断为 0 导致低频保护提前返回。
+        monkeypatch.setattr(api.rng, "gauss", lambda mu, sigma: 0.1)
         api.mean(
             [1.0, 2.0, 3.0],
             epsilon=2.0,

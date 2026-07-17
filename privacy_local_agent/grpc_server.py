@@ -60,6 +60,23 @@ class PrivacyServicer(
         result = self.service.mask_record(dict(request.record), request.context)
         return privacy_pb2.MaskRecordResponse(result=result)
 
+    def MaskBatch(self, request, context):
+        """批量字段脱敏 gRPC 方法。"""
+        results = self.service.mask_batch(
+            list(request.field_names), list(request.values), request.context
+        )
+        return privacy_pb2.MaskBatchResponse(results=results)
+
+    def MaskDataFrame(self, request, context):
+        """DataFrame 脱敏 gRPC 方法。"""
+        import pandas as pd
+
+        df = pd.DataFrame([dict(r.fields) for r in request.data])
+        columns = list(request.columns) if request.columns else None
+        result_df = self.service.mask_dataframe(df, columns=columns, context=request.context)
+        rows = [privacy_pb2.RecordEntry(fields=r) for r in result_df.to_dict(orient="records")]
+        return privacy_pb2.MaskDataFrameResponse(data=rows)
+
     def Hash(self, request, context):
         """HMAC 哈希 gRPC 方法。"""
         return privacy_pb2.HashResponse(result=self.service.hash(request.value, request.salt))
@@ -200,10 +217,42 @@ class PrivacyServicer(
             rows=[privacy_pb2.RecordEntry(fields=r) for r in result]
         )
 
+    def KAnonymizeDataFrame(self, request, context):
+        """DataFrame K-匿名泛化 gRPC 方法。"""
+        import pandas as pd
+
+        df = pd.DataFrame([dict(r.fields) for r in request.data])
+        result_df = self.service.k_anonymize_dataframe(
+            df, list(request.qi_cols), request.k, request.max_depth
+        )
+        rows = [privacy_pb2.RecordEntry(fields=r) for r in result_df.to_dict(orient="records")]
+        return privacy_pb2.KAnonymizeDataFrameResponse(data=rows)
+
     def ObfuscateQuery(self, request, context):
         """查询混淆 gRPC 方法。"""
-        result = self.service.obfuscate_query(request.query, request.num_dummies, request.domain)
+        result = self.service.obfuscate_query(
+            request.query,
+            request.num_dummies,
+            request.domain,
+            medical_pool=list(request.medical_pool) if request.medical_pool else None,
+            generic_pool=list(request.generic_pool) if request.generic_pool else None,
+            seed=request.seed if request.seed != 0 else None,
+        )
         return privacy_pb2.ObfuscateQueryResponse(result=result)
+
+    def ObfuscateQueryBatch(self, request, context):
+        """批量查询混淆 gRPC 方法。"""
+        results = self.service.obfuscate_query_batch(
+            list(request.queries),
+            request.num_dummies,
+            request.domain,
+            medical_pool=list(request.medical_pool) if request.medical_pool else None,
+            generic_pool=list(request.generic_pool) if request.generic_pool else None,
+            seed=request.seed if request.seed != 0 else None,
+        )
+        return privacy_pb2.ObfuscateQueryBatchResponse(
+            results=[privacy_pb2.ObfuscateQueryResponse(result=r) for r in results]
+        )
 
     def Health(self, request, context):
         """健康检查 gRPC 方法。"""

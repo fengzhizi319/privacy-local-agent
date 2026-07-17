@@ -266,6 +266,12 @@ Address these before any hardened production deployment.
 | Observability PRD | `docs/production_observability/prd.md` | Logging/metrics/tracing requirements |
 | Observability design | `docs/production_observability/design.md` | Architecture and metric design |
 | Observability ops | `docs/production_observability/ops.md` | Configuration and Grafana examples |
+| Masking design | `docs/masking/design.md` | Field-name-aware masking architecture |
+| Masking ops | `docs/masking/ops.md` | Masking deployment and tuning |
+| Masking testing | `docs/masking/testing.md` | Masking test checklist |
+| Query obfuscation design | `docs/qol/design.md` | Query obfuscation architecture |
+| Query obfuscation ops | `docs/qol/ops.md` | Query obfuscation monitoring |
+| Query obfuscation testing | `docs/qol/testing.md` | Query obfuscation test checklist |
 | Deployment PRD | `docs/deployment/prd.md` | K8s/Helm/Docker Compose requirements |
 | Deployment design | `docs/deployment/design.md` | Chart structure and parameters |
 | Deployment ops | `docs/deployment/ops.md` | Install, upgrade and troubleshooting |

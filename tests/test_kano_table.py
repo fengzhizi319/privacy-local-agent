@@ -3,8 +3,12 @@
 from __future__ import annotations
 
 import pytest
+from prometheus_client import REGISTRY
 
-from privacy_local_agent.privacy.kano_table import k_anonymize_table
+from privacy_local_agent.privacy.kano_table import (
+    k_anonymize_dataframe,
+    k_anonymize_table,
+)
 
 
 class TestKAnonymizeTable:
@@ -64,3 +68,31 @@ class TestKAnonymizeTable:
     def test_missing_qi_cols_raises(self) -> None:
         with pytest.raises(ValueError, match="not found"):
             k_anonymize_table([{"age": 1}], ["gender"], k=1)
+
+    def test_k_anonymize_dataframe(self) -> None:
+        pd = pytest.importorskip("pandas")
+        df = pd.DataFrame(
+            {
+                "age": [25, 26, 27, 55, 56, 57],
+                "zipcode": ["100001", "100002", "100003", "200001", "200002", "200003"],
+                "disease": ["A", "B", "C", "D", "E", "F"],
+            }
+        )
+        result = k_anonymize_dataframe(df, ["age", "zipcode"], k=3)
+        assert isinstance(result, pd.DataFrame)
+        assert len(result) == 6
+        assert set(result["disease"]) == {"A", "B", "C", "D", "E", "F"}
+
+    def test_k_anonymize_table_records_metric(self) -> None:
+        before = REGISTRY.get_sample_value(
+            "privacy_kano_operations_total", {"operation": "table"}
+        ) or 0.0
+        k_anonymize_table(
+            [{"age": 25, "zipcode": "100001"}, {"age": 26, "zipcode": "100002"}],
+            ["age", "zipcode"],
+            k=1,
+        )
+        after = REGISTRY.get_sample_value(
+            "privacy_kano_operations_total", {"operation": "table"}
+        )
+        assert after == before + 1

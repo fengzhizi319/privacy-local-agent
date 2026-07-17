@@ -9,6 +9,8 @@ generalization functions for common QIs such as age, zipcode and gender.
 
 from typing import Any, Callable, Dict, List
 
+from ..observability.metrics import KANO_OPERATIONS_TOTAL
+
 # 泛化层次函数类型：输入原始值与泛化层级，输出泛化后的字符串
 GeneralizationHierarchy = Callable[[str, int], str]
 
@@ -137,6 +139,7 @@ def anonymize_record(
         当前 MVP 版本主要依赖 BUILTIN_HIERARCHIES；自定义层次结构参数已预留，
         但尚未实际合并到内置层次中。
     """
+    KANO_OPERATIONS_TOTAL.labels(operation="record").inc()
     result = dict(record)
     for col in qi_cols:
         h = hierarchies.get(col)

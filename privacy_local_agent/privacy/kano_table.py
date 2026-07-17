@@ -11,6 +11,8 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
+from ..observability.metrics import KANO_OPERATIONS_TOTAL
+
 
 def _is_numeric(value: Any) -> bool:
     """判断一个值是否为数值类型（int/float），排除布尔值。"""
@@ -124,6 +126,7 @@ def k_anonymize_table(
     Raises:
         ValueError: 输入记录数不足 k，或 qi_cols 包含输入中不存在的列。
     """
+    KANO_OPERATIONS_TOTAL.labels(operation="table").inc()
     if not rows:
         return []
     if len(rows) < k:
@@ -156,3 +159,31 @@ def k_anonymize_table(
         return left + right
 
     return _mondrian(rows, max_depth)
+
+
+def k_anonymize_dataframe(
+    df: Any,
+    qi_cols: List[str],
+    k: int = 5,
+    max_depth: int = 10,
+) -> Any:
+    """对 DataFrame 执行 Mondrian K-匿名泛化。
+
+    支持 pandas DataFrame 与 SecretFlow DataFrame（H/V）。
+    内部转换为 records 后调用 k_anonymize_table，再按原类型返回。
+
+    Args:
+        df: 输入 DataFrame。
+        qi_cols: 准标识符列名列表。
+        k: K-匿名阈值。
+        max_depth: 最大递归深度。
+
+    Returns:
+        泛化后的 DataFrame（pandas DataFrame）。
+    """
+    from .data_adapters import from_records, to_records
+
+    KANO_OPERATIONS_TOTAL.labels(operation="dataframe").inc()
+    records = to_records(df)
+    anonymized = k_anonymize_table(records, qi_cols, k=k, max_depth=max_depth)
+    return from_records(anonymized, df)

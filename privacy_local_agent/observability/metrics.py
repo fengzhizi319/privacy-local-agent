@@ -78,6 +78,27 @@ TRAFFIC_BYTES_TOTAL = Counter(
     ["method", "path", "direction"],
 )
 
+# Masking operations counter.
+MASKING_OPERATIONS_TOTAL = Counter(
+    "privacy_masking_operations_total",
+    "Total number of masking operations.",
+    ["operation"],
+)
+
+# K-anonymity operations counter.
+KANO_OPERATIONS_TOTAL = Counter(
+    "privacy_kano_operations_total",
+    "Total number of K-anonymity operations.",
+    ["operation"],
+)
+
+# Query obfuscation operations counter.
+QOL_OPERATIONS_TOTAL = Counter(
+    "privacy_qol_operations_total",
+    "Total number of query obfuscation operations.",
+    ["domain"],
+)
+
 
 def make_asgi_app() -> Any:
     """Return the Prometheus metrics ASGI application to mount on FastAPI."""

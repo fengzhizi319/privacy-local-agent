@@ -29,6 +29,18 @@ curl -X POST http://127.0.0.1:8079/v1/privacy/k_anonymize/table \
 
 | 现象 | 原因 |
 |---|---|
-| `400` | 记录数 < k，或 `qi_cols` 包含不存在列。 |
+| `400` | 记录数 < k，或 `qi_cols` 包含不存在列，或 DataFrame 输入类型不支持。 |
 | 泛化过度 | k 过大或 `max_depth` 过小。 |
 | 输出顺序变化 | 算法会按 QI 排序，输出顺序与输入不一定一致。 |
+
+## 4. 指标监控
+
+`privacy_kano_operations_total{operation}` 记录 K-匿名操作次数：
+
+```text
+privacy_kano_operations_total{operation="table"}
+privacy_kano_operations_total{operation="dataframe"}
+privacy_kano_operations_total{operation="record"}
+```
+
+可用于审计各接口调用频率与容量规划。

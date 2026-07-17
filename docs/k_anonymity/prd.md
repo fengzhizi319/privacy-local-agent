@@ -23,6 +23,9 @@
 | KANO-TABLE-5 | 提供 `max_depth` 参数限制递归深度，防止过泛化。 |
 | KANO-TABLE-6 | 当输入记录数 < k 时返回错误，避免输出不满足 K-匿名条件的数据集。 |
 | KANO-RECORD-1 | 保留单记录启发式泛化接口，用于轻量场景。 |
+| KANO-DATAFRAME-1 | 表级接口支持 pandas DataFrame 与 SecretFlow DataFrame（H/V）输入，输出与输入同类型（本地 pandas 副本）。 |
+| KANO-DATAFRAME-2 | DataFrame 输入通过 `data_adapters.to_records` / `from_records` 统一转换。 |
+| KANO-METRIC-1 | 暴露 `privacy_kano_operations_total` Counter，按 `operation` 标签区分 `record` / `table` / `dataframe`。 |
 
 ## 4. 接口定义
 
@@ -62,6 +65,9 @@ message KAnonymizeTableResponse {
 
 ## 5. 验收标准
 
-- [ ] Mondrian 实现通过单元测试，覆盖数值/分类 QI、等价组大小 ≥ k、敏感字段不变。
-- [ ] REST/gRPC 接口测试通过。
-- [ ] 文档（PRD/design/ops）与 `AGENTS.md` 已更新。
+- [x] Mondrian 实现通过单元测试，覆盖数值/分类 QI、等价组大小 ≥ k、敏感字段不变。
+- [x] DataFrame 输入（pandas/SecretFlow）测试通过。
+- [x] `privacy_kano_operations_total` 指标测试通过。
+- [x] REST/gRPC 接口测试通过。
+- [x] 新增 DataFrame REST/gRPC 接口测试通过。
+- [x] 文档（PRD/design/api_reference/examples/ops/testing）已更新。

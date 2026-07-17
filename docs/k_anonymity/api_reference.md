@@ -38,6 +38,32 @@ def k_anonymize_table(
 
 ---
 
+### `k_anonymize_dataframe`
+
+位置：`privacy_local_agent.privacy.kano_table.k_anonymize_dataframe`
+
+对 DataFrame 执行 Mondrian 多维分区 K-匿名泛化。
+
+```python
+def k_anonymize_dataframe(
+    df: Any,
+    qi_cols: List[str],
+    k: int = 5,
+    max_depth: int = 10,
+) -> pd.DataFrame
+```
+
+| 参数 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `df` | `Any` | 是 | 输入 DataFrame（pandas 或 SecretFlow） |
+| `qi_cols` | `List[str]` | 是 | 准标识符列名列表 |
+| `k` | `int` | 否 | K-匿名阈值，默认 `5` |
+| `max_depth` | `int` | 否 | 最大递归深度，默认 `10` |
+
+**返回值**：泛化后的 pandas DataFrame。
+
+---
+
 ### `anonymize_record`
 
 位置：`privacy_local_agent.privacy.kano.anonymize_record`
@@ -161,6 +187,7 @@ def anonymize_record(
 |---|---|---|---|
 | `KAnonymizeRecord` | `KAnonymizeRequest` | `KAnonymizeResponse` | 单条记录泛化 |
 | `KAnonymizeTable` | `KAnonymizeTableRequest` | `KAnonymizeTableResponse` | 整张表泛化 |
+| `KAnonymizeDataFrame` | `KAnonymizeDataFrameRequest` | `KAnonymizeDataFrameResponse` | DataFrame 泛化 |
 
 ### `KAnonymizeRequest` 字段
 
@@ -191,6 +218,21 @@ def anonymize_record(
 |---|---|---|
 | `rows` | `repeated RecordEntry` | 泛化后的记录列表 |
 
+### `KAnonymizeDataFrameRequest` 字段
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `data` | `repeated RecordEntry` | 原始记录列表 |
+| `qi_cols` | `repeated string` | 准标识符列名 |
+| `k` | `int32` | K-匿名阈值 |
+| `max_depth` | `int32` | 最大递归深度 |
+
+### `KAnonymizeDataFrameResponse` 字段
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `data` | `repeated RecordEntry` | 泛化后的记录列表 |
+
 ### `RecordEntry` 字段
 
 | 字段 | 类型 | 说明 |
@@ -206,3 +248,4 @@ def anonymize_record(
 | `ValueError: Input table has N rows, but k-anonymity requires at least k` | 表级输入记录数 < `k` | 400 | `INVALID_ARGUMENT` |
 | `ValueError: qi_cols must not be empty` | `qi_cols` 为空 | 400 | `INVALID_ARGUMENT` |
 | `ValueError: qi_cols not found in rows: [...]` | `qi_cols` 包含不存在列 | 400 | `INVALID_ARGUMENT` |
+| `TypeError: Unsupported table input type: ...` | DataFrame 输入类型不支持 | 400 | `INVALID_ARGUMENT` |

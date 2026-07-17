@@ -3,7 +3,7 @@
 import grpc
 import warnings
 
-from . import privacy_pb2 as privacy__pb2
+from privacy_local_agent import privacy_pb2 as privacy__pb2
 
 GRPC_GENERATED_VERSION = '1.82.1'
 GRPC_VERSION = grpc.__version__
@@ -43,6 +43,16 @@ class PrivacyServiceStub:
                 '/privacy.local.PrivacyService/MaskRecord',
                 request_serializer=privacy__pb2.MaskRecordRequest.SerializeToString,
                 response_deserializer=privacy__pb2.MaskRecordResponse.FromString,
+                _registered_method=True)
+        self.MaskBatch = channel.unary_unary(
+                '/privacy.local.PrivacyService/MaskBatch',
+                request_serializer=privacy__pb2.MaskBatchRequest.SerializeToString,
+                response_deserializer=privacy__pb2.MaskBatchResponse.FromString,
+                _registered_method=True)
+        self.MaskDataFrame = channel.unary_unary(
+                '/privacy.local.PrivacyService/MaskDataFrame',
+                request_serializer=privacy__pb2.MaskDataFrameRequest.SerializeToString,
+                response_deserializer=privacy__pb2.MaskDataFrameResponse.FromString,
                 _registered_method=True)
         self.Hash = channel.unary_unary(
                 '/privacy.local.PrivacyService/Hash',
@@ -119,10 +129,20 @@ class PrivacyServiceStub:
                 request_serializer=privacy__pb2.KAnonymizeTableRequest.SerializeToString,
                 response_deserializer=privacy__pb2.KAnonymizeTableResponse.FromString,
                 _registered_method=True)
+        self.KAnonymizeDataFrame = channel.unary_unary(
+                '/privacy.local.PrivacyService/KAnonymizeDataFrame',
+                request_serializer=privacy__pb2.KAnonymizeDataFrameRequest.SerializeToString,
+                response_deserializer=privacy__pb2.KAnonymizeDataFrameResponse.FromString,
+                _registered_method=True)
         self.ObfuscateQuery = channel.unary_unary(
                 '/privacy.local.PrivacyService/ObfuscateQuery',
                 request_serializer=privacy__pb2.ObfuscateQueryRequest.SerializeToString,
                 response_deserializer=privacy__pb2.ObfuscateQueryResponse.FromString,
+                _registered_method=True)
+        self.ObfuscateQueryBatch = channel.unary_unary(
+                '/privacy.local.PrivacyService/ObfuscateQueryBatch',
+                request_serializer=privacy__pb2.ObfuscateQueryBatchRequest.SerializeToString,
+                response_deserializer=privacy__pb2.ObfuscateQueryBatchResponse.FromString,
                 _registered_method=True)
         self.ClassifyField = channel.unary_unary(
                 '/privacy.local.PrivacyService/ClassifyField',
@@ -181,6 +201,18 @@ class PrivacyServiceServicer:
         raise NotImplementedError('Method not implemented!')
 
     def MaskRecord(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def MaskBatch(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def MaskDataFrame(self, request, context):
         """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
@@ -276,7 +308,19 @@ class PrivacyServiceServicer:
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def KAnonymizeDataFrame(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
     def ObfuscateQuery(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def ObfuscateQueryBatch(self, request, context):
         """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
@@ -348,6 +392,16 @@ def add_PrivacyServiceServicer_to_server(servicer, server):
                     servicer.MaskRecord,
                     request_deserializer=privacy__pb2.MaskRecordRequest.FromString,
                     response_serializer=privacy__pb2.MaskRecordResponse.SerializeToString,
+            ),
+            'MaskBatch': grpc.unary_unary_rpc_method_handler(
+                    servicer.MaskBatch,
+                    request_deserializer=privacy__pb2.MaskBatchRequest.FromString,
+                    response_serializer=privacy__pb2.MaskBatchResponse.SerializeToString,
+            ),
+            'MaskDataFrame': grpc.unary_unary_rpc_method_handler(
+                    servicer.MaskDataFrame,
+                    request_deserializer=privacy__pb2.MaskDataFrameRequest.FromString,
+                    response_serializer=privacy__pb2.MaskDataFrameResponse.SerializeToString,
             ),
             'Hash': grpc.unary_unary_rpc_method_handler(
                     servicer.Hash,
@@ -424,10 +478,20 @@ def add_PrivacyServiceServicer_to_server(servicer, server):
                     request_deserializer=privacy__pb2.KAnonymizeTableRequest.FromString,
                     response_serializer=privacy__pb2.KAnonymizeTableResponse.SerializeToString,
             ),
+            'KAnonymizeDataFrame': grpc.unary_unary_rpc_method_handler(
+                    servicer.KAnonymizeDataFrame,
+                    request_deserializer=privacy__pb2.KAnonymizeDataFrameRequest.FromString,
+                    response_serializer=privacy__pb2.KAnonymizeDataFrameResponse.SerializeToString,
+            ),
             'ObfuscateQuery': grpc.unary_unary_rpc_method_handler(
                     servicer.ObfuscateQuery,
                     request_deserializer=privacy__pb2.ObfuscateQueryRequest.FromString,
                     response_serializer=privacy__pb2.ObfuscateQueryResponse.SerializeToString,
+            ),
+            'ObfuscateQueryBatch': grpc.unary_unary_rpc_method_handler(
+                    servicer.ObfuscateQueryBatch,
+                    request_deserializer=privacy__pb2.ObfuscateQueryBatchRequest.FromString,
+                    response_serializer=privacy__pb2.ObfuscateQueryBatchResponse.SerializeToString,
             ),
             'ClassifyField': grpc.unary_unary_rpc_method_handler(
                     servicer.ClassifyField,
@@ -529,6 +593,60 @@ class PrivacyService:
             '/privacy.local.PrivacyService/MaskRecord',
             privacy__pb2.MaskRecordRequest.SerializeToString,
             privacy__pb2.MaskRecordResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def MaskBatch(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/privacy.local.PrivacyService/MaskBatch',
+            privacy__pb2.MaskBatchRequest.SerializeToString,
+            privacy__pb2.MaskBatchResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def MaskDataFrame(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/privacy.local.PrivacyService/MaskDataFrame',
+            privacy__pb2.MaskDataFrameRequest.SerializeToString,
+            privacy__pb2.MaskDataFrameResponse.FromString,
             options,
             channel_credentials,
             insecure,
@@ -945,6 +1063,33 @@ class PrivacyService:
             _registered_method=True)
 
     @staticmethod
+    def KAnonymizeDataFrame(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/privacy.local.PrivacyService/KAnonymizeDataFrame',
+            privacy__pb2.KAnonymizeDataFrameRequest.SerializeToString,
+            privacy__pb2.KAnonymizeDataFrameResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
     def ObfuscateQuery(request,
             target,
             options=(),
@@ -961,6 +1106,33 @@ class PrivacyService:
             '/privacy.local.PrivacyService/ObfuscateQuery',
             privacy__pb2.ObfuscateQueryRequest.SerializeToString,
             privacy__pb2.ObfuscateQueryResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def ObfuscateQueryBatch(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/privacy.local.PrivacyService/ObfuscateQueryBatch',
+            privacy__pb2.ObfuscateQueryBatchRequest.SerializeToString,
+            privacy__pb2.ObfuscateQueryBatchResponse.FromString,
             options,
             channel_credentials,
             insecure,

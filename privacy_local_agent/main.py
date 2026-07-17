@@ -12,7 +12,7 @@ via include_router.
 
 import os
 from contextlib import asynccontextmanager
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from fastapi import Depends, FastAPI, HTTPException
 from pydantic import BaseModel
@@ -88,6 +88,26 @@ class MaskRecordRequest(BaseModel):
     """整记录脱敏请求模型。"""
 
     record: Dict[str, str]
+    context: str = ""
+
+
+class MaskBatchRequest(BaseModel):
+    """批量字段脱敏请求模型。"""
+
+    field_names: List[str]
+    values: List[str]
+    context: str = ""
+
+
+class MaskDataFrameRequest(BaseModel):
+    """DataFrame 脱敏请求模型。
+
+    data 为 records 列表（可来自 pandas/SecretFlow DataFrame 的转换）。
+    columns 指定需要脱敏的列；未指定则对所有字符串列脱敏。
+    """
+
+    data: List[Dict[str, Any]]
+    columns: Optional[List[str]] = None
     context: str = ""
 
 
@@ -195,6 +215,18 @@ class KAnonTableRequest(BaseModel):
     max_depth: int = 10
 
 
+class KAnonDataFrameRequest(BaseModel):
+    """K-匿名 DataFrame 请求模型。
+
+    data 为 records 列表（可来自 pandas/SecretFlow DataFrame）。
+    """
+
+    data: List[Dict[str, Any]]
+    qi_cols: List[str]
+    k: int = 5
+    max_depth: int = 10
+
+
 class QolRequest(BaseModel):
     """查询混淆请求模型。"""
 
@@ -203,6 +235,18 @@ class QolRequest(BaseModel):
     domain: str = "medical"
     medical_pool: Optional[List[str]] = None
     generic_pool: Optional[List[str]] = None
+    seed: Optional[int] = None
+
+
+class QolBatchRequest(BaseModel):
+    """批量查询混淆请求模型。"""
+
+    queries: List[str]
+    num_dummies: int = 3
+    domain: str = "medical"
+    medical_pool: Optional[List[str]] = None
+    generic_pool: Optional[List[str]] = None
+    seed: Optional[int] = None
 
 
 class LdpPerturbBinaryRequest(BaseModel):
@@ -294,6 +338,32 @@ def mask_record(req: MaskRecordRequest):
         {"result": <脱敏后的记录字典>}
     """
     return {"result": service.mask_record(req.record, req.context)}
+
+
+@app.post("/v1/privacy/mask/batch", dependencies=[*SECURITY_DEPS, require_permission("privacy:mask")])
+def mask_batch(req: MaskBatchRequest):
+    """批量字段脱敏接口。"""
+    try:
+        return {"result": service.mask_batch(req.field_names, req.values, req.context)}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/v1/privacy/mask/dataframe", dependencies=[*SECURITY_DEPS, require_permission("privacy:mask")])
+def mask_dataframe(req: MaskDataFrameRequest):
+    """DataFrame 脱敏接口。
+
+    接受 records 列表，返回脱敏后的 records 列表。
+    调用方可将 pandas/SecretFlow DataFrame 转为 records 后调用。
+    """
+    try:
+        import pandas as pd
+
+        df = pd.DataFrame(req.data)
+        result = service.mask_dataframe(df, columns=req.columns, context=req.context)
+        return {"result": result.to_dict(orient="records")}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 @app.post("/v1/privacy/hash", dependencies=[*SECURITY_DEPS, require_permission("privacy:hash")])
@@ -514,6 +584,19 @@ def k_anonymize_table(req: KAnonTableRequest):
         return {"result": service.k_anonymize_table(req.rows, req.qi_cols, req.k, req.max_depth)}
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/v1/privacy/k_anonymize/dataframe", dependencies=[*SECURITY_DEPS, require_permission("privacy:kano")])
+def k_anonymize_dataframe(req: KAnonDataFrameRequest):
+    """DataFrame K-匿名泛化接口。"""
+    try:
+        import pandas as pd
+
+        df = pd.DataFrame(req.data)
+        result = service.k_anonymize_dataframe(df, req.qi_cols, req.k, req.max_depth)
+        return {"result": result.to_dict(orient="records")}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
 @app.post("/v1/privacy/qol/obfuscate", dependencies=[*SECURITY_DEPS, require_permission("privacy:qol")])
 def qol_obfuscate(req: QolRequest):
     """查询混淆接口。
@@ -530,7 +613,24 @@ def qol_obfuscate(req: QolRequest):
         req.domain,
         medical_pool=req.medical_pool,
         generic_pool=req.generic_pool,
+        seed=req.seed,
     )}
+
+
+@app.post("/v1/privacy/qol/obfuscate/batch", dependencies=[*SECURITY_DEPS, require_permission("privacy:qol")])
+def qol_obfuscate_batch(req: QolBatchRequest):
+    """批量查询混淆接口。"""
+    try:
+        return {"results": service.obfuscate_query_batch(
+            req.queries,
+            req.num_dummies,
+            req.domain,
+            medical_pool=req.medical_pool,
+            generic_pool=req.generic_pool,
+            seed=req.seed,
+        )}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 @app.get("/v1/privacy/budget", dependencies=[*SECURITY_DEPS, require_permission("privacy:budget")])

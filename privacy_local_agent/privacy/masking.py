@@ -11,7 +11,9 @@ import base64
 import hmac
 import hashlib
 import re
-from typing import Dict
+from typing import Any, Dict, List, Optional
+
+from ..observability.metrics import MASKING_OPERATIONS_TOTAL
 
 
 def guess_field_type(field_name: str) -> str:
@@ -138,6 +140,7 @@ def mask_value(field_name: str, value: str, context: str = "") -> str:
     Returns:
         脱敏后的字符串。
     """
+    MASKING_OPERATIONS_TOTAL.labels(operation="mask_value").inc()
     ft = guess_field_type(field_name)
     if ft == "mobile":
         return mask_mobile(value)
@@ -148,6 +151,65 @@ def mask_value(field_name: str, value: str, context: str = "") -> str:
     if ft == "bank_card":
         return mask_bank_card(value)
     return mask_default(value)
+
+
+def mask_value_batch(
+    field_names: List[str], values: List[str], context: str = ""
+) -> List[str]:
+    """批量对字段值进行脱敏。
+
+    Args:
+        field_names: 字段名列表，与 values 一一对应。
+        values: 原始值列表。
+        context: 上下文信息。
+
+    Returns:
+        脱敏后的值列表。
+    """
+    if len(field_names) != len(values):
+        raise ValueError("field_names and values must have the same length")
+    MASKING_OPERATIONS_TOTAL.labels(operation="mask_value_batch").inc()
+    return [mask_value(fn, val, context) for fn, val in zip(field_names, values)]
+
+
+def mask_dataframe(
+    df: Any,
+    columns: Optional[List[str]] = None,
+    context: str = "",
+) -> Any:
+    """对 DataFrame 中的指定列进行脱敏。
+
+    支持 pandas DataFrame 与 SecretFlow DataFrame（H/V）。
+
+    Args:
+        df: 输入 DataFrame。
+        columns: 需要脱敏的列名列表；未指定时对所有字符串/object 列脱敏。
+        context: 上下文信息。
+
+    Returns:
+        脱敏后的 DataFrame（pandas DataFrame）。
+    """
+    from .data_adapters import to_records, from_records
+
+    MASKING_OPERATIONS_TOTAL.labels(operation="mask_dataframe").inc()
+    records = to_records(df)
+    if not records:
+        return from_records(records, df)
+
+    if columns is None:
+        # 默认对所有值为字符串的列脱敏
+        columns = [k for k in records[0].keys() if isinstance(records[0].get(k), str)]
+
+    masked_records = []
+    for record in records:
+        new_record = dict(record)
+        for col in columns:
+            val = new_record.get(col)
+            if isinstance(val, str):
+                new_record[col] = mask_value(col, val, context)
+        masked_records.append(new_record)
+
+    return from_records(masked_records, df)
 
 
 def hash_value(value: str, salt: str) -> str:
@@ -162,6 +224,7 @@ def hash_value(value: str, salt: str) -> str:
     Returns:
         16 字符长的 base64 编码摘要。
     """
+    MASKING_OPERATIONS_TOTAL.labels(operation="hash").inc()
     mac = hmac.new(salt.encode(), value.encode(), hashlib.sha256).digest()
     return base64.b64encode(mac).decode()[:16]
 
@@ -176,6 +239,7 @@ def truncate(value: str, keep_prefix: int) -> str:
     Returns:
         截断后的字符串；若原始长度不超过保留长度则原样返回。
     """
+    MASKING_OPERATIONS_TOTAL.labels(operation="truncate").inc()
     if len(value) <= keep_prefix:
         return value
     return value[:keep_prefix] + "***"
@@ -193,4 +257,5 @@ def mask_record(record: Dict[str, str], context: str = "") -> Dict[str, str]:
     Returns:
         脱敏后的新记录字典。
     """
+    MASKING_OPERATIONS_TOTAL.labels(operation="mask_record").inc()
     return {k: mask_value(k, v, context) if isinstance(v, str) else v for k, v in record.items()}

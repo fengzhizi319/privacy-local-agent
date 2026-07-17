@@ -11,6 +11,8 @@
 - 对数值型 QI 输出区间泛化，对分类型 QI 输出取值集合。
 - 保留非 QI 敏感字段不变，便于下游分析。
 - 同时保留单记录启发式泛化接口，用于轻量场景。
+- 支持 pandas / SecretFlow DataFrame 输入，输出本地 pandas 副本。
+- 暴露 `privacy_kano_operations_total` 模块级指标。
 
 ## 3. 算法原理
 
@@ -68,16 +70,29 @@ mondrian(records, qi_cols, k, depth):
 
 ## 5. 模块设计
 
-新增 `privacy_local_agent/privacy/kano_table.py`：
+`privacy_local_agent/privacy/kano_table.py`：
 
 | 函数 | 作用 |
 |---|---|
-| `k_anonymize_table(rows, qi_cols, k, max_depth)` | 入口函数 |
+| `k_anonymize_table(rows, qi_cols, k, max_depth)` | 记录列表入口函数 |
+| `k_anonymize_dataframe(df, qi_cols, k, max_depth)` | DataFrame 入口函数 |
 | `_choose_dimension(records, qi_cols)` | 选择分割维度 |
 | `_median_split(records, dim, k)` | 中位数分割 |
 | `_generalize(records, qi_cols)` | 等价组泛化 |
 
-`PrivacyService` 新增 `k_anonymize_table` 方法；`main.py` / `grpc_server.py` 暴露接口。
+`privacy_local_agent/privacy/data_adapters.py` 提供 `to_records` / `from_records`，将 pandas / SecretFlow DataFrame 与记录列表互转。
+
+`PrivacyService` 新增 `k_anonymize_table` / `k_anonymize_dataframe` 方法；`main.py` / `grpc_server.py` 暴露 `KAnonymizeTable` / `KAnonymizeDataFrame` 接口。
+
+### 5.1 指标
+
+`privacy_kano_operations_total{operation}` 在以下入口递增：
+
+| `operation` | 触发接口 |
+|---|---|
+| `record` | `anonymize_record` |
+| `table` | `k_anonymize_table` |
+| `dataframe` | `k_anonymize_dataframe` |
 
 ## 6. 复杂度分析
 
@@ -122,5 +137,7 @@ message KAnonymizeTableResponse {
 ## 8. 测试策略
 
 - Mondrian 实现单元测试，覆盖数值/分类 QI、等价组大小 ≥ k、敏感字段不变。
-- REST/gRPC 接口测试。
+- DataFrame 输入/输出测试。
+- `privacy_kano_operations_total` 指标测试。
+- REST/gRPC 接口测试（含 `KAnonymizeDataFrame`）。
 - 边界条件测试：记录数 < k、单值 QI、max_depth=0。

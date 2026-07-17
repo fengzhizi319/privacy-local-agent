@@ -15,8 +15,15 @@ from .privacy.budget import BudgetAccountant
 from .privacy.classification import ClassificationAPI
 from .privacy.dp import DPApi, LocalDPApi
 from .privacy.kano import BUILTIN_HIERARCHIES, anonymize_record
-from .privacy.kano_table import k_anonymize_table
-from .privacy.masking import hash_value, mask_record, mask_value, truncate
+from .privacy.kano_table import k_anonymize_dataframe, k_anonymize_table
+from .privacy.masking import (
+    hash_value,
+    mask_dataframe,
+    mask_record,
+    mask_value,
+    mask_value_batch,
+    truncate,
+)
 from .privacy.profile import ParameterResolver, get_resolver
 from .privacy.qol import obfuscate_query
 
@@ -71,6 +78,27 @@ class PrivacyService:
             脱敏后的记录字典。
         """
         return mask_record(record, context)
+
+    def mask_batch(
+        self, field_names: List[str], values: List[str], context: str = ""
+    ) -> List[str]:
+        """批量对字段值进行脱敏。"""
+        return mask_value_batch(field_names, values, context)
+
+    def mask_dataframe(
+        self, df: Any, columns: Optional[List[str]] = None, context: str = ""
+    ) -> Any:
+        """对 DataFrame 进行脱敏。
+
+        Args:
+            df: 输入 DataFrame（pandas 或 SecretFlow）。
+            columns: 需要脱敏的列名列表；None 则对所有字符串列脱敏。
+            context: 上下文信息。
+
+        Returns:
+            脱敏后的 DataFrame。
+        """
+        return mask_dataframe(df, columns=columns, context=context)
 
     def hash(self, value: str, salt: str) -> str:
         """对字符串进行 HMAC 哈希。
@@ -467,6 +495,33 @@ class PrivacyService:
         resolved_max_depth = params.get("max_depth", max_depth)
         return k_anonymize_table(rows, qi_cols, resolved_k, resolved_max_depth)
 
+    def k_anonymize_dataframe(
+        self,
+        df: Any,
+        qi_cols: List[str],
+        k: int = 5,
+        max_depth: int = 10,
+    ) -> Any:
+        """对 DataFrame 执行 K-匿名泛化。
+
+        Args:
+            df: 输入 DataFrame（pandas 或 SecretFlow）。
+            qi_cols: 准标识符列名列表。
+            k: K-匿名阈值。
+            max_depth: Mondrian 最大递归深度。
+
+        Returns:
+            泛化后的 DataFrame。
+        """
+        params = self.resolver.resolve(
+            "k_anonymity",
+            {"k": k, "max_depth": max_depth},
+            namespace=self.namespace,
+        )
+        resolved_k = params.get("k", k)
+        resolved_max_depth = params.get("max_depth", max_depth)
+        return k_anonymize_dataframe(df, qi_cols, resolved_k, resolved_max_depth)
+
     def obfuscate_query(
         self,
         query: str,
@@ -474,6 +529,7 @@ class PrivacyService:
         domain: str = "medical",
         medical_pool: Optional[List[str]] = None,
         generic_pool: Optional[List[str]] = None,
+        seed: Optional[int] = None,
     ) -> List[str]:
         """对查询进行混淆。
 
@@ -483,6 +539,7 @@ class PrivacyService:
             domain: 查询领域，影响 dummy 查询池选择。
             medical_pool: 自定义医疗 dummy 池。
             generic_pool: 自定义通用 dummy 池。
+            seed: 可选随机种子。
 
         Returns:
             混淆后的查询列表。
@@ -503,6 +560,36 @@ class PrivacyService:
             domain,
             medical_pool=resolved_medical_pool,
             generic_pool=resolved_generic_pool,
+            seed=seed,
+        )
+
+    def obfuscate_query_batch(
+        self,
+        queries: List[str],
+        num_dummies: int = 3,
+        domain: str = "medical",
+        medical_pool: Optional[List[str]] = None,
+        generic_pool: Optional[List[str]] = None,
+        seed: Optional[int] = None,
+    ) -> List[List[str]]:
+        """批量对查询进行混淆。"""
+        request_params = {"num_dummies": num_dummies}
+        if medical_pool is not None:
+            request_params["medical_pool"] = medical_pool
+        if generic_pool is not None:
+            request_params["generic_pool"] = generic_pool
+
+        params = self.resolver.resolve("qol", request_params)
+        resolved_num_dummies = params.get("num_dummies", num_dummies)
+        resolved_medical_pool = params.get("medical_pool")
+        resolved_generic_pool = params.get("generic_pool")
+        return obfuscate_query_batch(
+            queries,
+            resolved_num_dummies,
+            domain,
+            medical_pool=resolved_medical_pool,
+            generic_pool=resolved_generic_pool,
+            seed=seed,
         )
 
     def recommend_and_save_params(
