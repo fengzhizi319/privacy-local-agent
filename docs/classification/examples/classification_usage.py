@@ -11,6 +11,7 @@
 """
 
 import json
+import time
 
 from privacy_local_agent.privacy.classification import ClassificationAPI
 
@@ -114,7 +115,18 @@ def main() -> None:
     print(f"diagnosis 最终等级: {governance_result.field_results['diagnosis'].final_level.value}")
     print(f"参数来源: {governance_result.field_results['mobile'].reasoning}")
 
-    # 8. 三层引擎调用（若模型/依赖缺失会自动降级，不会报错）
+    # 8. 复合/上下文敏感规则
+    print_section("复合/上下文敏感规则")
+    composite_record = {
+        "name": "张三",
+        "id_card": "110101199001011237",
+        "mobile": "13800138000",
+    }
+    composite_result = api.classify_record(composite_record)
+    print(f"复合规则最终等级: {composite_result.final_level.value}")
+    print(f"复合规则标签: {[str(tag) for tag in composite_result.aggregated_tags]}")
+
+    # 9. 三层引擎调用（若模型/依赖缺失会自动降级，不会报错）
     print_section("三层引擎调用（自动降级）")
     layer_params = {
         "enableSmallNer": True,
@@ -132,7 +144,70 @@ def main() -> None:
     if layer_result.needs_human_review:
         print("注意：该结果建议人工复核。")
 
-    # 9. 输出审计信息示例
+    # 10. Layer 3 异步推理
+    print_section("Layer 3 异步推理")
+    job_id = api.submit_classify_table_async(
+        schema=["id_card", "mobile"],
+        rows=[{"id_card": "110101199001011237", "mobile": "13800138000"}],
+        params={"enableRuleEngine": True},
+    )
+    print(f"异步任务 ID: {job_id}")
+    for _ in range(10):
+        job = api.get_job_result(job_id)
+        if job.status in ("DONE", "FAILED"):
+            break
+        time.sleep(0.5)
+    print(f"异步任务状态: {job.status}")
+    if job.result:
+        print(f"异步任务结果最终等级: {job.result.table_result.final_level.value}")
+
+    # 11. Zero-Knowledge 扫描
+    print_section("Zero-Knowledge 扫描")
+    zk_result = api.classify_field(
+        "id_card",
+        "110101199001011237",
+        params={"returnFieldValues": False},
+    )
+    print(f"ZK 模式字段值: {zk_result.field_value}")
+
+    # 12. 合规模板
+    print_section("合规模板")
+    tpl_result = api.classify_record(
+        {"name": "张三", "id_card": "110101199001011237", "mobile": "13800138000"},
+        params={"template": "gbt35273"},
+    )
+    print(f"模板模式最终等级: {tpl_result.final_level.value}")
+    print(f"审计信息: {tpl_result.audit_info.model_dump(by_alias=True)}")
+
+    # 13. 影子模式
+    print_section("影子模式")
+    shadow_result = api.classify_table(
+        schema=["mobile"],
+        rows=[{"mobile": "13800138000"}],
+        params={
+            "ruleSetVersion": "1.0.0",
+            "shadowMode": True,
+            "shadowVersion": "2.0.0",
+        },
+    )
+    print(f"影子模式差异: {shadow_result.table_result.shadow_diff}")
+
+    # 14. 人工复核与导出
+    print_section("人工复核与导出")
+    review_result = api.classify_table(
+        schema=["gene_marker"],
+        rows=[{"gene_marker": "BRCA1 c.5266dupC"}],
+        params={"enableSmallNer": True},
+    )
+    review_entries = review_result.table_result.review_entries
+    if review_entries:
+        review_id = review_entries[0].review_id
+        api.confirm_review(review_id, corrected_level="L5", reviewer="operator-1")
+        print(f"已确认复核: {review_id}")
+    jsonl_data = api.export_reviews(format="jsonl", mask_input=True)
+    print(f"导出复核样本数: {len(jsonl_data.strip().split(chr(10))) if jsonl_data.strip() else 0}")
+
+    # 15. 输出审计信息示例
     print_section("审计信息")
     full_result = api.classify_json({"id_card": "110101199001011237"})
     audit = full_result.audit_info

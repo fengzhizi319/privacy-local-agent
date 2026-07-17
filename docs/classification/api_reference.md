@@ -68,7 +68,7 @@ classify_record(
 | `params` | `Optional[Dict[str, Any]]` | 否 | 请求级参数 |
 | `record_index` | `int` | 否 | 记录索引，用于输出，默认 `0` |
 
-**返回值**：`RecordClassificationResult`，聚合字段结果与标签。
+**返回值**：`RecordClassificationResult`，聚合字段结果与标签，含复合规则后处理结果。
 
 ---
 
@@ -90,7 +90,7 @@ classify_table(
 | `rows` | `List[Dict[str, Any]]` | 是 | 记录列表，每条记录是字段名到字段值的字典 |
 | `params` | `Optional[Dict[str, Any]]` | 否 | 请求级参数 |
 
-**返回值**：`TableClassificationResult`，聚合记录结果。
+**返回值**：`TableClassificationResult`，聚合记录结果，可含 `shadow_diff` 与 `review_entries`。
 
 ---
 
@@ -168,6 +168,102 @@ classify_sql_result(
 
 ---
 
+#### `classify_secretflow`
+
+```python
+classify_secretflow(
+    sf_data: Any,
+    params: Optional[Dict[str, Any]] = None,
+    party: Optional[str] = None,
+) -> ClassificationResult
+```
+
+对 SecretFlow 联邦数据结构进行分类（需安装 secretflow）。
+
+| 参数 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `sf_data` | `Any` | 是 | SecretFlow DataFrame / HDataFrame / VDataFrame / FedNdarray |
+| `params` | `Optional[Dict[str, Any]]` | 否 | 请求级参数 |
+| `party` | `Optional[str]` | 否 | HDataFrame 参与方；单一 partition 时可省略 |
+
+---
+
+#### `submit_classify_table_async`
+
+```python
+submit_classify_table_async(
+    schema: List[str],
+    rows: List[Dict[str, Any]],
+    params: Optional[Dict[str, Any]] = None,
+) -> str
+```
+
+提交异步表分类任务，返回 `job_id`。
+
+| 参数 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `schema` | `List[str]` | 是 | 列名列表 |
+| `rows` | `List[Dict[str, Any]]` | 是 | 记录列表 |
+| `params` | `Optional[Dict[str, Any]]` | 否 | 请求级参数 |
+
+---
+
+#### `get_job_result`
+
+```python
+get_job_result(
+    job_id: str,
+) -> ClassificationJob
+```
+
+查询异步任务状态与结果。
+
+| 参数 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `job_id` | `str` | 是 | 异步任务 ID |
+
+---
+
+#### `confirm_review`
+
+```python
+confirm_review(
+    review_id: str,
+    corrected_level: str,
+    reviewer: str = "",
+    comment: str = "",
+) -> ReviewEntry
+```
+
+确认或修正复核样本。
+
+| 参数 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `review_id` | `str` | 是 | 复核条目 ID |
+| `corrected_level` | `str` | 是 | 修正后的敏感度等级，如 `L3` |
+| `reviewer` | `str` | 否 | 复核人标识 |
+| `comment` | `str` | 否 | 复核说明 |
+
+---
+
+#### `export_reviews`
+
+```python
+export_reviews(
+    format: str = "jsonl",
+    mask_input: bool = False,
+) -> str
+```
+
+导出复核样本。
+
+| 参数 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `format` | `str` | 否 | `jsonl` 或 `csv` |
+| `mask_input` | `bool` | 否 | 是否对 input 字段掩码 |
+
+---
+
 ### 1.2 `ClassificationService`
 
 位置：`privacy_local_agent.classification_service.ClassificationService`
@@ -187,9 +283,14 @@ ClassificationService(
 
 | 方法 | 签名 | 说明 |
 |---|---|---|
-| `classify_field` | `classify_field(field_name, value, params=None) -> dict` | 字段分类，返回字典 |
-| `classify_record` | `classify_record(record, params=None) -> dict` | 记录分类，返回字典 |
-| `classify_table` | `classify_table(schema, rows, params=None) -> dict` | 表分类，返回字典 |
+| `classify_field` | `classify_field(field_name, value, params=None) -> dict` | 字段分类 |
+| `classify_record` | `classify_record(record, params=None) -> dict` | 记录分类 |
+| `classify_table` | `classify_table(schema, rows, params=None) -> dict` | 表分类 |
+| `classify_secretflow` | `classify_secretflow(sf_data, params=None, party=None) -> dict` | SecretFlow 分类 |
+| `submit_classify_table_async` | `submit_classify_table_async(schema, rows, params=None) -> str` | 提交异步任务 |
+| `get_job_result` | `get_job_result(job_id) -> dict` | 查询异步任务 |
+| `confirm_review` | `confirm_review(review_id, corrected_level, reviewer, comment) -> dict` | 确认复核 |
+| `export_reviews` | `export_reviews(format="jsonl", mask_input=False) -> str` | 导出复核样本 |
 
 ---
 
@@ -207,6 +308,10 @@ ClassificationService(
 | `TableClassificationResult` | 表级结果，聚合记录结果 |
 | `ClassificationResult` | 包装器，含 `recordResult` / `tableResult` + `auditInfo` |
 | `ClassificationParams` | 参数治理模型 |
+| `CompositeRule` | 复合规则定义 |
+| `ShadowDiff` | 影子模式差异 |
+| `ClassificationJob` | 异步任务状态模型 |
+| `ReviewEntry` | 复核条目模型 |
 
 ---
 
@@ -224,6 +329,12 @@ ClassificationService(
 | `publicFieldWhitelist` | `List[str]` | `public_report`, `annual_summary`, `科普` | 公开报表字段白名单 |
 | `operationalFieldPatterns` | `List[str]` | `turnover_rate`, `device_usage`, `inventory` | 运营统计字段模式 |
 | `manualOverride` | `Dict[str, SensitivityLevel]` | `{}` | 字段名 → 等级的最终覆盖 |
+| `template` | `Optional[str]` | `null` | 合规模板：`jrt0197` / `gbt35273` / `gdpr` |
+| `ruleSetVersion` | `str` | `"1.0.0"` | 当前规则集版本 |
+| `shadowMode` | `bool` | `false` | 是否启用影子模式 |
+| `shadowVersion` | `Optional[str]` | `null` | 影子规则集版本 |
+| `returnFieldValues` | `bool` | `true` | 是否在结果中返回 `fieldValue` |
+| `compositeRules` | `List[CompositeRule]` | `[]` | 请求级自定义复合规则 |
 
 ---
 
@@ -283,21 +394,6 @@ ClassificationService(
 }
 ```
 
-响应体：
-
-```json
-{
-  "result": {
-    "recordIndex": 0,
-    "fieldResults": { ... },
-    "aggregatedTags": [ ... ],
-    "finalLevel": "L4",
-    "confidence": 1.0,
-    "needsHumanReview": false
-  }
-}
-```
-
 ### POST `/v1/privacy/classify/table`
 
 请求体：
@@ -316,18 +412,94 @@ ClassificationService(
 }
 ```
 
+### POST `/v1/privacy/classify/table/async`
+
+提交异步表分类任务。
+
+请求体：
+
+```json
+{
+  "schema": ["id_card", "mobile", "diagnosis"],
+  "rows": [
+    {
+      "id_card": "110101199001011237",
+      "mobile": "13800138000",
+      "diagnosis": "B21.1"
+    }
+  ],
+  "params": {"enable_llm": true}
+}
+```
+
 响应体：
 
 ```json
 {
-  "result": {
-    "schema": ["id_card", "mobile", "diagnosis"],
-    "recordResults": [ ... ],
-    "aggregatedTags": [ ... ],
-    "finalLevel": "L4",
-    "confidence": 1.0,
-    "needsHumanReview": false
-  }
+  "job_id": "cls-018f-4c2a-9e3b",
+  "status": "PENDING",
+  "created_at": "2026-07-17T10:00:00Z"
+}
+```
+
+### GET `/v1/privacy/classify/jobs/{job_id}`
+
+响应体：
+
+```json
+{
+  "job_id": "cls-018f-4c2a-9e3b",
+  "status": "DONE",
+  "result": { ... },
+  "error": null,
+  "created_at": "2026-07-17T10:00:00Z",
+  "finished_at": "2026-07-17T10:00:05Z"
+}
+```
+
+### POST `/v1/privacy/classify/secretflow`
+
+请求体：
+
+```json
+{
+  "party": "alice",
+  "params_json": "{\"enable_rule_engine\": true}",
+  "data_json": "..."
+}
+```
+
+> SecretFlow REST 接口接受序列化后的数据表示；gRPC 使用专用消息结构。
+
+### POST `/v1/privacy/classify/review/confirm`
+
+请求体：
+
+```json
+{
+  "review_id": "review-001",
+  "corrected_level": "L5",
+  "reviewer": "operator-1",
+  "comment": "确认为基因组合敏感数据"
+}
+```
+
+### POST `/v1/privacy/classify/review/export`
+
+请求体：
+
+```json
+{
+  "format": "jsonl",
+  "mask_input": true
+}
+```
+
+响应体：
+
+```json
+{
+  "data": "{\"input\":\"brca1_status|***\",...}\n..."
 }
 ```
 
@@ -342,6 +514,11 @@ ClassificationService(
 | `ClassifyField` | `ClassifyFieldRequest` | `ClassifyFieldResponse` | 单字段分类 |
 | `ClassifyRecord` | `ClassifyRecordRequest` | `ClassifyRecordResponse` | 单条记录分类 |
 | `ClassifyTable` | `ClassifyTableRequest` | `ClassifyTableResponse` | 整张表分类 |
+| `ClassifyTableAsync` | `ClassifyTableAsyncRequest` | `ClassifyTableAsyncResponse` | 提交异步表分类任务 |
+| `GetClassificationJob` | `GetClassificationJobRequest` | `GetClassificationJobResponse` | 查询异步任务结果 |
+| `ClassifySecretFlow` | `ClassifySecretFlowRequest` | `ClassifySecretFlowResponse` | SecretFlow 分类 |
+| `ConfirmReview` | `ConfirmReviewRequest` | `ConfirmReviewResponse` | 确认复核 |
+| `ExportReviews` | `ExportReviewsRequest` | `ExportReviewsResponse` | 导出复核样本 |
 
 ### `ClassifyFieldRequest` 字段
 
@@ -384,6 +561,55 @@ ClassificationService(
 |---|---|---|
 | `result_json` | `string` | JSON 序列化的表分类结果 |
 
+### `ClassifyTableAsyncRequest` / `ClassifyTableAsyncResponse` 字段
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `schema` | `repeated string` | 列名列表 |
+| `rows` | `repeated RecordEntry` | 记录列表 |
+| `params_json` | `string` | 请求参数 |
+| `job_id` | `string` | 任务 ID |
+| `status` | `string` | 任务状态 |
+| `created_at` | `string` | 创建时间 |
+
+### `GetClassificationJobRequest` / `GetClassificationJobResponse` 字段
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `job_id` | `string` | 任务 ID |
+| `status` | `string` | 任务状态 |
+| `result_json` | `string` | 结果 JSON |
+| `error` | `string` | 错误信息 |
+| `created_at` | `string` | 创建时间 |
+| `finished_at` | `string` | 完成时间 |
+
+### `ClassifySecretFlowRequest` / `ClassifySecretFlowResponse` 字段
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `party` | `string` | 参与方 |
+| `params_json` | `string` | 请求参数 |
+| `data_json` | `string` | SecretFlow 数据序列化表示 |
+| `result_json` | `string` | 结果 JSON |
+
+### `ConfirmReviewRequest` / `ConfirmReviewResponse` 字段
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `review_id` | `string` | 复核条目 ID |
+| `corrected_level` | `string` | 修正等级 |
+| `reviewer` | `string` | 复核人 |
+| `comment` | `string` | 说明 |
+| `result_json` | `string` | 结果 JSON |
+
+### `ExportReviewsRequest` / `ExportReviewsResponse` 字段
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `format` | `string` | `jsonl` / `csv` |
+| `mask_input` | `bool` | 是否掩码 |
+| `data` | `string` | 导出内容 |
+
 ### gRPC 调用示例
 
 ```python
@@ -414,5 +640,8 @@ print(result["finalLevel"])  # L3
 | `ValueError: JSON input must be a dict or a list of dicts` | `classify_json` 输入既不是 dict 也不是 list | 400 | `INVALID_ARGUMENT` |
 | `TypeError: classify_dataframe expects a pandas.DataFrame` | `classify_dataframe` 传入非 DataFrame | 400 | `INVALID_ARGUMENT` |
 | `TypeError: classify_arrow expects a pyarrow.Table` | `classify_arrow` 传入非 Arrow Table | 400 | `INVALID_ARGUMENT` |
+| `ImportError: secretflow is required ...` | `classify_secretflow` 缺少 SecretFlow | 400 | `FAILED_PRECONDITION` |
 | `ValueError: invalid sensitivity level: ...` | `parse_level` 收到非法等级字符串 | 400 | `INVALID_ARGUMENT` |
+| `RuntimeError: async job queue is full` | 异步任务超过最大并发数 | 429 | `RESOURCE_EXHAUSTED` |
+| `KeyError: job not found` | 查询不存在的异步任务 ID | 404 | `NOT_FOUND` |
 | 模型加载失败 | 缺少 ONNX / torch / transformers 等依赖 | 正常降级为 No-Op | 正常降级 |
