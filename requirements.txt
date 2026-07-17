@@ -12,3 +12,8 @@ python-json-logger>=2.0.7
 prometheus-client>=0.20.0
 numpy>=1.24.0
 pytest>=8.0.0
+
+# Documentation (MkDocs + Material)
+mkdocs>=1.6.0
+mkdocs-material>=9.5.0
+mkdocs-minify-plugin>=0.8.0

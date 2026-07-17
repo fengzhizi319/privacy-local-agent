@@ -1,0 +1,23 @@
+[book]
+authors = ["Privacy Local Agent Team"]
+language = "zh-CN"
+multilingual = false
+src = "src"
+title = "Privacy Local Agent Book"
+
+[preprocessor]
+
+[preprocessor.mermaid]
+command = "mdbook-mermaid"
+
+[preprocessor.admonish]
+command = "mdbook-admonish"
+assets_version = "3.1.0"
+
+[output.html]
+default-theme = "ayu"
+preferred-dark-theme = "ayu"
+git-repository-url = "https://github.com/your-org/privacy-local-agent"
+edit-url-template = "https://github.com/your-org/privacy-local-agent/edit/main/book/{path}"
+additional-js = ["mermaid.min.js", "mermaid-init.js"]
+additional-css = ["./mdbook-admonish.css"]

@@ -27,3 +27,6 @@ Thumbs.db
 # Local tooling
 .bin/
 
+
+# MkDocs build output
+site/

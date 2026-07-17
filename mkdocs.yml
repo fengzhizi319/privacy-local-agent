@@ -1,0 +1,166 @@
+site_name: Privacy Local Agent
+site_description: Privacy primitives and data classification sidecar
+repo_url: https://github.com/your-org/privacy-local-agent
+edit_uri: edit/main/docs/
+
+theme:
+  name: material
+  language: zh
+  palette:
+    - scheme: slate
+      primary: indigo
+      accent: light blue
+      toggle:
+        icon: material/brightness-4
+        name: 切换到亮色模式
+    - scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-7
+        name: 切换到暗色模式
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.expand
+    - navigation.top
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - content.action.edit
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.tasklist:
+      custom_checkbox: true
+  - tables
+  - toc:
+      permalink: true
+  - attr_list
+  - md_in_html
+
+plugins:
+  - search:
+      lang:
+        - zh
+        - en
+  - minify:
+      minify_html: true
+
+docs_dir: docs
+
+nav:
+  - 首页: index.md
+  - 快速开始: quickstart.md
+
+  - 隐私原语:
+    - 数据脱敏 Masking:
+      - 概览: masking/README.md
+      - 架构设计: masking/design.md
+      - API 参考: masking/api_reference.md
+      - 使用示例: masking/examples.md
+      - 运维指南: masking/ops.md
+      - 需求文档: masking/prd.md
+      - 测试指南: masking/testing.md
+    - 差分隐私 DP:
+      - 概览: dp/README.md
+      - 架构设计: dp/design.md
+      - API 参考: dp/api_reference.md
+      - 使用示例: dp/examples.md
+      - 运维指南: dp/ops.md
+      - 需求文档: dp/prd.md
+      - 测试指南: dp/testing.md
+    - K-匿名:
+      - 概览: k_anonymity/README.md
+      - 架构设计: k_anonymity/design.md
+      - API 参考: k_anonymity/api_reference.md
+      - 使用示例: k_anonymity/examples.md
+      - 运维指南: k_anonymity/ops.md
+      - 需求文档: k_anonymity/prd.md
+      - 测试指南: k_anonymity/testing.md
+    - 查询混淆 QoL:
+      - 概览: qol/README.md
+      - 架构设计: qol/design.md
+      - 使用示例: qol/examples.md
+      - 运维指南: qol/ops.md
+      - 需求文档: qol/prd.md
+      - 测试指南: qol/testing.md
+
+  - 数据分类:
+    - 分类概览（规则引擎）:
+      - 概览: classification/README.md
+      - 三层漏斗架构: classification/design.md
+      - API 参考: classification/api_reference.md
+      - 使用示例: classification/examples.md
+      - 性能基准: classification/performance.md
+      - 运维指南: classification/ops.md
+      - 需求文档: classification/prd.md
+      - 测试指南: classification/testing.md
+    - LLM/VLM 分类:
+      - 概览: classification_llm/README.md
+      - 架构设计: classification_llm/design.md
+      - API 参考: classification_llm/api_reference.md
+      - 使用示例: classification_llm/examples.md
+      - 运维指南: classification_llm/ops.md
+      - 需求文档: classification_llm/prd.md
+      - 测试指南: classification_llm/testing.md
+    - NER 命名实体识别:
+      - 概览: classification_ner/README.md
+      - 架构设计: classification_ner/design.md
+      - API 参考: classification_ner/api_reference.md
+      - 使用示例: classification_ner/examples.md
+      - 运维指南: classification_ner/ops.md
+      - 需求文档: classification_ner/prd.md
+      - 测试指南: classification_ner/testing.md
+
+  - 基础设施:
+    - 网关与负载均衡:
+      - 概览: gateway_balancer/README.md
+      - 架构设计: gateway_balancer/design.md
+      - API 参考: gateway_balancer/api_reference.md
+      - 优化策略: gateway_balancer/optimizations.md
+      - 使用示例: gateway_balancer/examples.md
+      - 运维指南: gateway_balancer/ops.md
+      - 需求文档: gateway_balancer/prd.md
+      - 测试指南: gateway_balancer/testing.md
+
+  - 生产部署:
+    - 安全 TLS/Auth/Rate Limit:
+      - 概览: production_security/README.md
+      - 架构设计: production_security/design.md
+      - API 参考: production_security/api_reference.md
+      - 使用示例: production_security/examples.md
+      - 运维指南: production_security/ops.md
+      - 需求文档: production_security/prd.md
+      - 测试指南: production_security/testing.md
+    - 可观测性:
+      - 概览: production_observability/README.md
+      - 架构设计: production_observability/design.md
+      - API 参考: production_observability/api_reference.md
+      - 使用示例: production_observability/examples.md
+      - 运维指南: production_observability/ops.md
+      - 需求文档: production_observability/prd.md
+      - 测试指南: production_observability/testing.md
+    - 部署 K8s/Helm/Docker:
+      - 概览: deployment/README.md
+      - 架构设计: deployment/design.md
+      - 使用示例: deployment/examples.md
+      - 运维指南: deployment/ops.md
+      - 需求文档: deployment/prd.md
+      - 测试指南: deployment/testing.md
+
+  - 附录:
+    - 个性化配置: personalized_profiles.md
+    - 生产改进建议: production_improvements.md

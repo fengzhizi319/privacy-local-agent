@@ -207,6 +207,26 @@ PYTHONPATH=. pytest tests -q
 
 ## 文档
 
+### 文档书 (Documentation Book)
+
+项目提供基于 **MkDocs + Material** 的在线文档书，支持导航、搜索、暗色模式和 Mermaid 图表。
+
+```bash
+# 安装依赖
+pip install mkdocs mkdocs-material mkdocs-minify-plugin
+
+# 本地预览（热重载，浏览器自动打开 http://127.0.0.1:8000）
+make docs-serve
+
+# 构建静态站点（输出到 site/index.html，使用浏览器打开index.html即可）
+make docs-build
+
+# 清理构建产物
+make docs-clean
+```
+
+> 构建完成后可通过 `cd site && python3 -m http.server 8000` 启动本地服务器预览。
+
 ### 处理原语
 
 - [PRD 产品需求文档](./docs/prd.md)

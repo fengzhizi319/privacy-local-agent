@@ -75,6 +75,8 @@ privacy-local-agent/
 │       └── grpc_proxy.py
 ├── proto/privacy.proto            # gRPC service definition
 ├── tests/                         # pytest suite
+├── mkdocs.yml                       # MkDocs + Material configuration
+
 ├── docs/                          # Chinese design/PRD/ops docs
 ├── deploy/                        # Helm, K8s, Docker Compose
 │   ├── helm/
@@ -324,5 +326,7 @@ Address these before any hardened production deployment.
 | Run REST + gRPC | `python -m privacy_local_agent.server` |
 | Run gateway | `python -m privacy_local_agent.gateway.server` |
 | Regenerate gRPC stubs | `python -m grpc_tools.protoc -I proto --python_out=. --grpc_python_out=. proto/privacy.proto` |
+| Build docs | `make docs-build` |
+| Serve docs | `make docs-serve` |
 | Download LLM | `python -m privacy_local_agent.privacy.download_model` |
 | Download NER | `python -m privacy_local_agent.privacy.download_ner_model` |
