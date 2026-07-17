@@ -71,6 +71,13 @@ AUTH_DENIALS_TOTAL = Counter(
     ["reason"],
 )
 
+# Request/response traffic in bytes.
+TRAFFIC_BYTES_TOTAL = Counter(
+    "privacy_traffic_bytes_total",
+    "Total request/response traffic in bytes.",
+    ["method", "path", "direction"],
+)
+
 
 def make_asgi_app() -> Any:
     """Return the Prometheus metrics ASGI application to mount on FastAPI."""

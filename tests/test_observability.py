@@ -108,3 +108,40 @@ def test_auth_denial_metric_recorded(monkeypatch):
 
     metrics = client.get("/metrics").text
     assert 'privacy_auth_denials_total{reason="unauthenticated"}' in metrics
+
+
+def test_traffic_metrics_recorded():
+    """调用业务接口后 /metrics 应包含请求与响应流量指标。"""
+    response = client.post(
+        "/v1/privacy/mask",
+        json={"field_name": "mobile", "value": "13812345678"},
+    )
+    assert response.status_code == 200
+
+    metrics = client.get("/metrics").text
+    assert (
+        'privacy_traffic_bytes_total{direction="request",method="POST",path="/v1/privacy/mask"}'
+        in metrics
+    )
+    assert (
+        'privacy_traffic_bytes_total{direction="response",method="POST",path="/v1/privacy/mask"}'
+        in metrics
+    )
+
+
+def test_traffic_request_size_positive():
+    """请求体越大，request traffic 指标累计值应越大。"""
+    import privacy_local_agent.observability.metrics as metrics_module
+
+    counter = metrics_module.TRAFFIC_BYTES_TOTAL.labels(
+        method="POST", path="/v1/privacy/mask", direction="request"
+    )
+    before = counter._value.get()
+
+    client.post(
+        "/v1/privacy/mask",
+        json={"field_name": "mobile", "value": "13812345678"},
+    )
+
+    after = counter._value.get()
+    assert after > before

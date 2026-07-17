@@ -90,8 +90,32 @@ logger = get_logger(__name__)
 | `privacy_budget_remaining` | Gauge | namespace, budget_type | 剩余预算 |
 | `privacy_classification_total` | Counter | final_level, layer | 分类结果数 |
 | `privacy_auth_denials_total` | Counter | reason | 认证/鉴权/限速拒绝数 |
+| `privacy_traffic_bytes_total` | Counter | method, path, direction | REST/gRPC 请求/响应流量字节数（direction=request/response） |
 
 REST：`/metrics` 通过 `prometheus_client.make_asgi_app()` 挂载到 FastAPI。gRPC 拦截器内更新 Counter/Histogram，`/metrics` 仍通过 REST 端口暴露。
+
+### 5.1 流量监控
+
+`privacy_traffic_bytes_total` 用于监控进出 sidecar 的网络流量，便于：
+
+- 发现异常大请求（如一次性传入上亿条记录的列表）。
+- 评估网关/Worker 带宽压力。
+- 按接口维度分析流量分布。
+
+REST 中间件在 `call_next` 前读取 `request.body()` 统计请求大小，从响应头 `content-length` 或 `response.body` 统计响应大小；gRPC 拦截器对 unary 消息调用 `ByteSize()` 统计请求/响应字节数，stream 场景暂时按 0 统计（避免阻塞 iterator）。
+
+**使用示例**：
+
+```promql
+# 每秒入站流量（按接口）
+rate(privacy_traffic_bytes_total{direction="request"}[1m])
+
+# 每秒出站流量
+rate(privacy_traffic_bytes_total{direction="response"}[1m])
+
+# 大流量接口 Top 10
+sum by (path) (rate(privacy_traffic_bytes_total[5m])) > 1e6
+```
 
 ## 6. Tracing 设计
 

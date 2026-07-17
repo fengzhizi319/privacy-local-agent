@@ -21,7 +21,7 @@
 ### 文本格式（默认）
 
 ```text
-2026-07-11 14:30:27,123 [INFO] privacy_local_agent.main: POST /v1/privacy/mask 200 1.2ms request_id=abc identity=portal
+2026-07-11 14:30:27,123 [INFO] privacy_local_agent.main: POST /v1/privacy/mask 200 1.2ms request=45B response=32B request_id=abc identity=portal
 ```
 
 ### JSON 格式
@@ -86,6 +86,9 @@ spec:
 | DP 查询速率 | `sum(rate(privacy_dp_queries_total[1m])) by (mechanism)` |
 | 剩余预算 | `privacy_budget_remaining` |
 | 拒绝事件 | `sum(rate(privacy_auth_denials_total[1m])) by (reason)` |
+| 入站流量 | `sum(rate(privacy_traffic_bytes_total{direction="request"}[1m])) by (path)` |
+| 出站流量 | `sum(rate(privacy_traffic_bytes_total{direction="response"}[1m])) by (path)` |
+| 大流量接口 | `sum by (path) (rate(privacy_traffic_bytes_total[5m])) > 1e6` |
 
 ---
 

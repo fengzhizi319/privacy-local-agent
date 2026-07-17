@@ -114,6 +114,7 @@ class TestDPBudget:
 
     def test_laplace_consumes_epsilon_only(self) -> None:
         ns = "test-budget-laplace"
+        BudgetAccountant._instances.pop(ns, None)
         api = DPApi(namespace=ns)
         accountant = BudgetAccountant(ns, epsilon_total=10.0, delta_total=1e-4)
         api.sum([1.0, 2.0], epsilon=1.0, mechanism="laplace", clip_lower=0.0, clip_upper=10.0)
@@ -123,6 +124,7 @@ class TestDPBudget:
 
     def test_gaussian_consumes_delta(self) -> None:
         ns = "test-budget-gaussian"
+        BudgetAccountant._instances.pop(ns, None)
         api = DPApi(namespace=ns)
         accountant = BudgetAccountant(ns, epsilon_total=10.0, delta_total=1e-4)
         api.sum(
@@ -139,6 +141,7 @@ class TestDPBudget:
 
     def test_mean_composition_consumes_full_budget(self) -> None:
         ns = "test-budget-mean"
+        BudgetAccountant._instances.pop(ns, None)
         api = DPApi(namespace=ns)
         accountant = BudgetAccountant(ns, epsilon_total=10.0, delta_total=1e-4)
         api.mean(
@@ -157,6 +160,7 @@ class TestDPBudget:
 
     def test_exhausted_budget_raises(self) -> None:
         ns = "test-budget-exhaust"
+        BudgetAccountant._instances.pop(ns, None)
         # 先创建 BudgetAccountant 以指定较小总预算；DPApi 会复用该单例。
         BudgetAccountant(ns, epsilon_total=0.5, delta_total=1e-4)
         api = DPApi(namespace=ns)

@@ -16,7 +16,7 @@ from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoin
 
 from .context import RequestContext, get_request_context, set_request_context
 from .logging_config import get_logger
-from .metrics import REQUESTS_TOTAL, REQUEST_DURATION
+from .metrics import REQUESTS_TOTAL, REQUEST_DURATION, TRAFFIC_BYTES_TOTAL
 
 logger = get_logger(__name__)
 
@@ -63,9 +63,24 @@ class ObservabilityMiddleware(BaseHTTPMiddleware):
 
         start = time.perf_counter()
         status_code = 500
+        request_size = 0
         try:
+            # 读取请求体以统计流量；FastAPI Request 会缓存 body，后续仍可读取。
+            try:
+                request_size = len(await request.body())
+            except Exception:
+                request_size = 0
+
             response = await call_next(request)
             status_code = response.status_code
+
+            # 从响应头读取内容长度；若不存在则尝试读取响应体。
+            response_size = int(response.headers.get("content-length", 0))
+            if response_size == 0:
+                try:
+                    response_size = len(getattr(response, "body", b""))
+                except Exception:
+                    response_size = 0
 
             # Try to enrich the log with the authenticated identity.
             identity: Any = getattr(request.state, "identity", None)
@@ -82,13 +97,17 @@ class ObservabilityMiddleware(BaseHTTPMiddleware):
             duration = time.perf_counter() - start
             REQUESTS_TOTAL.labels(method=method, path=path, status=str(status_code)).inc()
             REQUEST_DURATION.labels(method=method, path=path).observe(duration)
+            TRAFFIC_BYTES_TOTAL.labels(method=method, path=path, direction="request").inc(request_size)
+            TRAFFIC_BYTES_TOTAL.labels(method=method, path=path, direction="response").inc(response_size)
 
             logger.info(
-                "%s %s %s %.3fms identity=%s",
+                "%s %s %s %.3fms request=%dB response=%dB identity=%s",
                 method,
                 path,
                 status_code,
                 duration * 1000,
+                request_size,
+                response_size,
                 identity_name or "anonymous",
             )
 
@@ -98,11 +117,13 @@ class ObservabilityMiddleware(BaseHTTPMiddleware):
             duration = time.perf_counter() - start
             REQUESTS_TOTAL.labels(method=method, path=path, status="500").inc()
             REQUEST_DURATION.labels(method=method, path=path).observe(duration)
+            TRAFFIC_BYTES_TOTAL.labels(method=method, path=path, direction="request").inc(request_size)
             logger.exception(
-                "%s %s 500 %.3fms error=%s",
+                "%s %s 500 %.3fms request=%dB error=%s",
                 method,
                 path,
                 duration * 1000,
+                request_size,
                 exc,
             )
             raise
@@ -114,6 +135,18 @@ def _grpc_status(context: grpc.ServicerContext) -> str:
     if code is None:
         return "OK"
     return code.name
+
+
+def _message_size(message: Any) -> int:
+    """尝试获取 protobuf 消息的字节大小；不支持时返回 0。"""
+    if message is None:
+        return 0
+    if hasattr(message, "ByteSize"):
+        try:
+            return int(message.ByteSize())
+        except Exception:
+            return 0
+    return 0
 
 
 def _wrap_unary_unary(
@@ -130,10 +163,14 @@ def _wrap_unary_unary(
             RequestContext(request_id=request_id, method="gRPC", path=method)
         )
         start = time.perf_counter()
+        request_size = _message_size(request)
+        response = None
         try:
-            return handler(request, context)
+            response = handler(request, context)
+            return response
         finally:
-            _observe_grpc(context, method, start)
+            response_size = _message_size(response)
+            _observe_grpc(context, method, start, request_size, response_size)
 
     return grpc.unary_unary_rpc_method_handler(
         _wrapper,
@@ -156,10 +193,11 @@ def _wrap_unary_stream(
             RequestContext(request_id=request_id, method="gRPC", path=method)
         )
         start = time.perf_counter()
+        request_size = _message_size(request)
         try:
             return handler(request, context)
         finally:
-            _observe_grpc(context, method, start)
+            _observe_grpc(context, method, start, request_size, 0)
 
     return grpc.unary_stream_rpc_method_handler(
         _wrapper,
@@ -182,10 +220,13 @@ def _wrap_stream_unary(
             RequestContext(request_id=request_id, method="gRPC", path=method)
         )
         start = time.perf_counter()
+        response = None
         try:
-            return handler(request_iterator, context)
+            response = handler(request_iterator, context)
+            return response
         finally:
-            _observe_grpc(context, method, start)
+            response_size = _message_size(response)
+            _observe_grpc(context, method, start, 0, response_size)
 
     return grpc.stream_unary_rpc_method_handler(
         _wrapper,
@@ -211,7 +252,7 @@ def _wrap_stream_stream(
         try:
             return handler(request_iterator, context)
         finally:
-            _observe_grpc(context, method, start)
+            _observe_grpc(context, method, start, 0, 0)
 
     return grpc.stream_stream_rpc_method_handler(
         _wrapper,
@@ -220,17 +261,27 @@ def _wrap_stream_stream(
     )
 
 
-def _observe_grpc(context: grpc.ServicerContext, method: str, start: float) -> None:
+def _observe_grpc(
+    context: grpc.ServicerContext,
+    method: str,
+    start: float,
+    request_size: int = 0,
+    response_size: int = 0,
+) -> None:
     """Record gRPC access log and metrics."""
     duration = time.perf_counter() - start
     status = _grpc_status(context)
     REQUESTS_TOTAL.labels(method="gRPC", path=method, status=status).inc()
     REQUEST_DURATION.labels(method="gRPC", path=method).observe(duration)
+    TRAFFIC_BYTES_TOTAL.labels(method="gRPC", path=method, direction="request").inc(request_size)
+    TRAFFIC_BYTES_TOTAL.labels(method="gRPC", path=method, direction="response").inc(response_size)
     logger.info(
-        "gRPC %s %s %.3fms",
+        "gRPC %s %s %.3fms request=%dB response=%dB",
         method,
         status,
         duration * 1000,
+        request_size,
+        response_size,
     )
 
 
