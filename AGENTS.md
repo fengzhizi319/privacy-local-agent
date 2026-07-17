@@ -158,6 +158,10 @@ Key environment variables:
 | `PRIVACY_TLS_ENABLED` | `false` | Enable TLS on REST/gRPC |
 | `PRIVACY_AUTH_ENABLED` | `false` | Enable API key auth |
 | `PRIVACY_RATE_LIMIT_ENABLED` | `false` | Enable rate limiting |
+| `PRIVACY_REVIEW_DB` | — | SQLite DB path for classification review store |
+| `PRIVACY_ASYNC_MAX_WORKERS` | `4` | Thread pool size for async classification jobs |
+| `PRIVACY_ASYNC_JOB_TTL_SECONDS` | `3600` | TTL for async classification jobs |
+| `PRIVACY_ASYNC_MAX_JOBS` | `1000` | Max concurrent async classification jobs |
 
 ## 7. Code Conventions
 
@@ -183,12 +187,35 @@ Key environment variables:
    python -m grpc_tools.protoc -I proto --python_out=. --grpc_python_out=. proto/privacy.proto
    ```
 
-## 9. Adding a Classification Rule
+## 9. Adding a Classification Rule / Template / Composite Rule
 
-1. Add rule logic in `privacy_local_agent/privacy/classification.py`.
+### 9.1 Adding a Layer-1 Rule
+
+1. Add rule logic in `privacy_local_agent/privacy/classification.py` (`DefaultRuleEngine`).
 2. Update `ClassificationResult` models if new output fields are needed.
 3. Add a test case in `tests/test_classification.py`.
 4. Document the rule in `docs/classification/testing.md`.
+
+### 9.2 Adding a Compliance Template
+
+1. Define template defaults in `privacy_local_agent/privacy/classification_templates.py`.
+2. If the template requires new field-name rules, add them in `DefaultRuleEngine._apply_template_field_rules`.
+3. Add a test in `tests/test_classification_templates.py`.
+4. Document the template in `docs/classification/prd.md` and `docs/classification/design.md`.
+
+### 9.3 Adding a Composite Rule
+
+1. Add the rule to `CompositeRuleEngine.DEFAULT_RULES` in `privacy_local_agent/privacy/classification_composite.py`,
+   or pass it via the `compositeRules` request parameter.
+2. Add a test in `tests/test_classification_composite.py`.
+3. Document the rule in `docs/classification/design.md`.
+
+### 9.4 Extending Async / Review APIs
+
+1. Core logic lives in `privacy_local_agent/privacy/classification_async.py` and `privacy_local_agent/privacy/classification_review.py`.
+2. Expose new methods via `ClassificationService` and REST/gRPC routes.
+3. Update `proto/privacy.proto` and regenerate stubs when adding gRPC methods.
+4. Add tests in `tests/test_classification_async.py` and `tests/test_classification_review.py`.
 
 ## 10. Testing Guidelines
 

@@ -313,6 +313,9 @@ class DefaultRuleEngine(RuleEngine):
                 )
             )
 
+        # 合规模板扩展字段名规则
+        tags.extend(self._apply_template_field_rules(norm_name, params))
+
         # 白名单与运营统计字段（按字段名匹配，与测试用例一致）
         norm_public_whitelist = [_normalize_field_name(kw) for kw in params.public_field_whitelist]
         if any(kw in norm_name for kw in norm_public_whitelist):
@@ -337,6 +340,52 @@ class DefaultRuleEngine(RuleEngine):
             )
 
         return _unique_tags(tags)
+
+    def _apply_template_field_rules(
+        self, norm_name: str, params: ClassificationParams
+    ) -> List[SecurityTag]:
+        """根据合规模板扩展字段名规则。"""
+        tags: List[SecurityTag] = []
+        template = params.template
+        if not template:
+            return tags
+
+        template = str(template).lower()
+
+        if template == "jrt0197":
+            if any(kw in norm_name for kw in ("bankcard", "bankcard", "cardno", "credit", "transaction", "asset", "balance", "account")):
+                tags.append(
+                    SecurityTag(
+                        level=SensitivityLevel.L4,
+                        category="FINANCE_ACCOUNT",
+                        source_engine="RULE",
+                        rule_id="RULE_ID_JRT_001",
+                    )
+                )
+
+        if template in ("gbt35273", "gdpr"):
+            if any(kw in norm_name for kw in ("email", "address", "location", "轨迹")):
+                tags.append(
+                    SecurityTag(
+                        level=SensitivityLevel.L3,
+                        category="PII_CONTACT_LOCATION",
+                        source_engine="RULE",
+                        rule_id="RULE_ID_GBT_001",
+                    )
+                )
+
+        if template == "gdpr":
+            if any(kw in norm_name for kw in ("biometric", "fingerprint", "face", "health", "genetic", "race", "ethnicity", "political", "religion", "sexual")):
+                tags.append(
+                    SecurityTag(
+                        level=SensitivityLevel.L4,
+                        category="GDPR_SPECIAL_CATEGORY",
+                        source_engine="RULE",
+                        rule_id="RULE_ID_GDPR_001",
+                    )
+                )
+
+        return tags
 
 
 # ---------------------------------------------------------------------------
@@ -773,7 +822,11 @@ class ClassificationAPI:
 
         shadow_diff: List[ShadowDiff] = []
         if cp.shadow_mode and cp.shadow_version:
-            shadow_params = dict(params) if params else {}
+            shadow_keys = {
+                "shadow_mode", "shadowMode", "shadow_version", "shadowVersion",
+                "rule_set_version", "ruleSetVersion",
+            }
+            shadow_params = {k: v for k, v in (params or {}).items() if k not in shadow_keys}
             shadow_params["rule_set_version"] = cp.shadow_version
             shadow_params["shadow_mode"] = False
             shadow_result = self.classify_table(schema, rows, shadow_params)
