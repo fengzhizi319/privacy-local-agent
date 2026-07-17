@@ -1085,7 +1085,7 @@ $$\approx 4.48$$
 - Gaussian 机制下 `delta` 必须大于 0。
 - **NumPy 依赖**：clip 操作优先使用 NumPy（`numpy>=1.24.0` 为核心依赖）；若 NumPy 不可用或转换失败，自动回退到纯 Python，保证核心功能可用。
 - **SecretFlow 可选依赖**：SecretFlow 相关数据适配为可选能力，未安装时不影响 list/NumPy/pandas 输入。
-- **浮点数安全（Mironov 攻击）**：当前实现使用 Python `float` 与标准伪随机数生成器（`random.Random`）进行连续 Laplace/Gaussian 采样。由于浮点数表示的不连续性，理论上攻击者可能通过观察输出浮点值的最低有效位推断部分信息（Mironov, 2012）。对于 POC/MVP 场景该风险可接受；若需高安全保证，应迁移到离散拉普拉斯/离散高斯机制，或使用具备 snapping mechanism 的专业库。
+- **浮点数与随机数安全**：当前采样噪声已升级为密码学安全的随机数生成器（CSRPNG，通过 `SecureRandom` 包装 `secrets.SystemRandom`），防止攻击者通过多次查询收集的样本还原生成器状态；同时保留了测试模式下 `.seed()` 调用的确定性兼容。针对浮点数表示缺陷引起的物理泄漏风险（Mironov, 2012），可考虑后续集成 discrete Laplace 或 snapping 机制。
 
 ## 9. 测试策略
 

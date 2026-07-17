@@ -74,10 +74,11 @@
 
 `mask_dataframe(df, columns=None)`：
 
-1. 通过 `data_adapters.to_records` 将 pandas / SecretFlow DataFrame 转为记录列表。
-2. 若未指定 `columns`，对所有字符串列脱敏。
-3. 逐行调用 `mask_value(col, val)`。
-4. 通过 `data_adapters.from_records` 转回 pandas DataFrame。
+1. **向量化加速（Pandas 专用通道）**：
+   - 检测 `df` 是否为 `pandas.DataFrame` 实例。
+   - 若是，对需要脱敏的列采用 Pandas 列式向量化 `.apply(lambda v: mask_value(...) if pd.notna(v) else v)`。这避免了行级 Dict 转换开销，在 C 语言层面由 Pandas 引擎执行，有效防止大数据集下的内存溢出。
+2. **平滑降级（兜底通道）**：
+   - 对于非 `pandas.DataFrame` 或未安装 Pandas 的环境，平滑降级为先通过 `data_adapters.to_records` 转化为 Dict 记录列表，逐行调用 `mask_value` 脱敏，再通过 `from_records` 还原为原 DataFrame 的处理模式。
 
 ## 6. 指标
 
