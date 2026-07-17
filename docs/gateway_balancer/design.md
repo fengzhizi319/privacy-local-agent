@@ -83,6 +83,7 @@ async def proxy_http(path: str, request: Request): ...
 - 通用私有方法 `_forward(method_name, request, context)`。
 - 通过 `getattr(node.grpc_stub, method_name)` 动态反射调用。
 - 捕获 `grpc.RpcError` 并通过 `context.abort()` 回传。
+- **泛化转发**：初始化时自动为 `PrivacyService` 中的所有 RPC 方法绑定转发函数，无需为每个接口手写代理方法。`privacy.proto` 新增方法后，只要重新生成 Python 存根，网关即可自动转发。
 
 ## 5. 负载均衡算法
 

@@ -56,10 +56,16 @@ privacy-local-agent/
 │   │   ├── qol.py
 │   │   ├── budget.py
 │   │   ├── profile.py
-│   │   ├── classification.py
-│   │   ├── classification_models.py
-│   │   ├── classification_ner.py
-│   │   ├── classification_llm.py
+│   │   ├── classification.py              # Public API entry (ClassificationAPI)
+│   │   ├── classification_models.py       # Pydantic models + abstract base classes
+│   │   ├── classification_rule_engine.py  # Default rule engine + rule utilities
+│   │   ├── classification_vectorized.py   # Optional pandas-based vectorized rule engine
+│   │   ├── classification_utils.py        # ZK helpers + templates + SecretFlow adapter
+│   │   ├── classification_composite.py    # Composite / context-aware rules
+│   │   ├── classification_async.py        # Async classification jobs
+│   │   ├── classification_review.py       # Human review store + export
+│   │   ├── classification_ner.py          # Small-NER engines
+│   │   ├── classification_llm.py          # Local LLM/VLM classifier
 │   │   ├── download_model.py
 │   │   └── download_ner_model.py
 │   └── gateway/                   # Optional gateway/load balancer
@@ -159,6 +165,7 @@ Key environment variables:
 | `PRIVACY_AUTH_ENABLED` | `false` | Enable API key auth |
 | `PRIVACY_RATE_LIMIT_ENABLED` | `false` | Enable rate limiting |
 | `PRIVACY_REVIEW_DB` | — | SQLite DB path for classification review store |
+| `PRIVACY_WARMUP_LLM` | `false` | Async warmup local LLM on REST startup |
 | `PRIVACY_ASYNC_MAX_WORKERS` | `4` | Thread pool size for async classification jobs |
 | `PRIVACY_ASYNC_JOB_TTL_SECONDS` | `3600` | TTL for async classification jobs |
 | `PRIVACY_ASYNC_MAX_JOBS` | `1000` | Max concurrent async classification jobs |
@@ -191,14 +198,15 @@ Key environment variables:
 
 ### 9.1 Adding a Layer-1 Rule
 
-1. Add rule logic in `privacy_local_agent/privacy/classification.py` (`DefaultRuleEngine`).
-2. Update `ClassificationResult` models if new output fields are needed.
-3. Add a test case in `tests/test_classification.py`.
-4. Document the rule in `docs/classification/testing.md`.
+1. Add rule logic in `privacy_local_agent/privacy/classification_rule_engine.py` (`DefaultRuleEngine`).
+2. If the rule is value-based and can be vectorized, update `VectorizedRuleEngine` in `privacy_local_agent/privacy/classification_vectorized.py` to keep batch behavior consistent.
+3. Update `ClassificationResult` models if new output fields are needed.
+4. Add a test case in `tests/test_classification.py`; add a consistency check in `tests/test_classification_vectorized.py` when the vectorized engine is affected.
+5. Document the rule in `docs/classification/testing.md`.
 
 ### 9.2 Adding a Compliance Template
 
-1. Define template defaults in `privacy_local_agent/privacy/classification_templates.py`.
+1. Define template defaults in `privacy_local_agent/privacy/classification_utils.py` (`TEMPLATES`).
 2. If the template requires new field-name rules, add them in `DefaultRuleEngine._apply_template_field_rules`.
 3. Add a test in `tests/test_classification_templates.py`.
 4. Document the template in `docs/classification/prd.md` and `docs/classification/design.md`.

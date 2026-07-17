@@ -57,6 +57,8 @@ Review Store        → 收集 needsHumanReview 样本
 
 合规模板（JR/T 0197、GB/T 35273、GDPR）通过扩展默认规则集合实现。
 
+为提升大数据集表分类吞吐量，系统还提供可选的 `VectorizedRuleEngine`（`privacy_local_agent/privacy/classification_vectorized.py`）。该引擎基于 pandas Series 对 Layer-1 规则做列式向量化匹配，语义与 `DefaultRuleEngine` 保持一致，可通过 `ClassificationAPI(use_vectorized=True)` 启用；未安装 pandas 时自动回退到 `DefaultRuleEngine`。
+
 #### 3.1.2 Small-NER（Layer 2）
 
 基于 ONNX Runtime 或 ModelScope 的医疗领域 NER 模型，识别疾病、症状、药物、手术、解剖部位等实体。详细设计参见 `docs/classification_ner/design.md`。
@@ -242,7 +244,7 @@ SecretFlow 适配器通过 `privacy/data_adapters.py` 的 `to_records/from_recor
 
 ## 7. 合规模板设计
 
-内置模板定义于 `privacy_local_agent/privacy/classification_templates.py`：
+内置模板定义于 `privacy_local_agent/privacy/classification_utils.py`（`TEMPLATES` 常量）：
 
 | 模板 | 适用场景 | 主要扩展 |
 |---|---|---|

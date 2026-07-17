@@ -8,7 +8,7 @@ import os
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional, Tuple
 
-from .classification import SmallNerEngine
+from .classification_models import SmallNerEngine
 
 logger = logging.getLogger("privacy.classification_ner")
 
@@ -37,12 +37,19 @@ class SimpleChineseBertTokenizer:
         self.pad_id = self.vocab.get("[PAD]", 0)
 
     def tokenize(self, text: str) -> List[str]:
-        """对中文进行单字/字符级切分，对英文字符保留原样或切分。"""
+        """对中文进行单字/字符级切分，对英文字符做大小写折叠后切分。
+
+        中文 BERT 词表通常只包含小写英文字母。为提升对医学缩写（如 HIV、AIDS）
+        的识别稳定性，当大写字母不在词表中时，尝试使用其小写形式。
+        """
         tokens: List[str] = []
         for char in text:
             # 基础字符处理，如果在词表中直接加入，否则归为 UNK
             if char in self.vocab:
                 tokens.append(char)
+            elif char.isalpha() and char.lower() in self.vocab:
+                # 大小写不折叠：医学缩写大写输入在中文词表中通常只注册小写形式
+                tokens.append(char.lower())
             else:
                 tokens.append("[UNK]")
         return tokens

@@ -10,6 +10,7 @@ Data classification endpoints are defined in classification_routes and mounted
 via include_router.
 """
 
+import asyncio
 import os
 from contextlib import asynccontextmanager
 from typing import Any, Dict, List, Optional
@@ -38,7 +39,7 @@ service = PrivacyService(profile_path=PROFILE_PATH, namespace=NAMESPACE)
 async def lifespan(app: FastAPI):
     """应用生命周期管理器。
 
-    启动时初始化结构化日志与可选的 OpenTelemetry tracing。
+    启动时初始化结构化日志、可选的 OpenTelemetry tracing 以及 LLM 异步预热。
     关闭时执行清理逻辑。
 
     Args:
@@ -56,7 +57,18 @@ async def lifespan(app: FastAPI):
             os.environ.get("PRIVACY_SERVICE_NAME", "privacy-local-agent"),
         ),
     )
-    yield
+
+    # 在后台异步预热本地大模型（若启用），避免首个请求阻塞
+    warmup_task = None
+    if os.environ.get("PRIVACY_WARMUP_LLM", "false").lower() == "true":
+        warmup_task = asyncio.create_task(service.classification_api.warmup_async())
+        app.state.warmup_task = warmup_task
+
+    try:
+        yield
+    finally:
+        if warmup_task is not None:
+            warmup_task.cancel()
 
 
 # FastAPI 应用实例；title 用于 OpenAPI 文档，lifespan 用于生命周期钩子
@@ -311,7 +323,20 @@ def readyz():
         except Exception as e:
             raise HTTPException(status_code=503, detail=f"Database check failed: {e}")
             
-    return {"status": "ready"}
+    return {"status": "ready", "llm_ready": service.classification_api.is_llm_ready()}
+
+
+@app.get("/readyz/llm", dependencies=[Depends(get_current_identity), Depends(rate_limit_dependency)])
+def readyz_llm():
+    """LLM 分类器就绪探针接口。
+
+    供 K8s 等编排工具单独探测本地大模型是否已完成预热。
+    若未启用 LLM、使用 NoOp 分类器或模型已加载成功，均返回 200；
+    若模型正在预热或初始化失败，则返回 503。
+    """
+    if service.classification_api.is_llm_ready():
+        return {"status": "ready", "llm_ready": True}
+    raise HTTPException(status_code=503, detail="LLM classifier not ready")
 
 
 @app.post("/v1/privacy/mask", dependencies=[*SECURITY_DEPS, require_permission("privacy:mask")])

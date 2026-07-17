@@ -1,13 +1,15 @@
-"""数据分类原语的数据模型。
+"""数据分类原语的数据模型与抽象接口。
 
-定义敏感度等级、安全标签、字段/记录/表级分类结果以及审计信息，
-供 RuleEngine、ClassificationAPI、REST/gRPC 接口统一使用。
+定义敏感度等级、安全标签、字段/记录/表级分类结果、审计信息，
+以及 RuleEngine / Small-NER / LLM 分类器的抽象基类，
+供具体引擎、ClassificationAPI、REST/gRPC 接口统一使用。
 
-Data classification primitive models. Defines sensitivity levels, security tags,
-field/record/table classification results and audit metadata used across the
-rule engine, classification API and transport layers.
+Data classification primitive models and abstract interfaces. Defines sensitivity
+levels, security tags, field/record/table classification results, audit metadata,
+and abstract base classes for rule engine, Small-NER and LLM classifiers.
 """
 
+from abc import ABC, abstractmethod
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Dict, List, Optional
@@ -265,6 +267,63 @@ class CompositeRule(BaseModel):
     target_level: SensitivityLevel = Field(alias="targetLevel")
     category: str = "COMPOSITE"
     rule_id: str = Field(default="COMPOSITE_001", alias="ruleId")
+
+
+# ---------------------------------------------------------------------------
+# 抽象基类 / Abstract base classes
+# ---------------------------------------------------------------------------
+
+class RuleEngineABC(ABC):
+    """规则引擎抽象接口。"""
+
+    @abstractmethod
+    def evaluate(
+        self, field_name: str, value: Any, params: "ClassificationParams"
+    ) -> List["SecurityTag"]:
+        """评估单个字段，返回命中的安全标签列表。"""
+
+
+class SmallNerEngine(ABC):
+    """Small-NER 引擎抽象接口（Layer 2）。"""
+
+    @abstractmethod
+    def extract(self, text: str) -> List[Dict[str, Any]]:
+        """从文本中提取实体，返回包含 label、confidence 等字段的字典列表。"""
+
+
+class NoOpSmallNerEngine(SmallNerEngine):
+    """默认空实现，不返回任何实体。"""
+
+    def extract(self, text: str) -> List[Dict[str, Any]]:
+        return []
+
+
+class LlmClassifier(ABC):
+    """LLM 分类器抽象接口（Layer 3）。"""
+
+    @abstractmethod
+    def classify(
+        self, text: str, upstream_level: SensitivityLevel, upstream_confidence: float
+    ) -> Optional[Dict[str, Any]]:
+        """基于上游结果对文本进行分类，返回结构化输出或 None。"""
+
+
+class NoOpLlmClassifier(LlmClassifier):
+    """默认空实现：当上游置信度低于阈值时给出保守回退结果。"""
+
+    def classify(
+        self, text: str, upstream_level: SensitivityLevel, upstream_confidence: float
+    ) -> Optional[Dict[str, Any]]:
+        if upstream_confidence < 0.6:
+            return {
+                "final_level": upstream_level,
+                "sub_category": "LLM_FALLBACK",
+                "confidence": upstream_confidence,
+                "reasoning": "LLM 未启用，按上游最高等级降级/保守处理",
+                "suggested_action": "review",
+                "needs_human_review": True,
+            }
+        return None
 
 
 class ClassificationResult(BaseModel):

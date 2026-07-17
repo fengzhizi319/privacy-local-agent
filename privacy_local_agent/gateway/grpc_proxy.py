@@ -1,6 +1,10 @@
-"""gRPC 代理服务模块。
+"""gRPC 泛化代理服务模块。
 
 基于 grpc.aio (Python AsyncIO gRPC) 实现，承接所有客户端 gRPC 请求并动态分发给后端健康的工作节点。
+
+本模块不再为每个业务 RPC 手写转发方法，而是在初始化时自动为 ``PrivacyService``
+下的全部 RPC 方法绑定统一的转发处理函数。privacy.proto 新增接口后，只要重新生成
+Python 存根，网关即可自动转发，无需修改本文件。
 """
 
 import logging
@@ -13,9 +17,9 @@ logger = logging.getLogger("gateway.grpc")
 
 
 class GatewayGrpcServicer(privacy_pb2_grpc.PrivacyServiceServicer):
-    """gRPC 网关服务类。
+    """gRPC 网关泛化服务类。
 
-    实现 proto 定义的 PrivacyService 接口，将请求反射转发至后端工作节点。
+    通过动态方法绑定实现 ``PrivacyService`` 下所有 RPC 方法的透明转发。
     """
 
     def __init__(self, balancer: LoadBalancer):
@@ -25,6 +29,33 @@ class GatewayGrpcServicer(privacy_pb2_grpc.PrivacyServiceServicer):
             balancer: 关联的负载均衡实例。
         """
         self.balancer = balancer
+        self._bind_generic_methods()
+
+    def _bind_generic_methods(self) -> None:
+        """为 ``PrivacyService`` 中所有 RPC 方法绑定统一转发函数。
+
+        生成后的 ``PrivacyServiceServicer`` 基类已为每个 RPC 方法提供默认的
+        ``UNIMPLEMENTED`` 实现。此处遍历这些方法名并将其覆盖为 ``_forward`` 包装器，
+        从而实现新增接口的自动转发。
+        """
+        base = privacy_pb2_grpc.PrivacyServiceServicer
+        for name in dir(base):
+            if name.startswith("_"):
+                continue
+            attr = getattr(base, name)
+            if not callable(attr):
+                continue
+            # 只覆盖基类定义的方法；保留对象自身的特殊属性与方法
+            if name in ("__init__", "_bind_generic_methods", "_forward"):
+                continue
+            setattr(self, name, self._make_forwarder(name))
+
+    def _make_forwarder(self, method_name: str):
+        """构造给定 RPC 方法名的转发协程函数。"""
+        async def _generic_method(request, context):
+            return await self._forward(method_name, request, context)
+
+        return _generic_method
 
     async def _forward(self, method_name: str, request, context):
         """通用转发底层适配逻辑。
@@ -84,43 +115,6 @@ class GatewayGrpcServicer(privacy_pb2_grpc.PrivacyServiceServicer):
                 grpc.StatusCode.INTERNAL,
                 f"Gateway internal error after {max_retries} attempts: {last_exception}",
             )
-
-
-    async def Mask(self, request, context):
-        return await self._forward("Mask", request, context)
-
-    async def MaskRecord(self, request, context):
-        return await self._forward("MaskRecord", request, context)
-
-    async def Hash(self, request, context):
-        return await self._forward("Hash", request, context)
-
-    async def DPCount(self, request, context):
-        return await self._forward("DPCount", request, context)
-
-    async def DPSum(self, request, context):
-        return await self._forward("DPSum", request, context)
-
-    async def DPMean(self, request, context):
-        return await self._forward("DPMean", request, context)
-
-    async def KAnonymizeRecord(self, request, context):
-        return await self._forward("KAnonymizeRecord", request, context)
-
-    async def ObfuscateQuery(self, request, context):
-        return await self._forward("ObfuscateQuery", request, context)
-
-    async def ClassifyField(self, request, context):
-        return await self._forward("ClassifyField", request, context)
-
-    async def ClassifyRecord(self, request, context):
-        return await self._forward("ClassifyRecord", request, context)
-
-    async def ClassifyTable(self, request, context):
-        return await self._forward("ClassifyTable", request, context)
-
-    async def Health(self, request, context):
-        return await self._forward("Health", request, context)
 
 
 async def start_grpc_gateway(host: str, port: int, balancer: LoadBalancer) -> grpc.aio.Server:

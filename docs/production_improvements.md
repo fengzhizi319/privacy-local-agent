@@ -29,14 +29,19 @@
 * **存活探针** 只需要判断容器进程是否活着，不卡死即可。
 * **就绪探针** 还需要确认该容器是否能够正常服务（如：配置文件是否正确解析、隐私预算数据库是否可以读写、重型 ML 模型是否已经成功加载）。如果只是单 `/health` 返回 ok，Kubernetes 可能会将流量导入到一个模型尚未加载完毕或数据库不可用的 Container，造成调用超时和 502/500 错误。
 
-### 2.2 改进方案
-在 `privacy_local_agent/main.py` 中新增并细化以下两个端点：
+### 2.2 改进方案（已部分实现）
+在 `privacy_local_agent/main.py` 中新增并细化以下端点：
 1. **`/livez`**：存活检查。仅返回 `{"status": "alive"}`，不进行复杂的依赖检测。响应迅速，作为 Liveness Probe。
 2. **`/readyz`**：就绪检查。检查关键依赖是否就绪：
    - 验证 `BudgetAccountant` 对应的存储后端（SQLite 文件/内存锁）是否健康。
    - 验证配置参数是否已解析。
-   - 如果启用了 Small-NER 等模型（`enable_small_ner=True`），则检查模型对象是否已经惰性加载或准备好。
-   作为 Readiness Probe，确保只有所有条件满足时，Kubernetes 流量才接入。
+   - 返回 `llm_ready` 字段，指示本地大模型是否已预热（不影响状态码，保持向后兼容）。
+3. **`/readyz/llm`**：独立的 LLM 就绪探针。当本地大模型未就绪时返回 `503`，可用于 K8s 针对 LLM 就绪的独立 readiness probe。
+
+同时新增 LLM 异步预热机制：
+- `Qwen2VLClassifier` 提供 `warmup()` 与 `is_ready` 属性。
+- `ClassificationAPI` 提供 `warmup_async()` 与 `is_llm_ready()`。
+- 设置环境变量 `PRIVACY_WARMUP_LLM=true` 后，REST 服务启动时会在后台异步预热本地大模型，避免首个请求阻塞。
 
 ---
 

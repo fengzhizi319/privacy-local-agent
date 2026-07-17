@@ -15,8 +15,8 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from ..observability.metrics import CLASSIFICATION_REVIEW_QUEUE_SIZE
-from .classification_models import ReviewEntry, ReviewStatus
-from .classification_zero_knowledge import hash_value, redact
+from .classification_models import ReviewEntry, ReviewStatus, SensitivityLevel
+from .classification_utils import hash_value, redact
 
 
 class ReviewStore:
@@ -31,6 +31,7 @@ class ReviewStore:
         self._lock = threading.Lock()
         if self.db_path:
             self._init_sqlite()
+            self._load_sqlite()
 
     def _init_sqlite(self) -> None:
         with sqlite3.connect(self.db_path, timeout=10.0) as conn:
@@ -197,6 +198,30 @@ class ReviewStore:
             f"### Predicted\n{predicted}\n"
             f"### Corrected\n{corrected}\n"
             f"### Comment\n{entry.comment or ''}"
+        )
+
+    def _load_sqlite(self) -> None:
+        """从 SQLite 加载已有复核记录到内存，保证进程重启后历史复核不丢失。"""
+        with sqlite3.connect(self.db_path, timeout=10.0) as conn:
+            rows = conn.execute("SELECT * FROM classification_reviews").fetchall()
+        for row in rows:
+            entry = ReviewEntry(
+                review_id=row[0],
+                record_index=row[1],
+                field_name=row[2],
+                field_value=row[3],
+                predicted_level=SensitivityLevel(row[4]) if row[4] else None,
+                predicted_tags=json.loads(row[5]) if row[5] else [],
+                corrected_level=row[6],
+                reviewer=row[7] or "",
+                comment=row[8] or "",
+                status=ReviewStatus(row[9]),
+                created_at=row[10],
+                updated_at=row[11],
+            )
+            self._mem[row[0]] = entry
+        CLASSIFICATION_REVIEW_QUEUE_SIZE.set(
+            sum(1 for e in self._mem.values() if e.status == ReviewStatus.PENDING)
         )
 
     def _insert_sqlite(self, entry: ReviewEntry) -> None:

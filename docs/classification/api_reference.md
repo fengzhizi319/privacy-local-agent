@@ -312,10 +312,68 @@ ClassificationService(
 | `ShadowDiff` | 影子模式差异 |
 | `ClassificationJob` | 异步任务状态模型 |
 | `ReviewEntry` | 复核条目模型 |
+| `RuleEngineABC` | 规则引擎抽象基类 |
+| `SmallNerEngine` | Small-NER 引擎抽象基类 |
+| `LlmClassifier` | LLM 分类器抽象基类 |
 
 ---
 
-### 1.4 `ClassificationParams` 字段
+### 1.4 规则引擎
+
+位置：`privacy_local_agent.privacy.classification_rule_engine`
+
+| 符号 | 说明 |
+|---|---|
+| `RuleEngine` | 向后兼容的抽象接口（`RuleEngineABC` 子类） |
+| `DefaultRuleEngine` | 默认 Layer-1 规则引擎，实现字段名/值匹配、ICD-10 区间、身份证与医保卡校验、合规模板扩展字段规则 |
+| `_unique_tags` | 内部工具：按 `(level, category)` 去重并保留顺序 |
+
+---
+
+### 1.5 向量化规则引擎（可选）
+
+位置：`privacy_local_agent.privacy.classification_vectorized`
+
+| 符号 | 说明 |
+|---|---|
+| `VectorizedRuleEngine` | 基于 pandas Series 的批量 Layer-1 规则引擎；语义与 `DefaultRuleEngine` 一致，适合大数据集表分类 |
+| `evaluate_series(field_name, series, params)` | 对整列批量评估，返回每行的 `List[SecurityTag]` |
+
+使用方式：
+
+```python
+from privacy_local_agent.privacy.classification import ClassificationAPI
+
+# 自动选择向量化引擎（需安装 pandas）
+api = ClassificationAPI(use_vectorized=True)
+
+# 或直接传入实例
+from privacy_local_agent.privacy.classification_vectorized import VectorizedRuleEngine
+api = ClassificationAPI(rule_engine=VectorizedRuleEngine())
+```
+
+> 未安装 pandas 时 `use_vectorized=True` 会自动回退到 `DefaultRuleEngine`。
+
+---
+
+### 1.6 工具函数与适配器
+
+位置：`privacy_local_agent.privacy.classification_utils`
+
+| 符号 | 说明 |
+|---|---|
+| `redact` | 字段值脱敏，保留前 N 个字符 |
+| `hash_value` | 对原始值做 SHA256/MD5 哈希 |
+| `should_log_value` | 判断值是否可以完整打印到日志 |
+| `safe_log` | 自动脱敏字符串字段后记录日志 |
+| `mask_record_values` | 对整记录逐字段脱敏 |
+| `TEMPLATES` | 内置合规模板字典：`jrt0197`、`gbt35273`、`gdpr` |
+| `get_template_params` | 按模板名返回默认参数字典 |
+| `classify_secretflow` | SecretFlow 联邦数据结构分类适配器 |
+
+---
+
+### 1.7 `ClassificationParams` 字段
 
 | 字段 | 类型 | 默认值 | 说明 |
 |---|---|---|---|

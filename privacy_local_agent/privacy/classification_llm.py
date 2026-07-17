@@ -11,9 +11,8 @@ import re
 from io import BytesIO
 from typing import Any, Dict, Optional
 
-from .classification import LlmClassifier
-from .classification_models import SensitivityLevel
-from .classification_zero_knowledge import redact
+from .classification_models import LlmClassifier, SensitivityLevel
+from .classification_utils import redact
 
 logger = logging.getLogger("privacy.classification_llm")
 
@@ -87,6 +86,23 @@ class Qwen2VLClassifier(LlmClassifier):
             self._init_error = e
             logger.warning(f"本地大模型初始化失败（自动降级为 NoOp）: {e}")
             raise e
+
+    @property
+    def is_ready(self) -> bool:
+        """模型是否已完成初始化且未发生错误。"""
+        return self._initialized and self._init_error is None
+
+    def warmup(self) -> bool:
+        """主动触发模型加载（同步阻塞，建议在后台线程/协程中调用）。
+
+        Returns:
+            是否成功完成初始化。
+        """
+        try:
+            self._lazy_init()
+            return True
+        except Exception:
+            return False
 
     def _detect_image(self, text: str) -> Optional["Image.Image"]:
         """检测输入文本是否为本地图片路径或 Base64 编码图片。如果是，加载并返回 PIL.Image 实例。"""

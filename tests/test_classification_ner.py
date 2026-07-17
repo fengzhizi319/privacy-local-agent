@@ -21,7 +21,11 @@ def test_simple_bert_tokenizer(tmp_path):
     """测试纯 Python 实现的中文 BERT 分词编码器。"""
     # 建立测试临时 vocab 词表文件
     vocab_path = os.path.join(tmp_path, "vocab.txt")
-    vocab_tokens = ["[PAD]", "[UNK]", "[CLS]", "[SEP]", "阿", "司", "匹", "林", "感", "冒"]
+    vocab_tokens = [
+        "[PAD]", "[UNK]", "[CLS]", "[SEP]",
+        "阿", "司", "匹", "林", "感", "冒",
+        "h", "i", "v", "a", "d", "s",
+    ]
     with open(vocab_path, "w", encoding="utf-8") as f:
         f.write("\n".join(vocab_tokens) + "\n")
 
@@ -41,7 +45,13 @@ def test_simple_bert_tokenizer(tmp_path):
     tokens_unk = tokenizer.tokenize("发热")
     assert tokens_unk == ["[UNK]", "[UNK]"]
 
-    # 4. 验证编码填充截断
+    # 4. 验证英文字母大小写折叠（中文词表通常只含小写，大写医学缩写应能命中）
+    tokens_upper = tokenizer.tokenize("HIV")
+    assert tokens_upper == ["h", "i", "v"]
+    tokens_mixed = tokenizer.tokenize("AiDs")
+    assert tokens_mixed == ["a", "i", "d", "s"]
+
+    # 5. 验证编码填充截断
     input_ids, attention_mask, token_type_ids = tokenizer.encode("阿司", max_len=6)
     # [CLS], 阿, 司, [SEP], [PAD], [PAD]
     assert input_ids == [2, 4, 5, 3, 0, 0]

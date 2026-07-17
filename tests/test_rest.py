@@ -170,6 +170,22 @@ def test_readyz():
     assert response.json()["status"] == "ready"
 
 
+def test_readyz_llm():
+    """测试 /readyz/llm 在默认 NoOp LLM 下返回就绪。"""
+    response = client.get("/readyz/llm")
+    assert response.status_code == 200
+    assert response.json()["llm_ready"] is True
+
+
+def test_readyz_llm_not_ready(monkeypatch):
+    """测试 /readyz/llm 在 LLM 未就绪时返回 503。"""
+    from privacy_local_agent.main import service
+
+    monkeypatch.setattr(service.classification_api, "is_llm_ready", lambda: False)
+    response = client.get("/readyz/llm")
+    assert response.status_code == 503
+
+
 def test_qol_custom_pools():
     """测试查询混淆接口，传入自定义 dummy pool。"""
     custom_medical_pool = ["自定义虚假医学查询1", "自定义虚假医学查询2"]

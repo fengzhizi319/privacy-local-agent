@@ -10,7 +10,7 @@ from privacy_local_agent.privacy.classification import ClassificationAPI
 @pytest.fixture
 def api():
     return ClassificationAPI()
-from privacy_local_agent.privacy.classification_zero_knowledge import (
+from privacy_local_agent.privacy.classification_utils import (
     hash_value,
     mask_record_values,
     redact,

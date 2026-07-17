@@ -167,6 +167,47 @@ def test_grpc_proxy_forwarding(backend_agent):
         loop.close()
 
 
+def test_grpc_proxy_generic_forwarding(backend_agent, tmp_path, monkeypatch):
+    """测试 gRPC 网关对未手写映射的方法（如 RecommendParams）自动泛化转发。"""
+    # 使用临时 personalized profile，避免污染仓库文件
+    personalized_file = tmp_path / "personalized-profiles.yaml"
+    personalized_file.write_text(
+        "grpc-recommend-ns:\n  dp:\n    clip_lower: 10.0\n    clip_upper: 40.0\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("PRIVACY_PERSONALIZED_PROFILE", str(personalized_file))
+
+    balancer = LoadBalancer(strategy="round_robin")
+    balancer.add_node(backend_agent["http_url"], backend_agent["grpc_address"])
+
+    servicer = GatewayGrpcServicer(balancer)
+
+    class MockContext:
+        def __init__(self):
+            self.code = None
+            self.details = None
+
+        def abort(self, code, details):
+            self.code = code
+            self.details = details
+            raise grpc.RpcError("Aborted")
+
+    context = MockContext()
+
+    async def run_generic_tests():
+        req = privacy_pb2.RecommendRequest(namespace="default", values=[1.0, 2.0, 3.0])
+        res = await servicer.RecommendParams(req, context)
+        assert res.status == "success"
+        assert res.namespace == "default"
+
+    loop = asyncio.new_event_loop()
+    try:
+        loop.run_until_complete(run_generic_tests())
+    finally:
+        loop.run_until_complete(balancer.close_all())
+        loop.close()
+
+
 def test_dynamic_registration(backend_agent):
     """测试动态注册与注销 API。"""
     balancer = LoadBalancer(strategy="round_robin")

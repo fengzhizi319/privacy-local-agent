@@ -177,3 +177,33 @@ def test_classify_printed_structured_report(mock_lazy_init):
     assert "印刷体" in res["reasoning"]
     assert res["sub_category"] == "MEDICAL_LAB_REPORT"
 
+from unittest.mock import patch
+
+
+def test_qwen_classifier_not_ready_by_default():
+    """未初始化时 Qwen2VLClassifier.is_ready 应为 False。"""
+    classifier = Qwen2VLClassifier()
+    assert classifier.is_ready is False
+
+
+@patch("privacy_local_agent.privacy.classification_llm.Qwen2VLClassifier._lazy_init")
+def test_qwen_classifier_warmup_success(mock_lazy_init):
+    """warmup 成功后 is_ready 返回 True。"""
+    classifier = Qwen2VLClassifier()
+
+    def _fake_init():
+        classifier._initialized = True
+
+    mock_lazy_init.side_effect = _fake_init
+    assert classifier.warmup() is True
+    mock_lazy_init.assert_called_once()
+    assert classifier.is_ready is True
+
+
+@patch("privacy_local_agent.privacy.classification_llm.Qwen2VLClassifier._lazy_init")
+def test_qwen_classifier_warmup_failure(mock_lazy_init):
+    """warmup 失败时返回 False 且 is_ready 保持 False。"""
+    mock_lazy_init.side_effect = RuntimeError("CUDA out of memory")
+    classifier = Qwen2VLClassifier()
+    assert classifier.warmup() is False
+    assert classifier.is_ready is False

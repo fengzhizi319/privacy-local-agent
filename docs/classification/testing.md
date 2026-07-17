@@ -24,10 +24,14 @@ tests/
 ├── test_classification_review.py         # 人工复核测试
 ├── test_classification_secretflow.py     # SecretFlow 适配器测试
 ├── test_classification_templates.py      # 合规模板测试
+├── test_classification_vectorized.py     # 向量化规则引擎测试
 ├── test_classification_zk.py             # Zero-Knowledge 测试
 ├── test_classification_rest.py           # REST 接口测试
 └── test_classification_grpc.py           # gRPC 接口测试
 ```
+
+> 注：合规模板、Zero-Knowledge 工具与 SecretFlow 适配器已合并到
+> `privacy_local_agent/privacy/classification_utils.py`，对应测试文件保持不变。
 
 ## 3. 运行测试
 

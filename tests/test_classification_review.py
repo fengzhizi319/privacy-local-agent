@@ -68,3 +68,31 @@ def test_review_store_not_found():
     store = ReviewStore()
     with pytest.raises(KeyError):
         store.confirm("review-nonexistent", "L4")
+
+
+def test_review_store_sqlite_persistence(tmp_path):
+    """验证 SQLite 持久化：进程重启后历史复核记录不丢失。"""
+    from privacy_local_agent.privacy.classification_models import ReviewStatus
+
+    db = str(tmp_path / "reviews.db")
+    api = ClassificationAPI(review_store=ReviewStore(db_path=db))
+    result = api.classify_table(
+        schema=["name", "id_card", "mobile"],
+        rows=[{"name": "张三", "id_card": "110101199001011237", "mobile": "13800138000"}],
+    )
+    review_id = result.review_entries[0].review_id
+
+    # 模拟进程重启：使用新的 ReviewStore 实例读取同一数据库
+    api2 = ClassificationAPI(review_store=ReviewStore(db_path=db))
+    loaded = api2.review_store._mem[review_id]
+    assert loaded.status == ReviewStatus.PENDING
+
+    # 在新实例上确认复核
+    api2.confirm_review(review_id, corrected_level="L5", reviewer="operator-1")
+
+    # 再次模拟重启，确认状态已持久化
+    api3 = ClassificationAPI(review_store=ReviewStore(db_path=db))
+    reloaded = api3.review_store._mem[review_id]
+    assert reloaded.status == ReviewStatus.CONFIRMED
+    assert reloaded.corrected_level == "L5"
+    assert reloaded.reviewer == "operator-1"
