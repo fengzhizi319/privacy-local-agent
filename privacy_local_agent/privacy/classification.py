@@ -863,8 +863,8 @@ class ClassificationAPI:
         except ImportError:
             return True
         if isinstance(self.llm, Qwen2VLClassifier):
-            # 已初始化成功，或已尝试过但失败（会降级），均视为就绪
-            return self.llm.is_ready or self.llm._init_error is not None
+            # 仅当大模型成功初始化且无错误时，才视为就绪
+            return self.llm.is_ready
         return True
 
     async def warmup_async(self) -> bool:

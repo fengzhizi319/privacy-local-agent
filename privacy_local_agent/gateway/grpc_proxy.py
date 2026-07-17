@@ -80,8 +80,30 @@ class GatewayGrpcServicer(privacy_pb2_grpc.PrivacyServiceServicer):
             try:
                 # 使用反射获取所选节点的客户端对应 RPC 方法
                 stub_method = getattr(node.grpc_stub, method_name)
-                # 发起异步转发调用，指定 30 秒超时
-                response = await stub_method(request, timeout=30.0)
+                # 提取客户端请求中携带的元数据并转发（兼容单元测试中的 MockContext）
+                metadata = None
+                if hasattr(context, "invocation_metadata") and callable(context.invocation_metadata):
+                    metadata = context.invocation_metadata()
+                
+                # 发起异步转发调用，指定 30 秒超时，返回 Call 对象
+                call = stub_method(request, timeout=30.0, metadata=metadata)
+                response = await call
+
+                # 将后端的响应头与响应尾元数据透传给客户端
+                try:
+                    initial_md = await call.initial_metadata()
+                    if initial_md and hasattr(context, "send_initial_metadata") and callable(context.send_initial_metadata):
+                        await context.send_initial_metadata(initial_md)
+                except Exception as e:
+                    logger.debug(f"Failed to forward initial metadata for {method_name}: {e}")
+
+                try:
+                    trailing_md = await call.trailing_metadata()
+                    if trailing_md and hasattr(context, "set_trailing_metadata") and callable(context.set_trailing_metadata):
+                        context.set_trailing_metadata(trailing_md)
+                except Exception as e:
+                    logger.debug(f"Failed to forward trailing metadata for {method_name}: {e}")
+
                 return response
             except grpc.RpcError as exc:
                 # 如果是连接性不可用错误，进行故障转移与重试
