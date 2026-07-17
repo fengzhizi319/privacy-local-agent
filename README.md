@@ -59,17 +59,29 @@ python -m privacy_local_agent.server
 - [生产安全设计文档](./docs/production_security/design.md)
 - [生产安全运维手册](./docs/production_security/ops.md)
 
-### 可观测性
+## 可观测性（可选）
+
+项目内置结构化日志、Prometheus `/metrics` 端点和可选 OpenTelemetry 链路追踪，详见：
 
 - [Observability PRD](./docs/production_observability/prd.md)
 - [Observability Design](./docs/production_observability/design.md)
 - [Observability Ops](./docs/production_observability/ops.md)
 
-### K8s / Helm 部署
+## K8s / Helm 部署
+
+项目提供 Helm Chart、Kustomize 和 Docker Compose 三种部署方式，详见：
 
 - [Deployment PRD](./docs/deployment/prd.md)
 - [Deployment Design](./docs/deployment/design.md)
 - [Deployment Ops](./docs/deployment/ops.md)
+
+## 网关 / 负载均衡（可选）
+
+内置 REST + gRPC 反向代理，支持健康检查和加权轮询，详见：
+
+- [Gateway PRD](./docs/gateway_balancer/prd.md)
+- [Gateway Design](./docs/gateway_balancer/design.md)
+- [Gateway Ops](./docs/gateway_balancer/ops.md)
 
 ## 能力概览
 
@@ -205,6 +217,48 @@ print(json.loads(resp.result_json))
 PYTHONPATH=. pytest tests -q
 ```
 
+## 构建与分发
+
+### 构建 Python 包
+
+```bash
+# 安装构建工具
+pip install build
+
+# 构建 wheel 和 sdist（输出到 dist/）
+python -m build
+
+# 生成的文件
+# dist/privacy_local_agent-0.1.0-py3-none-any.whl  (wheel)
+# dist/privacy_local_agent-0.1.0.tar.gz            (源码包)
+```
+
+其他人安装：
+```bash
+pip install privacy_local_agent-0.1.0-py3-none-any.whl
+```
+
+### Docker 镜像
+
+```bash
+# 构建 core 镜像（推荐，不含 ML 依赖）
+make docker-core
+
+# 构建 ml 镜像（含 torch/transformers/onnxruntime）
+make docker-ml
+
+# 运行
+docker run -p 8079:8079 -p 50051:50051 privacy-local-agent:0.1.0
+```
+
+### 可编辑安装（开发用）
+
+```bash
+pip install -e .
+```
+
+让当前目录成为可导入的包，适合开发调试。
+
 ## 文档
 
 ### 文档书 (Documentation Book)
@@ -229,33 +283,113 @@ make docs-clean
 
 ### 处理原语
 
-- [PRD 产品需求文档](./docs/prd.md)
-- [Design 设计文档](./docs/design.md)
-- [Implementation 实现文档](./docs/implementation.md)
-- [Testing 测试文档](./docs/testing.md)
-- [User Manual 使用手册](./docs/user-manual.md)
+#### 数据脱敏 (Masking)
+- [概述](./docs/masking/README.md)
+- [Design 设计文档](./docs/masking/design.md)
+- [PRD 产品需求文档](./docs/masking/prd.md)
+- [Operations 运维文档](./docs/masking/ops.md)
+- [Testing 测试文档](./docs/masking/testing.md)
+- [API Reference](./docs/masking/api_reference.md)
+- [Examples 示例](./docs/masking/examples.md)
+
+#### 差分隐私 (Differential Privacy)
+- [概述](./docs/dp/README.md)
+- [Design 设计文档](./docs/dp/design.md)
+- [PRD 产品需求文档](./docs/dp/prd.md)
+- [Operations 运维文档](./docs/dp/ops.md)
+- [Testing 测试文档](./docs/dp/testing.md)
+- [API Reference](./docs/dp/api_reference.md)
+- [Examples 示例](./docs/dp/examples.md)
+
+#### K-匿名 (K-Anonymity)
+- [概述](./docs/k_anonymity/README.md)
+- [Design 设计文档](./docs/k_anonymity/design.md)
+- [PRD 产品需求文档](./docs/k_anonymity/prd.md)
+- [Operations 运维文档](./docs/k_anonymity/ops.md)
+- [Testing 测试文档](./docs/k_anonymity/testing.md)
+- [API Reference](./docs/k_anonymity/api_reference.md)
+- [Examples 示例](./docs/k_anonymity/examples.md)
+
+#### 查询混淆 (Query Obfuscation)
+- [概述](./docs/qol/README.md)
+- [Design 设计文档](./docs/qol/design.md)
+- [PRD 产品需求文档](./docs/qol/prd.md)
+- [Operations 运维文档](./docs/qol/ops.md)
+- [Testing 测试文档](./docs/qol/testing.md)
+- [API Reference](./docs/qol/api_reference.md)
+- [Examples 示例](./docs/qol/examples.md)
 
 ### 数据分类
 
+#### 分类引擎（规则 → NER → LLM 三层漏斗）
+- [概述](./docs/classification/README.md)
 - [PRD 产品需求文档](./docs/classification/prd.md)
 - [Design 设计文档](./docs/classification/design.md)
 - [Operations 运维文档](./docs/classification/ops.md)
 - [Testing 测试文档](./docs/classification/testing.md)
+- [API Reference](./docs/classification/api_reference.md)
+- [Examples 示例](./docs/classification/examples.md)
+- [Performance 性能基准](./docs/classification/performance.md)
+
+#### LLM / VLM 分类层
+- [概述](./docs/classification_llm/README.md)
+- [PRD 产品需求文档](./docs/classification_llm/prd.md)
+- [Design 设计文档](./docs/classification_llm/design.md)
+- [Operations 运维文档](./docs/classification_llm/ops.md)
+- [Testing 测试文档](./docs/classification_llm/testing.md)
+- [API Reference](./docs/classification_llm/api_reference.md)
+- [Examples 示例](./docs/classification_llm/examples.md)
+
+#### NER 分类层
+- [概述](./docs/classification_ner/README.md)
+- [PRD 产品需求文档](./docs/classification_ner/prd.md)
+- [Design 设计文档](./docs/classification_ner/design.md)
+- [Operations 运维文档](./docs/classification_ner/ops.md)
+- [Testing 测试文档](./docs/classification_ner/testing.md)
+- [API Reference](./docs/classification_ner/api_reference.md)
+- [Examples 示例](./docs/classification_ner/examples.md)
+
+### 网关 / 负载均衡
+
+- [概述](./docs/gateway_balancer/README.md)
+- [PRD 产品需求文档](./docs/gateway_balancer/prd.md)
+- [Design 设计文档](./docs/gateway_balancer/design.md)
+- [Operations 运维文档](./docs/gateway_balancer/ops.md)
+- [Testing 测试文档](./docs/gateway_balancer/testing.md)
+- [API Reference](./docs/gateway_balancer/api_reference.md)
+- [Examples 示例](./docs/gateway_balancer/examples.md)
+- [Optimizations 优化指南](./docs/gateway_balancer/optimizations.md)
 
 ### 生产安全
 
+- [概述](./docs/production_security/README.md)
 - [PRD 产品需求文档](./docs/production_security/prd.md)
 - [Design 设计文档](./docs/production_security/design.md)
 - [Operations 运维手册](./docs/production_security/ops.md)
+- [Testing 测试文档](./docs/production_security/testing.md)
+- [API Reference](./docs/production_security/api_reference.md)
+- [Examples 示例](./docs/production_security/examples.md)
 
 ### 可观测性
 
+- [概述](./docs/production_observability/README.md)
 - [PRD 产品需求文档](./docs/production_observability/prd.md)
 - [Design 设计文档](./docs/production_observability/design.md)
 - [Operations 运维手册](./docs/production_observability/ops.md)
+- [Testing 测试文档](./docs/production_observability/testing.md)
+- [API Reference](./docs/production_observability/api_reference.md)
+- [Examples 示例](./docs/production_observability/examples.md)
 
 ### K8s / Helm 部署
 
+- [概述](./docs/deployment/README.md)
 - [PRD 产品需求文档](./docs/deployment/prd.md)
 - [Design 设计文档](./docs/deployment/design.md)
 - [Operations 运维手册](./docs/deployment/ops.md)
+- [Testing 测试文档](./docs/deployment/testing.md)
+- [Examples 示例](./docs/deployment/examples.md)
+
+### 其他
+
+- [个性化隐私配置文件](./docs/personalized_profiles.md)
+- [生产改进建议](./docs/production_improvements.md)
