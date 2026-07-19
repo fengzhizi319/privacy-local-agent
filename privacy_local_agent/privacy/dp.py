@@ -126,14 +126,22 @@ class DPApi:
         rng: 私有随机数生成器，用于噪声采样。
     """
 
-    def __init__(self, namespace: str = "default"):
+    def __init__(self, namespace: str = "default", random_state: Optional[int] = None):
         """初始化 DPApi。
 
         Args:
             namespace: 命名空间，用于关联隐私预算账户。
+            random_state: 可选随机种子，用于可复现测试。与旧参数 ``seed`` 等价。
         """
         self.budget = BudgetAccountant(namespace)
         self.rng = SecureRandom()
+        if random_state is not None:
+            self.rng.seed(random_state)
+
+    @classmethod
+    def from_seed(cls, namespace: str = "default", seed: Optional[int] = None):
+        """兼容旧构造方式：通过 seed 创建 DPApi 实例。"""
+        return cls(namespace=namespace, random_state=seed)
 
     def _sample_laplace(self, scale: float) -> float:
         """从拉普拉斯分布 Laplace(0, scale) 中采样一个随机值。
