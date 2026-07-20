@@ -111,7 +111,7 @@ $$\text{mean} = \frac{\text{noisy\_sum}(\varepsilon/2, \delta/2)}{\text{noisy\_c
 
 **高级组合（Advanced Composition）**：当 $k$ 个机制均满足 $(\varepsilon, \delta)$-DP 时，对任意 $\delta' > 0$，整体满足 $(\varepsilon', k\delta + \delta')$-DP，其中 $\varepsilon' \approx \sqrt{2k \cdot \ln(1/\delta')} \cdot \varepsilon + k \cdot \varepsilon^2$。在 $k$ 较大时可将总 $\varepsilon$ 从 $k \cdot \varepsilon$ 降低到约 $\sqrt{k} \cdot \varepsilon$ 量级。
 
-> **当前实现**：BudgetAccountant 仅支持基本组合（直接相加）。高级组合与 Rényi DP 虽能改善多次查询下的预算估计，但会增加 API 复杂度与审计难度，在 POC/MVP 阶段未实现。
+> **当前实现**：BudgetAccountant 支持基本组合（直接相加）。Rényi DP（RDP）会计已通过 `RDPAccountant` 独立实现，可用于 Gaussian 机制下更紧致的预算估计。高级组合定理的自动选择尚未集成到 BudgetAccountant 中。
 
 ### 1.6 本地差分隐私（Local DP）
 
@@ -144,6 +144,13 @@ DP 模块包含以下核心组件：
 - **`DPApi`**：中心式 DP 聚合查询（count / sum / mean / histogram）与 noisify / chunked 接口
 - **`LocalDPApi`**：本地 DP 随机响应与纠偏估计
 - **`BudgetAccountant`**：隐私预算追踪，支持内存 / SQLite 存储与时间窗口重置
+- **`RDPAccountant`**：Rényi DP 会计，支持 Gaussian 机制下更紧致的多阶预算估计
+- **`Accumulator`**：分布式流式无噪累加器，支持 Map-Reduce 模式下的 DP 聚合
+- **`DPApi.dp_aggregate`**：表格级 DP 聚合编排，按列自动拆分预算
+- **`DPApi.adaptive_clip`**：DP 自适应二分搜索估计 clip 上界
+- **`DPApi.vector_sum` / `vector_mean`**：高维向量 / 梯度 DP 加噪（DP-SGD 基础）
+- **`DPApi.dp_groupby`**：Tau-Thresholding 差分隐私 SQL Group-By 过滤
+- **`DPApi.create_accumulator` / `finalize_dp`**：分布式 Worker 无噪累加与 Master 统一加噪
 
 REST / gRPC 接口参数与 Python SDK 语义一致。数据适配器支持 pandas / NumPy / SecretFlow 等输入格式。噪声采样使用密码学安全随机数生成器（CSRPNG），测试模式支持 seed 复现。
 
@@ -190,12 +197,45 @@ count(
 | `epsilon` | `float` | 是 | 隐私预算 ε |
 | `delta` | `float` | 否 | 隐私预算 δ；Gaussian 机制必须 > 0 |
 | `mechanism` | `str` | 否 | `"laplace"` 或 `"gaussian"` |
+#### `count`
+
+```python
+count(
+    values: Any,
+    epsilon: float,
+    delta: float = 0.0,
+    mechanism: str = "laplace",
+    column: Optional[str] = None,
+    party: Optional[str] = None,
+    round_int: bool = False,
+    clip_non_negative: bool = True,
+    return_details: bool = False,
+    confidence_level: float = 0.95,
+    user_ids: Optional[Sequence[Any]] = None,
+    max_contributions: int = 1,
+    discrete: bool = False,
+) -> Union[float, DPResult]
+```
+
+差分隐私计数。支持 User-Level DP 贡献下采样限定与 Discrete Laplace 离散整数格加噪。
+
+| 参数 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `values` | `Any` | 是 | 输入值，支持 list / ndarray / pandas / pyarrow / scipy.sparse / SecretFlow 格式 |
+| `epsilon` | `float` | 是 | 隐私预算 ε |
+| `delta` | `float` | 否 | 隐私预算 δ；Gaussian 机制必须 > 0 |
+| `mechanism` | `str` | 否 | `"laplace"` 或 `"gaussian"` |
 | `column` | `Optional[str]` | 否 | 表格型输入的目标列名 |
 | `party` | `Optional[str]` | 否 | SecretFlow HDataFrame 的参与方标识 |
+| `round_int` | `bool` | 否 | 是否对输出后处理取整 |
+| `clip_non_negative` | `bool` | 否 | 是否截断保障非负（默认 True） |
+| `return_details` | `bool` | 否 | 是否返回 `DPResult` 结构体 |
+| `confidence_level` | `float` | 否 | 置信区间水平，默认 0.95 |
+| `user_ids` | `Optional[Sequence[Any]]` | 否 | 用户 ID 序列，启用 User-Level DP |
+| `max_contributions` | `int` | 否 | 单个用户最多保留的记录条数，默认 1 |
+| `discrete` | `bool` | 否 | 是否开启离散拉普拉斯机制（输出为整数） |
 
-**返回值**：带噪声的计数值（已做 `max(0, ...)` 截断）。
-
-**敏感度**：L1 = 1，L2 = 1。
+**返回值**：带噪声的计数值或 `DPResult` 结构。
 
 ---
 
@@ -211,63 +251,78 @@ sum(
     clip_upper: Optional[float] = None,
     column: Optional[str] = None,
     party: Optional[str] = None,
-) -> float
+    round_int: bool = False,
+    clip_non_negative: bool = False,
+    return_details: bool = False,
+    confidence_level: float = 0.95,
+    user_ids: Optional[Sequence[Any]] = None,
+    max_contributions: int = 1,
+) -> Union[float, DPResult]
 ```
 
-差分隐私求和。
-
-| 参数 | 类型 | 必填 | 说明 |
-|---|---|---|---|
-| `values` | `Any` | 是 | 输入值，支持多种数据格式 |
-| `epsilon` | `float` | 是 | 隐私预算 ε |
-| `delta` | `float` | 否 | 隐私预算 δ；Gaussian 机制必须 > 0 |
-| `mechanism` | `str` | 否 | `"laplace"` 或 `"gaussian"` |
-| `clip_lower` | `Optional[float]` | 否 | 截断下界；Gaussian 必须提供 |
-| `clip_upper` | `Optional[float]` | 否 | 截断上界；Gaussian 必须提供 |
-| `column` | `Optional[str]` | 否 | 表格型输入的目标列名 |
-| `party` | `Optional[str]` | 否 | SecretFlow HDataFrame 的参与方标识 |
-
-**返回值**：带噪声的求和结果。
-
-**敏感度**：L1 = L2 = `clip_upper - clip_lower`。
+差分隐私求和。支持 User-Level DP 用户贡献限定与自动敏感度放缩。
 
 ---
 
-#### `mean`
+#### `batch_count` & `batch_sum`
 
 ```python
-mean(
-    values: Any,
-    epsilon: float,
-    delta: float = 0.0,
-    mechanism: str = "laplace",
-    clip_lower: Optional[float] = None,
-    clip_upper: Optional[float] = None,
-    min_count: float = 5.0,
-    column: Optional[str] = None,
-    party: Optional[str] = None,
-) -> float
+batch_count(data: Any, epsilon: float, delta: float = 0.0, ...) -> Union[np.ndarray, DPResult]
+batch_sum(data: Any, epsilon: float, clip_lower: Union[float, Sequence[float]], clip_upper: Union[float, Sequence[float]], ...) -> Union[np.ndarray, DPResult]
 ```
 
-差分隐私均值。内部将 `(epsilon, delta)` 平分为两份，分别用于 count 与 sum，再用 `noisy_sum / noisy_count` 得到结果。
+2D 矩阵与 DataFrame 按列批量加噪接口。
 
-| 参数 | 类型 | 必填 | 说明 |
-|---|---|---|---|
-| `values` | `Any` | 是 | 输入值，支持多种数据格式 |
-| `epsilon` | `float` | 是 | 隐私预算 ε |
-| `delta` | `float` | 否 | 隐私预算 δ；Gaussian 机制必须 > 0 |
-| `mechanism` | `str` | 否 | `"laplace"` 或 `"gaussian"` |
-| `clip_lower` | `Optional[float]` | 否 | 截断下界；Gaussian 必须提供 |
-| `clip_upper` | `Optional[float]` | 否 | 截断上界；Gaussian 必须提供 |
-| `min_count` | `float` | 否 | 低频计数阈值，当估计的计数小于此值时返回 0.0 避免结果发散，默认 `5.0` |
-| `column` | `Optional[str]` | 否 | 表格型输入的目标列名 |
-| `party` | `Optional[str]` | 否 | SecretFlow HDataFrame 的参与方标识 |
+---
 
-**返回值**：带噪声的均值。
+#### `dp_aggregate`
 
-**敏感度**：count 部分为 1；sum 部分为 `clip_upper - clip_lower`。
+```python
+dp_aggregate(df: Any, specs: Dict[str, Any], epsilon: float, delta: float = 0.0, mechanism: str = "laplace", return_details: bool = False) -> Dict[str, Any]
+```
 
-**总隐私消耗**：$(\varepsilon, \delta)$。
+Table-Level 原位表格聚合接口，预算由组合定理按列切分。
+
+---
+
+#### `adaptive_clip`
+
+```python
+adaptive_clip(values: Any, epsilon: float, target_quantile: float = 0.95, num_iterations: int = 15, initial_clip: float = 10.0, ...) -> tuple[float, float]
+```
+
+通过差分隐私二分搜索自适应估计数据 [0, clip_upper] 截断上界。
+
+---
+
+#### `vector_sum`
+
+```python
+vector_sum(vectors: Any, max_norm: float, epsilon: float, delta: float = 0.0, mechanism: str = "gaussian", return_details: bool = False) -> Union[np.ndarray, DPResult]
+```
+
+高维向量 / 梯度 $L_2$ 范数截断与各向同性加噪 (DP-SGD)。
+
+---
+
+#### `dp_groupby`
+
+```python
+dp_groupby(df: Any, group_col: str, target_col: str, agg: str, epsilon: float, delta: float = 1e-5, ...) -> Dict[Any, Any]
+```
+
+Tau-Thresholding 私有 SQL Group-By 过滤。
+
+---
+
+#### `create_accumulator` & `finalize_dp`
+
+```python
+create_accumulator(values: Any, ...) -> Accumulator
+finalize_dp(accumulator: Accumulator, aggregation: str, epsilon: float, ...) -> Union[float, Dict[Any, float], DPResult]
+```
+
+分布式 Worker 无噪流式累加与 Master 节点统一加噪接口。
 
 ---
 
@@ -1926,3 +1981,267 @@ if remaining["epsilon"] < 0.5:
 8. **大样本本地 DP**：本地扰动需要 n ≥ 1000 才能获得可靠估计
 9. **审计日志记录**：记录每次查询的 ε/δ 消耗，便于追溯
 10. **持续评估效用**：定期对比带噪结果与真实值的误差，调整参数
+
+---
+
+## 8. 高级特性 API
+
+### 8.1 `adaptive_clip`
+
+```python
+adaptive_clip(
+    values: Any,
+    epsilon: float,
+    target_quantile: float = 0.95,
+    num_iterations: int = 15,
+    initial_clip: float = 10.0,
+    column: Optional[str] = None,
+    party: Optional[str] = None,
+) -> tuple[float, float]
+```
+
+差分隐私自适应二分搜索估计 `[0.0, clip_upper]` 上下界。
+
+| 参数 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `values` | `Any` | 是 | 输入数据 |
+| `epsilon` | `float` | 是 | 本次自适应搜索的总隐私预算（会全部消耗） |
+| `target_quantile` | `float` | 否 | 目标分位数，默认 0.95 |
+| `num_iterations` | `int` | 否 | 二分搜索迭代次数，默认 15 |
+| `initial_clip` | `float` | 否 | 初始 clip 上界，默认 10.0 |
+| `column` | `Optional[str]` | 否 | 表格型输入的目标列名 |
+| `party` | `Optional[str]` | 否 | SecretFlow 参与方 |
+
+**返回值**：`(clip_lower, clip_upper)` 元组，`clip_lower` 固定为 0.0。
+
+**预算消耗**：消耗 `epsilon` 预算，按 `num_iterations` 次 DP count 查询拆分。返回的 clip bounds 用于后续 sum/mean 调用，后续调用需额外消耗独立的隐私预算。
+
+**使用示例**：
+
+```python
+api = DPApi(namespace="adaptive_demo")
+
+# Step 1: 自适应搜索 clip 上界（消耗 epsilon=0.5）
+clip_lower, clip_upper = api.adaptive_clip(data, epsilon=0.5, target_quantile=0.95)
+
+# Step 2: 使用搜索到的 clip bounds 进行 sum 查询（额外消耗 epsilon=0.5）
+result = api.sum(data, epsilon=0.5, clip_lower=clip_lower, clip_upper=clip_upper)
+```
+
+---
+
+### 8.2 `dp_aggregate`
+
+```python
+dp_aggregate(
+    df: Any,
+    specs: List[Dict[str, Any]],
+    epsilon: float,
+    delta: float = 0.0,
+    mechanism: str = "laplace",
+    return_details: bool = False,
+) -> Dict[str, Any]
+```
+
+表格级 DP 聚合编排：对 DataFrame 按列执行多种聚合，自动按列数拆分预算（组合定理）。
+
+| 参数 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `df` | `Any` | 是 | 输入 DataFrame |
+| `specs` | `List[Dict]` | 是 | 聚合规格列表，每个包含 `column`、`agg`、`clip_lower`、`clip_upper` |
+| `epsilon` | `float` | 是 | 总隐私预算 ε |
+| `delta` | `float` | 否 | 总隐私预算 δ |
+| `mechanism` | `str` | 否 | `"laplace"` 或 `"gaussian"` |
+| `return_details` | `bool` | 否 | 是否返回 DPResult 详情 |
+
+**预算拆分**：`epsilon / num_specs`、`delta / num_specs` 均分给每个聚合规格。
+
+**支持的 agg 类型**：`"count"`、`"sum"`、`"mean"`、`"histogram"`。
+
+**使用示例**：
+
+```python
+api = DPApi(namespace="table_demo")
+result = api.dp_aggregate(
+    df,
+    specs=[
+        {"column": "age", "agg": "count"},
+        {"column": "salary", "agg": "sum", "clip_lower": 0, "clip_upper": 100000},
+        {"column": "age", "agg": "mean", "clip_lower": 0, "clip_upper": 150},
+    ],
+    epsilon=1.0,
+)
+```
+
+---
+
+### 8.3 `vector_sum` / `vector_mean`
+
+```python
+vector_sum(
+    vectors: Any,
+    max_norm: float,
+    epsilon: float,
+    delta: float = 0.0,
+    mechanism: str = "gaussian",
+    return_details: bool = False,
+    confidence_level: float = 0.95,
+) -> Union[np.ndarray, DPResult]
+
+vector_mean(
+    vectors: Any,
+    max_norm: float,
+    epsilon: float,
+    delta: float = 0.0,
+    mechanism: str = "gaussian",
+    min_count: float = 5.0,
+    return_details: bool = False,
+    confidence_level: float = 0.95,
+) -> Union[np.ndarray, DPResult]
+```
+
+高维向量 / 梯度 DP 加噪，用于 DP-SGD 训练。
+
+| 参数 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `vectors` | `Any` | 是 | 输入向量矩阵，支持 list/ndarray/DataFrame |
+| `max_norm` | `float` | 是 | L₂ 范数截断阈值 |
+| `epsilon` | `float` | 是 | 隐私预算 ε |
+| `delta` | `float` | 否 | 隐私预算 δ；Gaussian 机制必须 > 0 |
+| `mechanism` | `str` | 否 | `"laplace"` 或 `"gaussian"`，推荐 `"gaussian"` |
+| `min_count` | `float` | 否 | `vector_mean` 专用，noisy_count 低于此阈值时返回零向量 |
+| `return_details` | `bool` | 否 | 是否返回 DPResult 详情 |
+| `confidence_level` | `float` | 否 | 置信区间水平，默认 0.95 |
+
+**算法流程**：
+
+1. 对每行做 L₂ 范数截断：$\|v_i\|_2 > \text{max\_norm}$ 时缩放至 $\text{max\_norm}$
+2. 对截断后的向量逐元素加噪
+3. `vector_mean` 额外通过 noisy_count 归一化，防止低频数据发散
+
+**使用示例**：
+
+```python
+api = DPApi(namespace="dpsgd_demo")
+
+# DP-SGD 平均梯度
+gradients = [[0.1, -0.3, 0.5], [0.2, 0.4, -0.1], ...]
+avg_grad = api.vector_mean(gradients, max_norm=1.0, epsilon=0.5, delta=1e-5)
+```
+
+---
+
+### 8.4 `dp_groupby`
+
+```python
+dp_groupby(
+    df: Any,
+    group_col: str,
+    target_col: str,
+    agg: str,
+    epsilon: float,
+    delta: float = 1e-5,
+    clip_lower: Optional[float] = None,
+    clip_upper: Optional[float] = None,
+    mechanism: str = "laplace",
+    return_details: bool = False,
+) -> Dict[Any, Any]
+```
+
+Tau-Thresholding 差分隐私 SQL Group-By 过滤：自动过滤稀有分组，避免泄漏低频分组信息。
+
+| 参数 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `df` | `Any` | 是 | 输入 DataFrame |
+| `group_col` | `str` | 是 | 分组列名 |
+| `target_col` | `str` | 是 | 聚合目标列名 |
+| `agg` | `str` | 是 | 聚合类型：`"count"` / `"sum"` / `"mean"` |
+| `epsilon` | `float` | 是 | 总隐私预算 ε |
+| `delta` | `float` | 否 | 总隐私预算 δ |
+| `clip_lower` | `Optional[float]` | 否 | sum/mean 截断下界 |
+| `clip_upper` | `Optional[float]` | 否 | sum/mean 截断上界 |
+| `mechanism` | `str` | 否 | `"laplace"` 或 `"gaussian"` |
+
+**预算消耗**：将 `(epsilon, delta)` 按 `(num_groups × 2)` 拆分。每个 group 消耗 `epsilon/(num_groups*2)` 用于 count，若 `agg != "count"` 则再消耗 `epsilon/(num_groups*2)` 用于聚合。总消耗 ≤ epsilon。
+
+**Tau 阈值**：$\tau = 1 + \ln(1/\delta_{\text{per\_query}}) / \varepsilon_{\text{per\_query}}$，noisy_count 低于 τ 的分组被自动过滤。
+
+---
+
+### 8.5 `Accumulator` 分布式累加器
+
+```python
+@dataclass
+class Accumulator:
+    count: float = 0.0
+    sum: float = 0.0
+    histogram: Dict[Any, float] = field(default_factory=dict)
+    sensitivity: float = 1.0
+
+    def __add__(self, other: "Accumulator") -> "Accumulator"
+    def serialize(self) -> bytes
+    @classmethod
+    def deserialize(cls, b: bytes) -> "Accumulator"
+```
+
+分布式无噪流式累加器，用于 Map-Reduce 模式下的 DP 聚合。
+
+**使用流程**：
+
+1. **Worker 端**：`acc = api.create_accumulator(chunk)` 创建无噪局部累加器
+2. **传输**：`acc.serialize()` 导出，发送到 Master 节点
+3. **Master 端**：`merged_acc = master_acc + worker_acc` 合并
+4. **Master 端**：`result = api.finalize_dp(merged_acc, epsilon, agg_type)` 统一加噪
+
+```python
+api = DPApi(namespace="distributed_demo")
+
+# Worker 1
+acc1 = api.create_accumulator([1.0, 2.0, 3.0], clip_lower=0.0, clip_upper=10.0)
+
+# Worker 2
+acc2 = api.create_accumulator([4.0, 5.0], clip_lower=0.0, clip_upper=10.0)
+
+# Master: merge + finalize
+merged = acc1 + acc2
+result = api.finalize_dp(merged, epsilon=1.0, agg_type="sum")
+```
+
+---
+
+### 8.6 `RDPAccountant`
+
+```python
+class RDPAccountant:
+    def __init__(self, target_delta: float = 1e-5)
+    def record_gaussian(self, sigma: float, sensitivity: float = 1.0) -> None
+    def get_epsilon(self, delta: Optional[float] = None) -> float
+    def reset(self) -> None
+```
+
+Rényi DP 会计：为 Gaussian 机制提供比基本组合更紧致的预算估计。
+
+| 方法 | 说明 |
+|---|---|
+| `record_gaussian(sigma, sensitivity)` | 记录一次 Gaussian 机制调用 |
+| `get_epsilon(delta)` | 自动搜索最优 Rényi 阶数 α，返回最小 ε |
+| `reset()` | 重置所有记录 |
+
+**Rényi 阶数**：默认搜索 `{1.5, 2.0, 3.0, 5.0, 8.0, 12.0, 16.0, 24.0, 32.0, 64.0, 128.0}`。
+
+**使用示例**：
+
+```python
+from privacy_local_agent.privacy.budget import RDPAccountant
+
+rdp = RDPAccountant(target_delta=1e-5)
+
+# 记录 10 次 Gaussian 查询
+for _ in range(10):
+    rdp.record_gaussian(sigma=1.0, sensitivity=1.0)
+
+# 获取总 ε（自动搜索最优 α）
+total_epsilon = rdp.get_epsilon(delta=1e-5)
+```
+
+**与 BudgetAccountant 的关系**：`RDPAccountant` 是独立的辅助工具，不与 `BudgetAccountant` 自动集成。调用方可同时使用两者：`BudgetAccountant` 追踪基本组合下的保守上界，`RDPAccountant` 提供更紧致的参考估计。

@@ -1185,6 +1185,97 @@ privacy_traffic_bytes_total{method, path, direction}
 - REST：`privacy_local_agent/observability/middleware.py` 中的 `ObservabilityMiddleware`，读取请求体长度与响应内容长度。
 - gRPC：`GrpcObservabilityInterceptor` 中对 unary 调用使用 `protobuf.Message.ByteSize()` 估算请求/响应字节数；stream 调用因消息流不可预知，request/response 字节数计为 0。
 
+### 3.12 自适应截断（Adaptive Clipping）
+
+当数据范围未知时，`adaptive_clip` 通过 DP 二分搜索估计 clip 上界，避免数据观测前手动指定 clip 区间。
+
+#### 算法流程
+
+1. 初始化搜索范围 $[0, C_{\text{init}}]$，将 $\varepsilon$ 均分为 $T$ 份（$T$ = `num_iterations`）。
+2. 每次迭代取中点 $m = (\text{lo} + \text{hi}) / 2$，用 DP count 查询统计 $|x| \leq m$ 的数量。
+3. 若 noisy count $\geq$ 目标分位数 × n，则缩小上界；否则扩大下界。
+4. 经过 $T$ 次迭代后返回 $[0, C_{\text{final}}]$。
+
+#### 预算消耗
+
+`adaptive_clip` 会消耗全部传入的 $\varepsilon$ 预算（按 $T$ 次 DP count 拆分）。返回的 clip bounds 用于后续 sum/mean 调用，后续调用需额外消耗独立的隐私预算。
+
+#### 参数建议
+
+| 参数 | 推荐值 | 说明 |
+|---|---|---|
+| `target_quantile` | 0.95 | 覆盖 95% 数据，平衡截断与噪声 |
+| `num_iterations` | 15 | 搜索精度与预算消耗的权衡 |
+| `initial_clip` | 10× 预期范围 | 过大会浪费预算，过小会截断过多数据 |
+
+### 3.13 表格级 DP 聚合编排（dp_aggregate）
+
+`dp_aggregate` 对 DataFrame 按列执行多种聚合，自动按列数拆分预算。
+
+#### 预算拆分策略
+
+采用均分基本组合定理：$\varepsilon_{\text{per\_col}} = \varepsilon / k$，$\delta_{\text{per\_col}} = \delta / k$，其中 $k$ 为聚合规格数。
+
+#### 设计考量
+
+- 均分策略简单且安全，但非最优。对于重要性不同的列，未来可支持加权拆分。
+- 当前仅支持 pandas DataFrame 输入，SecretFlow 支持待后续添加。
+
+### 3.14 高维向量 DP 加噪（vector_sum / vector_mean）
+
+用于 DP-SGD 训练场景：对高维梯度向量做 L₂ 范数截断 + 各向同性加噪。
+
+#### 算法流程
+
+1. 对每个向量 $v_i$ 计算 $\|v_i\|_2$，若超过 `max_norm` 则缩放至 $\text{max\_norm}$。
+2. 对截断后的向量逐元素加噪：
+   - Gaussian：$\mathcal{N}(0, \sigma^2)$，$\sigma = \text{max\_norm} \cdot \sqrt{2\ln(1.25/\delta)} / \varepsilon$
+   - Laplace：$\text{Lap}(\text{max\_norm} / \varepsilon)$（各向同性，非最优但可用）
+3. `vector_mean` 额外通过 noisy_count 归一化，防止低频数据发散。
+
+#### 敏感度分析
+
+L₂ clip 后，每个向量的 L₂ 敏感度为 $\text{max\_norm}$。对于 $d$ 维向量，各向同性 Gaussian 的噪声尺度为 $\sigma = \text{max\_norm} \cdot \sqrt{2\ln(1.25/\delta)} / \varepsilon$，与维度 $d$ 无关。
+
+### 3.15 Tau-Thresholding DP Group-By
+
+`dp_groupby` 实现差分隐私 SQL Group-By 过滤，自动过滤稀有分组。
+
+#### 算法流程
+
+1. 将 $(\varepsilon, \delta)$ 按 $(G \times 2)$ 拆分，其中 $G$ 为分组数。
+2. 对每个分组执行 DP count，计算 Tau 阈值：$\tau = 1 + \ln(1/\delta_{\text{per\_query}}) / \varepsilon_{\text{per\_query}}$。
+3. 若 noisy count $\geq \tau$，则执行聚合；否则过滤该分组。
+
+#### 预算消耗
+
+每个分组消耗 $\varepsilon / (G \times 2)$ 用于 count，若 `agg != "count"` 则再消耗 $\varepsilon / (G \times 2)$ 用于聚合。总消耗 $\leq \varepsilon$。
+
+#### Tau 阈值的意义
+
+Tau-Thresholding 保证：即使某个分组只包含一条记录，攻击者也无法通过发布结果推断该分组的存在。这是通过噪声计数超过阈值时自动过滤实现的。
+
+### 3.16 分布式流式累加器（Accumulator）
+
+`Accumulator` 支持 Map-Reduce 模式下的 DP 聚合：Worker 端无噪累加，Master 端统一加噪。
+
+#### 设计原理
+
+- Worker 端：`create_accumulator(chunk)` 创建无噪局部累加器，包含 count/sum/histogram/sensitivity。
+- 传输：`serialize()` 导出为 JSON bytes，可跨网络传输。
+- Master 端：`+` 运算符合交换律/结合律，合并多个 Worker 的累加器。
+- 最终加噪：`finalize_dp(merged, epsilon, agg_type)` 对合并后的累加器注入一次 DP 噪声。
+
+#### 敏感度计算
+
+- count：敏感度 = 1（每条记录最多贡献 1 次计数）
+- sum：敏感度 = $C_{\text{upper}} - C_{\text{lower}}$（由 clip 区间决定）
+- histogram：敏感度 = 1（互斥划分）
+
+#### 稀疏矩阵处理
+
+`create_accumulator` 的稀疏路径会对数据先做 `np.clip` 再求和，确保敏感度与稠密路径一致。
+
 ## 4. 模块设计
 
 ### 4.1 `privacy_local_agent/privacy/dp.py`
@@ -1195,6 +1286,11 @@ privacy_traffic_bytes_total{method, path, direction}
 - `DPApi.histogram(...)`：直方图查询入口，利用互斥划分的联合敏感度为 1，仅消耗一次预算。
 - `DPApi.noisy_count/noisy_sum/noisy_mean/noisy_histogram(...)`：对已由外部引擎聚合好的中间结果加噪。
 - `DPApi.chunked_count/chunked_sum/chunked_mean/chunked_histogram(...)`：分块流式聚合。
+- `DPApi.adaptive_clip(...)`：差分隐私自适应二分搜索估计 clip 上界。
+- `DPApi.dp_aggregate(...)`：表格级 DP 聚合编排，按列自动拆分预算。
+- `DPApi.vector_sum/vector_mean(...)`：高维向量 / 梯度 DP 加噪（DP-SGD 基础）。
+- `DPApi.dp_groupby(...)`：Tau-Thresholding 差分隐私 SQL Group-By 过滤。
+- `DPApi.create_accumulator/finalize_dp(...)`：分布式 Worker 无噪累加与 Master 统一加噪。
 - `DPApi._clip_values(...)`：NumPy 向量化 clip，失败回退纯 Python。
 - `LocalDPApi.perturb_binary/perturb_categorical(...)`：二值/类别型本地 DP 扰动。
 - `LocalDPApi.estimate_binary_frequency/estimate_categorical_histogram(...)`：本地 DP 频率/直方图纠偏估计。
@@ -1260,6 +1356,36 @@ privacy_traffic_bytes_total{method, path, direction}
 
 当累计消耗超过 `total_epsilon` / `total_delta` 时，拒绝新查询并返回明确错误。预算一旦记录即不可回退，但会在配置的窗口到期后自动清零。
 
+### 5.4 Rényi DP 会计（RDPAccountant）
+
+`RDPAccountant` 是独立的 Rényi DP 会计工具，为 Gaussian 机制提供比基本组合更紧致的预算估计。
+
+#### Rényi 散度与 RDP
+
+机制 $M$ 满足 $(\alpha, \varepsilon_\alpha)$-RDP，当且仅当相邻数据集 $D \sim D'$ 的输出分布的 Rényi 散度满足：
+
+$$D_\alpha(M(D) \Vert M(D')) \leq \varepsilon_\alpha$$
+
+对于 Gaussian 机制 $\mathcal{N}(0, \sigma^2)$，敏感度为 $\Delta$ 时：
+
+$$\varepsilon_\alpha = \frac{\alpha \cdot \Delta^2}{2\sigma^2}$$
+
+#### 从 RDP 转换到 (ε, δ)-DP
+
+给定 $\delta$，搜索最优阶数 $\alpha$ 使 $\varepsilon$ 最小：
+
+$$\varepsilon = \varepsilon_\alpha + \frac{\ln(1/\delta)}{\alpha - 1}$$
+
+#### 实现细节
+
+- 默认搜索阶数集合：$\{1.5, 2.0, 3.0, 5.0, 8.0, 12.0, 16.0, 24.0, 32.0, 64.0, 128.0\}$
+- 每次 `record_gaussian(sigma, sensitivity)` 对所有阶数累加 $\varepsilon_\alpha$
+- `get_epsilon(delta)` 遍历所有阶数，返回最小 $\varepsilon$
+
+#### 与 BudgetAccountant 的关系
+
+`RDPAccountant` 是独立的辅助工具，不与 `BudgetAccountant` 自动集成。调用方可同时使用两者：`BudgetAccountant` 追踪基本组合下的保守上界，`RDPAccountant` 提供更紧致的参考估计。
+
 ## 6. 数据集级隐私预算分配
 
 ### 6.1 确定数据集总预算
@@ -1301,7 +1427,7 @@ $$\varepsilon' \approx \sqrt{2k \cdot \ln(1/\delta')} \cdot \varepsilon + k \cdo
 
 高级组合在 $k$ 较大时通常比基本组合更紧致，可将总 $\varepsilon$ 从 $k \cdot \varepsilon$ 降低到约 $\sqrt{k} \cdot \varepsilon$ 量级。
 
-> **当前实现状态**：BudgetAccountant 仅支持基本组合（直接相加）。高级组合与 Renyi DP（RDP）虽然能显著改善多次查询下的预算估计，但会改变预算语义，要求调用方预先声明查询序列长度或维护 RDP 阶数状态，增加了 API 复杂度与审计难度。在 POC/MVP 阶段，为保持接口简单和可解释性，未实现高级组合/RDP；若未来需要支持高频查询场景，可在 BudgetAccountant 中增加可选的组合模式。
+> **当前实现状态**：BudgetAccountant 支持基本组合（直接相加）。Rényi DP（RDP）会计已通过独立的 `RDPAccountant` 类实现，可用于 Gaussian 机制下更紧致的多阶预算估计，但尚未与 `BudgetAccountant` 自动集成。高级组合定理的自动选择尚未实现。
 
 ### 6.4 预算分配示例
 
@@ -1401,32 +1527,68 @@ $$\approx 4.48$$
 }
 ```
 
-### 7.4 gRPC 字段
+### 7.4 gRPC 字段与高效传输
 
 `DPRequest` 包含 `epsilon`、`delta`、`mechanism`、`clip_lower`、`clip_upper`，与 REST 参数语义一致。
 
-新增消息：`DPNoisyCountRequest`、`DPNoisySumRequest`、`DPNoisyMeanRequest`、`DPNoisyHistogramRequest`、`DPChunkedCountRequest`、`DPChunkedSumRequest`、`DPChunkedMeanRequest`、`DPChunkedHistogramRequest`，以及 `DoubleChunk`、`StringChunk`。
+- 新增紧凑型二进制消息：`DPResultProto`，利用 protobuf3 的 `repeated double value_vector [packed = true]` 压缩浮点向量体积（较 JSON 传输降低 50%+ 带宽开销）。
+- 消息拓展：`DPNoisyCountRequest`、`DPNoisySumRequest`、`DPNoisyMeanRequest`、`DPNoisyHistogramRequest`、`DPChunkedCountRequest`、`DPChunkedSumRequest`、`DPChunkedMeanRequest`、`DPChunkedHistogramRequest`、`DPAggregateRequest`、`DPVectorSumRequest`、`DPAdaptiveClipRequest`、`DPGroupByRequest`。
 
-## 8. 安全与兼容性设计
+## 8. 高级机制与架构演进设计
+
+### 8.1 结构化输出与 PyArrow 零拷贝 (`DPResult.to_arrow()`)
+
+`DPResult` dataclass 不仅包含带噪值，还包含全量结构化元数据（`noise_mechanism`、`noise_scale`、`epsilon_spent`、`delta_spent`、`confidence_interval`）。
+
+通过 `DPResult.to_arrow()` 方法，可将计算结果转换为 `pyarrow.Table`，并将 JSON 序列化的 DP 元数据存入 Arrow Schema 的 Metadata 中（Key 为 `b"dp_metadata"`）。这使得 DP 结果能直接通过零拷贝的形式无缝传递给下游 DuckDB、Polars、Spark 或 Arrow Flight 引擎。
+
+### 8.2 用户级差分隐私 (User-Level DP)
+
+为了防范同一个用户在日志中贡献多条记录而导致敏感度放大的隐私泄露，`count()` 和 `sum()` 引入了 `user_ids` 与 `max_contributions` 参数：
+
+- 内部通过 `_bound_contributions` 按用户 ID 对数据做下采样限定，确保每个用户最多贡献 $K = \text{max\_contributions}$ 条记录；
+- 敏感度自动放缩为 $\Delta_{\text{user}} = K \times \Delta_{\text{single}}$；
+- 为现实中常见的长尾用户行为日志分析提供严格的 **User-Level DP** 保证。
+
+### 8.3 整数格 ℤ 上的离散拉普拉斯机制 (Discrete Laplace)
+
+在处理计数（count）或直方图（histogram）时，传统连续拉普拉斯/高斯采样并对浮点结果做 `round_int` 取整在密码学形式化证明中存在极其微小的浮点截断风险。
+
+模块在 `count(..., discrete=True)` 中实现了 **Discrete Laplace** (Two-sided Geometric) 分布采样算法：
+
+$$P[X = k] = \frac{1 - e^{-1/b}}{1 + e^{-1/b}} \cdot e^{-|k|/b}, \quad k \in \mathbb{Z}$$
+
+算法通过均匀分布 $u_1, u_2 \sim \text{Uniform}(0, 1)$ 生成两个独立几何分布并取差值 $g_1 - g_2$，输出天然为整数，在整数格 $\mathbb{Z}$ 上提供 100% 形式化证明严谨的纯 $\varepsilon$-DP。
+
+### 8.4 不可篡改 HMAC 预算审计日志 (`BudgetAuditLogger`)
+
+为满足金融与医疗级的合规审计需求，模块引入了 `BudgetAuditLogger`：
+
+- 每次 `BudgetAccountant.spend()` 成功扣减预算后，将时间戳、命名空间、本次消耗、累计消耗等状态合并；
+- 基于 `HMAC-SHA256` 密钥对状态消息进行密码学签名：$\text{Signature} = \text{HMAC}_{\text{Key}}(\text{Timestamp} \mid \text{Namespace} \mid \varepsilon \mid \delta \mid \dots)$；
+- 以追加只读（Append-Only）模式写入审计日志文件，防止恶意进程重置 SQLite 或篡改预算扣减历史。
+
+## 9. 安全与兼容性设计
 
 - 默认 `mechanism=laplace`，$\delta = 0$。
 - Gaussian 机制下 `delta` 必须大于 0，且必须显式提供 `clip_lower` / `clip_upper`。
-- Laplace 机制下若未提供 `clip_lower` / `clip_upper`，系统会自动从输入数据中自适应推断 `[min, max]` 作为截断区间并触发 Warning 警告；生产环境强烈建议显式指定。
+- Laplace 机制下若未提供 `clip_lower` / `clip_upper`，系统会自动从输入数据中自适应推断 `[min, max]` 作为截断区间并触发 Warning 警告；生产环境强烈建议显式指定或使用 `adaptive_clip`。
 - **NumPy 依赖**：clip 操作优先使用 NumPy（`numpy>=1.24.0` 为核心依赖）；若 NumPy 不可用或转换失败，自动回退到纯 Python，保证核心功能可用。
-- **SecretFlow 可选依赖**：SecretFlow 相关数据适配为可选能力，未安装时不影响 list/NumPy/pandas 输入。
-- **浮点数与随机数安全**：当前采样噪声已升级为密码学安全的随机数生成器（CSRPNG，通过 `SecureRandom` 包装 `secrets.SystemRandom`），防止攻击者通过多次查询收集的样本还原生成器状态；同时保留了测试模式下 `.seed()` 调用的确定性兼容。针对浮点数表示缺陷引起的物理泄漏风险（Mironov, 2012），可考虑后续集成 discrete Laplace 或 snapping 机制。
+- **SecretFlow 可选依赖**：SecretFlow 相关数据适配为可选能力，未安装时不影响 list/NumPy/pandas/pyarrow 输入。
+- **浮点数与随机数安全**：噪声采样由密码学安全的 `SecureRandom`（基于 `secrets.SystemRandom`）生成；对整数型聚合提供 `Discrete Laplace` 机制，彻底消除浮点数取整与表达产生的物理泄漏风险。
 
-## 9. 测试策略
+## 10. 测试策略
 
-- Laplace/Gaussian 机制单元测试（含解析高斯机制）。
-- NumPy 向量化 clip 与纯 Python 回退测试。
-- clipping 参数校验与敏感度计算测试。
-- delta 预算正确消耗、超支拒绝与时间窗口重置测试。
-- mean `min_count` 低频保护测试。
-- histogram 联合敏感度测试。
-- noisify 接口（count/sum/mean/histogram）单元测试与 REST/gRPC 测试。
-- chunked 接口（count/sum/mean/histogram）单元测试与 REST/gRPC 测试。
-- 数据适配器对 list/NumPy/pandas/SecretFlow 的测试。
-- REST/gRPC 接口参数透传测试。
-- 本地 DP REST/gRPC 接口测试。
-- `privacy_traffic_bytes_total` 指标接入测试。
+- Laplace/Gaussian/Discrete Laplace 机制单元测试。
+- `statistics.NormalDist` 高斯置信区间与 `mean()` Delta 方法一阶泰勒展开置信区间测试。
+- NumPy 向量化 clip 与稀疏矩阵 `scipy.sparse` 零 Dense 化测试。
+- User-Level DP 贡献下采样限定与敏感度放缩测试。
+- `DPResult.to_arrow()` PyArrow Metadata 序列化测试。
+- `BudgetAuditLogger` HMAC-SHA256 签名与文件日志测试。
+- `adaptive_clip` 自适应截断边界与预算消耗测试。
+- `dp_aggregate` 表格级聚合预算拆分与结果正确性测试。
+- `vector_sum` / `vector_mean` 高维向量加噪与 L₂ clip 测试。
+- `dp_groupby` Tau-Thresholding 稀有分组过滤测试。
+- `Accumulator` 分布式累加器序列化、合并、finalize 测试。
+- `RDPAccountant` Rényi DP 多阶会计与最优 α 搜索测试。
+- REST (`/v1/privacy/dp/*`) 与 gRPC Protobuf `packed = true` 接入测试。

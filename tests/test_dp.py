@@ -333,9 +333,11 @@ class TestVectorizedClip:
     """测试 _clip_values 的向量化裁剪与回退路径。"""
 
     def test_clip_values_basic(self):
+        import numpy as np
         api = DPApi(namespace="test-clip-basic")
         result = api._clip_values([1.0, 2.0, 100.0, -5.0], 0.0, 10.0)
-        assert result == [1.0, 2.0, 10.0, 0.0]
+        assert isinstance(result, np.ndarray)
+        np.testing.assert_array_equal(result, [1.0, 2.0, 10.0, 0.0])
 
     def test_clip_values_with_nan(self):
         import math
@@ -536,3 +538,267 @@ class TestDataAdapters:
         df = pd.DataFrame({"a": [1.0, 2.0]})
         with pytest.raises(ValueError, match="column"):
             api.count(df, epsilon=1.0)
+
+
+class TestDPResultAndPostProcessing:
+    def test_dp_result_metadata(self):
+        from privacy_local_agent.privacy.dp import DPResult
+
+        ns = "test-dp-result"
+        BudgetAccountant(ns, epsilon_total=10.0, delta_total=1.0)
+        api = DPApi(namespace=ns)
+        api.rng.seed(42)
+        res = api.sum(
+            [1.0, 2.0, 3.0],
+            epsilon=1.0,
+            mechanism="laplace",
+            clip_lower=0.0,
+            clip_upper=10.0,
+            return_details=True,
+        )
+        assert isinstance(res, DPResult)
+        assert res.noise_mechanism == "laplace"
+        assert res.epsilon_spent == 1.0
+        assert len(res.confidence_interval) == 2
+        assert res.confidence_interval[0] < res.value < res.confidence_interval[1]
+
+    def test_post_processing_options(self):
+        ns = "test-dp-postprocess"
+        BudgetAccountant(ns, epsilon_total=10.0, delta_total=1.0)
+        api = DPApi(namespace=ns)
+        api.rng.seed(42)
+        res = api.count(
+            [1.0, 2.0, 3.0],
+            epsilon=1.0,
+            round_int=True,
+            clip_non_negative=True,
+        )
+        assert isinstance(res, float)
+        assert res.is_integer()
+        assert res >= 0.0
+
+
+class TestSparseMatrixDP:
+    def test_sparse_matrix_count_and_sum(self):
+        sp = pytest.importorskip("scipy.sparse")
+        ns = "test-sparse-dp"
+        BudgetAccountant(ns, epsilon_total=20.0, delta_total=1.0)
+        api = DPApi(namespace=ns)
+        api.rng.seed(42)
+
+        sparse_arr = sp.csr_matrix([1.0, 0.0, 2.0, 0.0, 3.0])
+        count_res = api.count(sparse_arr, epsilon=5.0)
+        assert count_res >= 0.0
+
+        sum_res = api.sum(
+            sparse_arr, epsilon=5.0, clip_lower=0.0, clip_upper=10.0
+        )
+        assert sum_res > 0.0
+
+
+class TestBatchDP:
+    def test_batch_count_and_sum(self):
+        np = pytest.importorskip("numpy")
+        from privacy_local_agent.privacy.dp import DPResult
+
+        ns = "test-batch-dp"
+        BudgetAccountant(ns, epsilon_total=100.0, delta_total=1.0)
+        api = DPApi(namespace=ns)
+        api.rng.seed(42)
+
+        data = np.array([
+            [1.0, 2.0],
+            [3.0, 4.0],
+            [5.0, 6.0]
+        ])
+
+        batch_counts = api.batch_count(data, epsilon=2.0)
+        assert len(batch_counts) == 2
+
+        batch_sums = api.batch_sum(
+            data,
+            epsilon=2.0,
+            clip_lower=[0.0, 0.0],
+            clip_upper=[10.0, 10.0],
+            return_details=True,
+        )
+        assert isinstance(batch_sums, DPResult)
+        assert len(batch_sums.value) == 2
+        assert len(batch_sums.confidence_interval) == 2
+
+
+class TestRefinedDPFixes:
+    def test_mean_sparse_matrix_shape_and_delta_ci(self):
+        sp = pytest.importorskip("scipy.sparse")
+        from privacy_local_agent.privacy.dp import DPResult
+
+        ns = "test-sparse-mean-delta"
+        BudgetAccountant(ns, epsilon_total=50.0, delta_total=1.0)
+        api = DPApi(namespace=ns)
+        api.rng.seed(42)
+
+        # 1000 行，但只有 3 个非零值（全零数据包含 997 个零）
+        dense_data = [0.0] * 997 + [10.0, 20.0, 30.0]
+        sparse_arr = sp.csr_matrix(dense_data).T  # 1000x1 矩阵
+
+        res_details = api.mean(
+            sparse_arr,
+            epsilon=2.0,
+            clip_lower=0.0,
+            clip_upper=100.0,
+            min_count=1.0,
+            return_details=True,
+        )
+        assert isinstance(res_details, DPResult)
+        # 确认 mean noise_scale > 0 且置信区间非退化
+        assert res_details.noise_scale > 0.0
+        assert res_details.confidence_interval[0] < res_details.value < res_details.confidence_interval[1]
+
+    def test_gaussian_confidence_interval_arbitrary_level(self):
+        from privacy_local_agent.privacy.dp import compute_confidence_interval
+
+        # 测试 Gaussian 机制在任意置信水平 (如 0.90 和 0.99) 时的严格 CI 单调增加
+        low90, high90 = compute_confidence_interval(
+            10.0, noise_scale=2.0, mechanism="gaussian", confidence_level=0.90
+        )
+        low99, high99 = compute_confidence_interval(
+            10.0, noise_scale=2.0, mechanism="gaussian", confidence_level=0.99
+        )
+        assert (high99 - low99) > (high90 - low90)
+
+
+class TestAdvancedDPFeatures:
+    def test_dp_aggregate_dataframe(self):
+        pd = pytest.importorskip("pandas")
+        ns = "test-dp-aggregate"
+        BudgetAccountant(ns, epsilon_total=20.0, delta_total=1.0)
+        api = DPApi(namespace=ns)
+
+        df = pd.DataFrame({
+            "age": [20, 30, 40, 50],
+            "salary": [1000.0, 2000.0, 3000.0, 4000.0],
+            "dept": ["eng", "hr", "eng", "sales"]
+        })
+
+        specs = {
+            "age": ("mean", {"clip_lower": 0, "clip_upper": 100}),
+            "salary": ("sum", {"clip_lower": 0, "clip_upper": 10000}),
+            "dept": ("histogram", {"categories": ["eng", "hr", "sales"]}),
+        }
+
+        res = api.dp_aggregate(df, specs, epsilon=3.0)
+        assert "age" in res and "salary" in res and "dept" in res
+
+    def test_adaptive_clip(self):
+        ns = "test-adaptive-clip"
+        api = DPApi(namespace=ns)
+        lower, upper = api.adaptive_clip([1.0, 5.0, 10.0, 15.0, 20.0], epsilon=1.0, initial_clip=10.0)
+        assert lower == 0.0
+        assert upper > 0.0
+
+    def test_accumulator_serialize_merge_finalize(self):
+        from privacy_local_agent.privacy.dp import Accumulator
+
+        ns = "test-accumulator"
+        BudgetAccountant(ns, epsilon_total=20.0, delta_total=1.0)
+        api = DPApi(namespace=ns)
+        api.rng.seed(42)
+
+        acc1 = api.create_accumulator([1.0, 2.0], clip_lower=0.0, clip_upper=10.0)
+        acc2 = api.create_accumulator([3.0, 4.0], clip_lower=0.0, clip_upper=10.0)
+
+        # 序列化/反序列化测试
+        serialized = acc2.serialize()
+        acc2_deser = Accumulator.deserialize(serialized)
+
+        merged = acc1 + acc2_deser
+        assert merged.count == 4.0
+        assert merged.sum == 10.0
+
+        final_sum = api.finalize_dp(merged, aggregation="sum", epsilon=1.0)
+        assert isinstance(final_sum, float)
+
+    def test_vector_sum_dpsgd(self):
+        np = pytest.importorskip("numpy")
+        ns = "test-vector-sum"
+        BudgetAccountant(ns, epsilon_total=20.0, delta_total=1.0)
+        api = DPApi(namespace=ns)
+
+        grads = np.array([
+            [1.0, 2.0, 3.0],
+            [4.0, 5.0, 6.0]
+        ])
+        noisy_grads = api.vector_sum(grads, max_norm=5.0, epsilon=1.0, delta=1e-4)
+        assert noisy_grads.shape == (3,)
+
+    def test_rdp_accountant(self):
+        from privacy_local_agent.privacy.budget import RDPAccountant
+
+        rdp = RDPAccountant(target_delta=1e-5)
+        # 记录 10 次高斯查询
+        for _ in range(10):
+            rdp.record_gaussian(sigma=2.0, sensitivity=1.0)
+
+        eps = rdp.get_epsilon()
+        assert 0.0 < eps < 50.0
+
+    def test_dp_groupby(self):
+        pd = pytest.importorskip("pandas")
+        ns = "test-dp-groupby"
+        BudgetAccountant(ns, epsilon_total=100.0, delta_total=1.0)
+        api = DPApi(namespace=ns)
+
+        df = pd.DataFrame({
+            "city": ["Beijing"] * 50 + ["Shanghai"] * 40 + ["TinyVillage"] * 1,
+            "income": [100.0] * 91,
+        })
+
+        res = api.dp_groupby(df, group_col="city", target_col="income", agg="count", epsilon=2.0, delta=1e-3)
+        assert "Beijing" in res
+        assert "TinyVillage" not in res
+
+    def test_user_level_dp_bounding(self):
+        np = pytest.importorskip("numpy")
+        ns = "test-user-level-dp"
+        BudgetAccountant(ns, epsilon_total=20.0, delta_total=1.0)
+        api = DPApi(namespace=ns)
+
+        # 某用户 user_A 在日志中产生了 100 条数据，下采样绑定为最多 2 条
+        vals = np.array([10.0] * 100)
+        uids = ["user_A"] * 100
+        res = api.count(vals, epsilon=1.0, user_ids=uids, max_contributions=2)
+        assert res >= 0.0
+
+    def test_discrete_laplace(self):
+        ns = "test-discrete-laplace"
+        api = DPApi(namespace=ns)
+        res = api.count([1.0, 2.0, 3.0], epsilon=1.0, discrete=True)
+        assert isinstance(res, (int, float))
+
+    def test_dp_result_to_arrow(self):
+        pa = pytest.importorskip("pyarrow")
+        ns = "test-arrow-metadata"
+        api = DPApi(namespace=ns)
+        res_details = api.count([1.0, 2.0, 3.0], epsilon=1.0, return_details=True)
+
+        arrow_table = res_details.to_arrow()
+        assert isinstance(arrow_table, pa.Table)
+        assert b"dp_metadata" in arrow_table.schema.metadata
+
+    def test_hmac_budget_audit(self):
+        import os
+        from privacy_local_agent.privacy.budget import BudgetAuditLogger
+
+        audit_path = "/tmp/test_budget_audit.log"
+        if os.path.exists(audit_path):
+            os.remove(audit_path)
+
+        logger = BudgetAuditLogger(log_file=audit_path)
+        sig = logger.log_spend("test_ns", 1.0, 0.0, 1.0, 0.0)
+        assert len(sig) == 64
+        assert os.path.exists(audit_path)
+        if os.path.exists(audit_path):
+            os.remove(audit_path)
+
+
+

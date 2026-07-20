@@ -13,6 +13,8 @@ budget is exhausted. Supports optional time-window based reset to prevent
 long-running sidecars from permanently exhausting their budget.
 """
 
+import hashlib
+import hmac
 import os
 import sqlite3
 import threading
@@ -20,6 +22,46 @@ import time
 from typing import Dict, Optional
 
 from ..observability.metrics import BUDGET_REMAINING
+
+
+class BudgetAuditLogger:
+    """不可篡改的 HMAC 签名隐私预算审计日志。
+
+    审计密钥通过环境变量 PRIVACY_AUDIT_KEY 配置；若未设置则回退到默认密钥并输出警告。
+    生产环境务必通过环境变量设置高强度随机密钥。
+    """
+
+    def __init__(self, secret_key: Optional[bytes] = None, log_file: Optional[str] = None):
+        env_key = os.environ.get("PRIVACY_AUDIT_KEY")
+        if secret_key is not None:
+            self.secret_key = secret_key
+        elif env_key is not None:
+            self.secret_key = env_key.encode("utf-8")
+        else:
+            import warnings
+            warnings.warn(
+                "BudgetAuditLogger: no audit key configured (set PRIVACY_AUDIT_KEY env var). "
+                "Using insecure default key — NOT suitable for production.",
+                stacklevel=2,
+            )
+            self.secret_key = b"privacy-local-agent-default-audit-key"
+        self.log_file = log_file or os.environ.get("PRIVACY_BUDGET_AUDIT_LOG", "/tmp/budget_audit.log")
+        self._lock = threading.Lock()
+
+    def log_spend(
+        self, namespace: str, epsilon: float, delta: float, eps_spent: float, del_spent: float
+    ) -> str:
+        with self._lock:
+            ts = time.time()
+            msg = f"{ts:.4f}|{namespace}|{epsilon:.6f}|{delta:.8f}|{eps_spent:.6f}|{del_spent:.8f}"
+            signature = hmac.new(self.secret_key, msg.encode("utf-8"), hashlib.sha256).hexdigest()
+            log_line = f"{msg}|{signature}\n"
+            try:
+                with open(self.log_file, "a", encoding="utf-8") as f:
+                    f.write(log_line)
+            except Exception:
+                pass
+            return signature
 
 
 class PrivacyBudgetExhausted(Exception):
@@ -255,6 +297,9 @@ class BudgetAccountant:
                     self.epsilon_spent = eps_spent
                     self.delta_spent = del_spent
                     self._update_metrics(eps_total, del_total, new_eps, new_delta)
+                    BudgetAuditLogger().log_spend(
+                        self.namespace, eps_total, del_total, new_eps, new_delta
+                    )
                 except Exception as e:
                     conn.rollback()
                     raise e
@@ -277,6 +322,9 @@ class BudgetAccountant:
                 self.delta_spent = new_delta
                 self._update_metrics(
                     self.epsilon_total, self.delta_total, new_eps, new_delta
+                )
+                BudgetAuditLogger().log_spend(
+                    self.namespace, self.epsilon_total, self.delta_total, new_eps, new_delta
                 )
 
     def _update_metrics(
@@ -366,3 +414,65 @@ class BudgetAccountant:
                     "epsilon": self.epsilon_total - self.epsilon_spent,
                     "delta": self.delta_total - self.delta_spent,
                 }
+
+
+class RDPAccountant:
+    """Rényi 差分隐私（RDP）会计。
+
+    基于 Mironov (2017) 提出的 Rényi Differential Privacy 组合定理：
+    对于任意 alpha > 1，多个 RDP 查询的 epsilon_alpha 可以直接线性相加；
+    在转换回经典 (epsilon, delta)-DP 时，选择最优的 alpha 值使 epsilon 最小：
+        epsilon(delta) = min_{alpha > 1} ( epsilon_alpha + ln(1/delta) / (alpha - 1) )
+    在多轮高斯加噪场景下相比传统 Basic Composition 可以节省大量隐私预算。
+    """
+
+    def __init__(self, target_delta: float = 1e-5):
+        self.target_delta = target_delta
+        # 记录各 order alpha 下累积的 RDP epsilon
+        self.rdp_orders = [1.5, 2.0, 3.0, 5.0, 8.0, 12.0, 16.0, 24.0, 32.0, 64.0, 128.0]
+        self.rdp_epsilons: Dict[float, float] = {a: 0.0 for a in self.rdp_orders}
+        self._lock = threading.Lock()
+
+    def record_gaussian(self, sigma: float, sensitivity: float = 1.0) -> None:
+        """记录一次高斯机制下的 RDP 消耗。
+
+        高斯机制在 order alpha 下的 RDP epsilon = alpha * sensitivity^2 / (2 * sigma^2)。
+        """
+        if sigma <= 0.0 or sensitivity <= 0.0:
+            return
+        with self._lock:
+            for alpha in self.rdp_orders:
+                eps_a = alpha * (sensitivity**2) / (2.0 * (sigma**2))
+                self.rdp_epsilons[alpha] += eps_a
+
+    def record_rdp(self, alpha: float, rdp_eps: float) -> None:
+        """显式记录一次 (alpha, rdp_eps) 的 RDP 消耗。"""
+        with self._lock:
+            if alpha not in self.rdp_epsilons:
+                self.rdp_orders.append(alpha)
+                self.rdp_orders.sort()
+                self.rdp_epsilons[alpha] = 0.0
+            self.rdp_epsilons[alpha] += rdp_eps
+
+    def get_epsilon(self, delta: Optional[float] = None) -> float:
+        """转换回经典 (epsilon, delta)-DP 下的最小 epsilon。"""
+        d = delta if delta is not None else self.target_delta
+        if d <= 0.0:
+            return float("inf")
+        with self._lock:
+            best_eps = float("inf")
+            import math
+
+            for alpha in self.rdp_orders:
+                eps_a = self.rdp_epsilons[alpha]
+                # conversion formula: eps = eps_a + ln(1/delta)/(alpha - 1)
+                eps = eps_a + math.log(1.0 / d) / (alpha - 1.0)
+                if eps < best_eps:
+                    best_eps = eps
+            return best_eps
+
+    def reset(self) -> None:
+        """重置所有已累积的 RDP 消耗，保留原有 orders 配置。"""
+        with self._lock:
+            for alpha in self.rdp_orders:
+                self.rdp_epsilons[alpha] = 0.0

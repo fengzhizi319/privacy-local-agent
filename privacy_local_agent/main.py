@@ -201,6 +201,38 @@ class DPChunkedMeanRequest(BaseModel):
     params: Dict[str, object] = {}
 
 
+class DPAggregateRequest(BaseModel):
+    """表格级原位 DP 聚合请求模型。"""
+
+    rows: List[Dict[str, Any]]
+    specs: Dict[str, Any]
+    params: Dict[str, object] = {}
+
+
+class DPVectorSumRequest(BaseModel):
+    """高维向量 / 梯度 $L_2$ 范数截断加噪请求模型。"""
+
+    vectors: List[List[float]]
+    params: Dict[str, object] = {}
+
+
+class DPAdaptiveClipRequest(BaseModel):
+    """差分隐私自适应二分搜索估计上下界请求模型。"""
+
+    values: List[float]
+    params: Dict[str, object] = {}
+
+
+class DPGroupByRequest(BaseModel):
+    """Tau-Thresholding 差分隐私 SQL Group-By 请求模型。"""
+
+    rows: List[Dict[str, Any]]
+    group_col: str
+    target_col: str
+    agg: str
+    params: Dict[str, object] = {}
+
+
 class DPChunkedHistogramRequest(BaseModel):
     """分块流式 DP 直方图请求模型。"""
 
@@ -504,6 +536,70 @@ def dp_noisy_histogram(req: DPNoisyHistogramRequest):
     """对已聚合直方图计数注入 DP 噪声。"""
     try:
         return {"result": service.dp_noisy_histogram(req.true_counts, req.params)}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/v1/privacy/dp/aggregate", dependencies=[*SECURITY_DEPS, require_permission("privacy:dp")])
+def dp_aggregate(req: DPAggregateRequest):
+    """表格级原位 DP 聚合接口。"""
+    try:
+        import pandas as pd
+
+        df = pd.DataFrame(req.rows)
+        return {"result": service.dp_aggregate(df, req.specs, req.params)}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/v1/privacy/dp/vector_sum", dependencies=[*SECURITY_DEPS, require_permission("privacy:dp")])
+def dp_vector_sum(req: DPVectorSumRequest):
+    """高维向量 / 梯度 $L_2$ 范数截断加噪接口。"""
+    try:
+        import numpy as np
+
+        vectors = np.array(req.vectors)
+        res = service.dp_vector_sum(vectors, req.params)
+        if hasattr(res, "value"):
+            return {"result": list(res.value), "details": str(res)}
+        return {"result": list(res)}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/v1/privacy/dp/vector_mean", dependencies=[*SECURITY_DEPS, require_permission("privacy:dp")])
+def dp_vector_mean(req: DPVectorSumRequest):
+    """高维向量 DP 均值：L2 范数截断 + 各向同性加噪 + noisy_count 归一化。"""
+    try:
+        import numpy as np
+
+        vectors = np.array(req.vectors)
+        res = service.dp_vector_mean(vectors, req.params)
+        if hasattr(res, "value"):
+            return {"result": list(res.value), "details": str(res)}
+        return {"result": list(res)}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/v1/privacy/dp/adaptive_clip", dependencies=[*SECURITY_DEPS, require_permission("privacy:dp")])
+def dp_adaptive_clip(req: DPAdaptiveClipRequest):
+    """差分隐私自适应二分搜索估计上下界接口。"""
+    try:
+        lower, upper = service.dp_adaptive_clip(req.values, req.params)
+        return {"clip_lower": lower, "clip_upper": upper}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/v1/privacy/dp/groupby", dependencies=[*SECURITY_DEPS, require_permission("privacy:dp")])
+def dp_groupby(req: DPGroupByRequest):
+    """Tau-Thresholding 差分隐私 SQL Group-By 接口。"""
+    try:
+        import pandas as pd
+
+        df = pd.DataFrame(req.rows)
+        return {"result": service.dp_groupby(df, req.group_col, req.target_col, req.agg, req.params)}
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 

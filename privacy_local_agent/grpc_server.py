@@ -306,6 +306,53 @@ class PrivacyServicer(
             estimated_histogram=estimated_histogram
         )
 
+    def DPAggregate(self, request, context):
+        import json
+        import pandas as pd
+        rows = [dict(r.fields) for r in request.rows]
+        df = pd.DataFrame(rows)
+        specs = json.loads(request.specs_json)
+        params = {"epsilon": request.epsilon, "delta": request.delta, "mechanism": request.mechanism, "return_details": request.return_details}
+        res = self.service.dp_aggregate(df, specs, params)
+        res_json = json.dumps(res, default=str)
+        return privacy_pb2.DPAggregateResponse(results_json=res_json)
+
+    def DPVectorSum(self, request, context):
+        import numpy as np
+        vec_list = [list(chunk.values) for chunk in request.vectors]
+        vectors = np.array(vec_list)
+        params = {"max_norm": request.max_norm, "epsilon": request.epsilon, "delta": request.delta, "mechanism": request.mechanism, "return_details": request.return_details}
+        res = self.service.dp_vector_sum(vectors, params)
+
+        if hasattr(res, "value"):
+            noisy_vec = list(res.value)
+            dp_proto = privacy_pb2.DPResultProto(
+                value_vector=noisy_vec,
+                noise_mechanism=res.noise_mechanism,
+                noise_scale=float(np.mean(res.noise_scale)) if isinstance(res.noise_scale, (list, np.ndarray)) else float(res.noise_scale),
+                epsilon_spent=res.epsilon_spent,
+                delta_spent=res.delta_spent,
+            )
+            return privacy_pb2.DPVectorSumResponse(noisy_vector=noisy_vec, result_details=dp_proto)
+        else:
+            noisy_vec = list(res)
+            return privacy_pb2.DPVectorSumResponse(noisy_vector=noisy_vec)
+
+    def DPAdaptiveClip(self, request, context):
+        params = {"epsilon": request.epsilon, "target_quantile": request.target_quantile, "num_iterations": request.num_iterations, "initial_clip": request.initial_clip}
+        lower, upper = self.service.dp_adaptive_clip(list(request.values), params)
+        return privacy_pb2.DPAdaptiveClipResponse(clip_lower=lower, clip_upper=upper)
+
+    def DPGroupBy(self, request, context):
+        import json
+        import pandas as pd
+        rows = [dict(r.fields) for r in request.rows]
+        df = pd.DataFrame(rows)
+        params = {"epsilon": request.epsilon, "delta": request.delta, "mechanism": request.mechanism, "clip_lower": request.clip_lower, "clip_upper": request.clip_upper}
+        res = self.service.dp_groupby(df, request.group_col, request.target_col, request.agg, params)
+        res_json = json.dumps(res, default=str)
+        return privacy_pb2.DPGroupByResponse(result_json=res_json)
+
 
 
 def serve(port: int = 50051, max_workers: int = 10, wait_for_termination: bool = True):

@@ -46,6 +46,17 @@
 | DP-ADAPTER-2 | 表格型输入通过 `column` 参数指定目标列；HDataFrame 通过 `party` 参数指定参与方；VDataFrame 自动定位包含目标列的 partition。 |
 | DP-CLIP-3 | clipping 优先使用 NumPy 向量化 `np.clip`，失败时回退到纯 Python，以提升大规模数据处理效率。 |
 | DP-METRIC-1 | 暴露 `privacy_traffic_bytes_total` Counter，按 `method`、`path`、`direction` 记录 REST/gRPC 请求与响应字节数。 |
+| DP-ADAPTIVE-1 | 提供 `adaptive_clip` 自适应 DP 二分搜索估计 clip 上界，消耗传入的 epsilon 预算。 |
+| DP-ADAPTIVE-2 | `adaptive_clip` 返回的 clip bounds 用于后续聚合调用，后续调用需额外消耗独立预算。 |
+| DP-AGG-1 | 提供 `dp_aggregate` 表格级 DP 聚合编排，按列数均分预算。 |
+| DP-AGG-2 | `dp_aggregate` 支持 count/sum/mean/histogram 四种聚合类型。 |
+| DP-VECTOR-1 | 提供 `vector_sum` 高维向量 L₂ 范数截断 + 各向同性加噪。 |
+| DP-VECTOR-2 | 提供 `vector_mean` 通过 noisy_count 归一化得到带噪均值向量。 |
+| DP-GROUPBY-1 | 提供 `dp_groupby` Tau-Thresholding 差分隐私 SQL Group-By 过滤。 |
+| DP-GROUPBY-2 | `dp_groupby` 预算按 (num_groups × 2) 拆分，总消耗 ≤ epsilon。 |
+| DP-ACCUM-1 | 提供 `Accumulator` 分布式无噪流式累加器，支持序列化/反序列化与合并。 |
+| DP-ACCUM-2 | 提供 `create_accumulator` / `finalize_dp` 分布式 Worker 无噪累加与 Master 统一加噪。 |
+| DP-RDP-1 | 提供 `RDPAccountant` Rényi DP 会计，支持 Gaussian 机制下多阶预算估计。 |
 
 ## 4. 接口定义
 
@@ -172,4 +183,5 @@ resp = requests.post(
 - [x] delta 预算正确消耗与超支拒绝测试通过。
 - [x] REST/gRPC 接口支持新参数（含 histogram、本地 DP、noisy、chunked）。
 - [x] `privacy_traffic_bytes_total` 指标在 REST 中间件与 gRPC 拦截器中已接入并通过测试。
+- [x] 高级特性（adaptive_clip / dp_aggregate / vector_sum / vector_mean / dp_groupby / Accumulator / RDPAccountant）测试通过。
 - [x] 文档（PRD/design/ops/examples/testing/api_reference）与 `AGENTS.md` 已更新。

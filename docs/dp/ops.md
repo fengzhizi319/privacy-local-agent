@@ -185,3 +185,43 @@ privacy_traffic_bytes_total{method="gRPC",path="/privacy.local.PrivacyService/DP
 - 容量规划与带宽估算。
 
 > gRPC stream 调用的字节数不可预知，当前实现中 request/response 字节数计为 0。
+
+## 7. 高级特性运维指南
+
+### 7.1 adaptive_clip 运维
+
+- `adaptive_clip` 会消耗全部传入的 epsilon 预算，按 `num_iterations` 次 DP count 拆分。
+- 建议 `num_iterations=15`，`target_quantile=0.95`，`initial_clip` 设为预期数据范围的 10 倍。
+- 返回的 clip bounds 用于后续聚合调用，后续调用需额外消耗独立预算。
+- 若数据范围已知，建议直接指定 clip 区间，跳过 adaptive_clip 以节省预算。
+
+### 7.2 dp_aggregate 运维
+
+- 预算按列数均分：`epsilon_per_col = epsilon / num_specs`。
+- 若某些列重要性更高，可拆分为多次 `dp_aggregate` 调用，手动控制预算分配。
+- 当前仅支持 pandas DataFrame 输入。
+
+### 7.3 vector_sum / vector_mean 运维
+
+- 推荐 `mechanism="gaussian"`，高维场景下噪声界更紧。
+- `max_norm` 应基于梯度分布设定，过小会截断过多信息，过大会增加噪声。
+- `vector_mean` 的 `min_count` 用于防止低频数据发散，默认 5.0。
+
+### 7.4 dp_groupby 运维
+
+- 预算按 `(num_groups × 2)` 拆分，分组数越多，每组分配的预算越少。
+- 若分组数很大（>100），建议增加总 epsilon 或减少查询精度要求。
+- Tau 阈值会自动过滤稀有分组，避免泄漏低频分组信息。
+
+### 7.5 Accumulator 运维
+
+- Worker 端 `create_accumulator` 不消耗预算，仅本地累加。
+- Master 端 `finalize_dp` 消耗 epsilon 预算并注入噪声。
+- 序列化格式为 JSON bytes，可跨网络传输。
+- 合并操作 (`+`) 符合交换律/结合律，支持任意顺序合并。
+
+### 7.6 RDPAccountant 运维
+
+- `RDPAccountant` 是独立工具，不与 `BudgetAccountant` 自动集成。
+- 可同时使用两者：`BudgetAccountant` 追踪保守上界，`RDPAccountant` 提供紧致参考估计。
+- 默认搜索 11 个 Rényi 阶数，自动选择最优 α 使 ε 最小。

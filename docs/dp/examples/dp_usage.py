@@ -64,6 +64,21 @@ def main():
     print(f"剩余 epsilon: {accountant.epsilon_total - accountant.epsilon_spent}")
     print(f"总 delta: {accountant.delta_total}")
     print(f"已用 delta: {accountant.delta_spent}")
+    print(f"剩余 delta: {accountant.delta_total - accountant.delta_spent}\n")
+
+    # 6. 高级 API 演示
+    print("--- 6. 高级 API 演示 ---")
+    dp_adv = DPApi(namespace="dp_adv_demo")
+    # 自适应 Clip
+    lower, upper = dp_adv.adaptive_clip(charges, epsilon=0.5)
+    print(f"自适应搜索 clip_upper: {upper:.2f}")
+
+    # 高维向量 DP-SGD 加噪
+    import numpy as np
+
+    grads = np.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]])
+    noisy_grads = dp_adv.vector_sum(grads, max_norm=5.0, epsilon=1.0, delta=1e-4)
+    print(f"DP 向量加噪结果: {noisy_grads}\n")
 
 
 if __name__ == "__main__":

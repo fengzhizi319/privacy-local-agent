@@ -10,7 +10,10 @@
 SecretFlow 相关依赖为可选依赖，未安装时不会影响其他格式的支持。
 """
 
-from typing import Any, Dict, Iterable, List, Optional
+from __future__ import annotations
+
+from typing import Any, Dict, Iterable, List, Optional, Union
+import numpy as np
 
 
 def _is_secretflow_available() -> bool:
@@ -25,8 +28,8 @@ def _extract_from_secretflow(
     data: Any,
     column: Optional[str] = None,
     party: Optional[str] = None,
-) -> List[float]:
-    """从 SecretFlow 数据结构中抽取目标列并返回 list[float]。"""
+) -> np.ndarray:
+    """从 SecretFlow 数据结构中抽取目标列并返回 np.ndarray。"""
     import secretflow as sf
 
     # FedNdarray: 联邦 ndarray，底层是 numpy
@@ -40,7 +43,7 @@ def _extract_from_secretflow(
             raise ValueError(
                 "column must be specified when input is a SecretFlow DataFrame"
             )
-        return data[column].to_numpy().tolist()
+        return _to_numpy_array(data[column].to_numpy())
 
     raise TypeError(f"Unsupported SecretFlow data type: {type(data)}")
 
@@ -49,7 +52,7 @@ def _extract_from_sf_dataframe(
     data: Any,
     column: Optional[str] = None,
     party: Optional[str] = None,
-) -> List[float]:
+) -> np.ndarray:
     """从 SecretFlow HDataFrame / VDataFrame / MixDataFrame 中提取数据。"""
     from secretflow.data.horizontal import HDataFrame
     from secretflow.data.mix import MixDataFrame
@@ -79,7 +82,7 @@ def _extract_from_hdataframe(
     data: Any,
     column: str,
     party: Optional[str] = None,
-) -> List[float]:
+) -> np.ndarray:
     """从 HDataFrame 中提取指定列。
 
     HDataFrame 是水平分割：各参与方拥有相同样本空间的不同子集。
@@ -107,10 +110,10 @@ def _extract_from_hdataframe(
     pdf = partition.data
     if column not in pdf.columns:
         raise ValueError(f"column '{column}' not found in HDataFrame partition")
-    return pdf[column].to_numpy().tolist()
+    return _to_numpy_array(pdf[column].to_numpy())
 
 
-def _extract_from_vdataframe(data: Any, column: str) -> List[float]:
+def _extract_from_vdataframe(data: Any, column: str) -> np.ndarray:
     """从 VDataFrame 中提取指定列。
 
     VDataFrame 是垂直分割：列分布在不同参与方。系统会自动找到包含该列的 partition。
@@ -118,44 +121,92 @@ def _extract_from_vdataframe(data: Any, column: str) -> List[float]:
     for partition in data.partitions.values():
         pdf = partition.data
         if column in pdf.columns:
-            return pdf[column].to_numpy().tolist()
+            return _to_numpy_array(pdf[column].to_numpy())
     raise ValueError(f"column '{column}' not found in any VDataFrame partition")
+
+
+def _is_sparse_matrix(data: Any) -> bool:
+    """判断是否为 scipy.sparse 稀疏矩阵。"""
+    try:
+        import scipy.sparse as sp
+
+        return sp.issparse(data)
+    except ImportError:
+        return False
+
+
+def _to_numpy_array(arr: Any) -> np.ndarray:
+    """辅助函数：尝试将输入数组转换为 np.float64 ndarray，无法转数值时保留 object。"""
+    np_arr = np.asarray(arr)
+    if np_arr.ndim != 1:
+        np_arr = np_arr.ravel()
+    if np.issubdtype(np_arr.dtype, np.number) or np.issubdtype(np_arr.dtype, np.bool_):
+        return np_arr.astype(np.float64, copy=False)
+    try:
+        return np_arr.astype(np.float64)
+    except (ValueError, TypeError):
+        return np_arr
+
+
+def _to_2d_numpy_array(data: Any) -> Any:
+    """将多种表格或 2D 数据源转换为二维 np.ndarray (float64) 或保留 scipy.sparse 矩阵。"""
+    if _is_sparse_matrix(data):
+        return data
+
+    try:
+        import pandas as pd
+
+        if isinstance(data, pd.DataFrame):
+            return data.to_numpy(dtype=np.float64)
+        if isinstance(data, pd.Series):
+            return data.to_numpy(dtype=np.float64).reshape(-1, 1)
+    except ImportError:
+        pass
+
+    arr = np.asarray(data)
+    if arr.ndim == 1:
+        arr = arr.reshape(-1, 1)
+    if np.issubdtype(arr.dtype, np.number) or np.issubdtype(arr.dtype, np.bool_):
+        return arr.astype(np.float64, copy=False)
+    try:
+        return arr.astype(np.float64)
+    except (ValueError, TypeError):
+        return arr
 
 
 def extract_values(
     data: Any,
     column: Optional[str] = None,
     party: Optional[str] = None,
-) -> List[float]:
-    """从多种数据格式中提取数值列表。
+) -> Union[np.ndarray, Any]:
+    """从多种数据格式中提取数值或类别数组并统一返回一维 np.ndarray 或 scipy.sparse 矩阵。
 
     Args:
-        data: 输入数据。支持 list/tuple/ndarray/Series/DataFrame/SecretFlow 格式。
+        data: 输入数据。支持 list/tuple/ndarray/Series/DataFrame/SecretFlow/sparse/arrow/polars 格式。
         column: 当 data 为表格类型且需要指定列时使用。
         party: 当 data 为 HDataFrame 且需要指定参与方时使用。
 
     Returns:
-        float 列表，供 DP 模块消费。
+        一维 np.ndarray 数组或 scipy.sparse 矩阵。
     """
-    # 1. Python 原生序列
+    # 0. scipy.sparse 稀疏矩阵
+    if _is_sparse_matrix(data):
+        return data
+
+    # 1. numpy ndarray
+    if isinstance(data, np.ndarray):
+        return _to_numpy_array(data)
+
+    # 2. Python 原生序列
     if isinstance(data, (list, tuple)):
-        return list(data)
-
-    # 2. numpy ndarray
-    try:
-        import numpy as np
-
-        if isinstance(data, np.ndarray):
-            return data.tolist()
-    except ImportError:
-        pass
+        return _to_numpy_array(data)
 
     # 3. pandas Series / DataFrame
     try:
         import pandas as pd
 
         if isinstance(data, pd.Series):
-            return data.to_numpy().tolist()
+            return _to_numpy_array(data.to_numpy())
         if isinstance(data, pd.DataFrame):
             if column is None:
                 raise ValueError(
@@ -163,7 +214,7 @@ def extract_values(
                 )
             if column not in data.columns:
                 raise ValueError(f"column '{column}' not found in DataFrame")
-            return data[column].to_numpy().tolist()
+            return _to_numpy_array(data[column].to_numpy())
     except ImportError:
         pass
 
@@ -171,11 +222,14 @@ def extract_values(
     if _is_secretflow_available():
         return _extract_from_secretflow(data, column=column, party=party)
 
-    # 5. 通用 duck-typing 回退
+    # 5. 通用 duck-typing 回退 (Polars / PyArrow / Zero-copy)
     if hasattr(data, "to_numpy"):
-        return data.to_numpy().tolist()
+        try:
+            return _to_numpy_array(data.to_numpy(zero_copy_only=False))
+        except TypeError:
+            return _to_numpy_array(data.to_numpy())
     if hasattr(data, "tolist"):
-        return list(data.tolist())
+        return _to_numpy_array(data.tolist())
 
     raise TypeError(f"Unsupported data type for DP values: {type(data)}")
 
@@ -184,8 +238,8 @@ def extract_chunks(
     chunks: Iterable[Any],
     column: Optional[str] = None,
     party: Optional[str] = None,
-) -> List[List[float]]:
-    """对分块输入逐块调用 extract_values，返回 List[List[float]]。"""
+) -> List[np.ndarray]:
+    """对分块输入逐块调用 extract_values，返回 List[np.ndarray]。"""
     return [extract_values(chunk, column=column, party=party) for chunk in chunks]
 
 

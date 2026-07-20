@@ -7,9 +7,59 @@ K-anonymity primitives for record-level generalization. Provides hierarchy
 generalization functions for common QIs such as age, zipcode and gender.
 """
 
-from typing import Any, Callable, Dict, List
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from typing import Any, Callable, Dict, List, Optional, Union
 
 from ..observability.metrics import KANO_OPERATIONS_TOTAL
+
+
+@dataclass
+class KAnonymityRecordResult:
+    """K-匿名单条记录泛化结果及结构化元数据包装。
+
+    Attributes:
+        value: 泛化后的记录字典。
+        k: K-匿名阈值参数。
+        qi_cols: 准标识符列名列表。
+        applied_level: 实际应用的泛化层级（由 k 值启发式决定）。
+        hierarchies_used: 本次使用的泛化层次函数名称映射。
+    """
+
+    value: Dict[str, Any]
+    k: int
+    qi_cols: List[str]
+    applied_level: int = 1
+    hierarchies_used: Dict[str, str] = field(default_factory=dict)
+
+    def to_arrow(self):
+        """将 KAnonymityRecordResult 包装转换为附带 K-匿名 Metadata 的 PyArrow Table。
+
+        执行步骤：
+        1. 提取 K-匿名记录级元数据（k 值、准标识符列表、应用层级）构造 JSON。
+        2. 将元数据编码存储为 Schema Metadata Key `b"k_anonymity_record_metadata"`。
+        3. 根据 `value` 字典构造 PyArrow Table。
+        4. 替换 Table Schema Metadata 后导出。
+        """
+        import json
+        import pyarrow as pa
+
+        meta = {
+            "k": str(self.k),
+            "qi_cols": str(self.qi_cols),
+            "applied_level": str(self.applied_level),
+            "hierarchies_used": str(self.hierarchies_used),
+        }
+        custom_metadata = {b"k_anonymity_record_metadata": json.dumps(meta).encode("utf-8")}
+
+        keys = pa.array(list(self.value.keys()))
+        vals = pa.array([str(v) for v in self.value.values()])
+        table = pa.Table.from_arrays([keys, vals], names=["field", "generalized_value"])
+
+        existing_meta = table.schema.metadata or {}
+        merged_meta = {**existing_meta, **custom_metadata}
+        return table.replace_schema_metadata(merged_meta)
 
 # 泛化层次函数类型：输入原始值与泛化层级，输出泛化后的字符串
 GeneralizationHierarchy = Callable[[str, int], str]
@@ -120,32 +170,42 @@ def anonymize_record(
     qi_cols: List[str],
     hierarchies: Dict[str, GeneralizationHierarchy],
     k: int,
-) -> Dict[str, Any]:
+    return_details: bool = False,
+) -> Union[Dict[str, Any], KAnonymityRecordResult]:
     """对单条记录按 K-匿名要求进行泛化。
 
-    仅处理 qi_cols 中列出的准标识符字段；对于存在内置泛化层次且值为字符串的字段，
-    调用对应层次函数进行泛化。其他字段保持原值不变。
-
-    Args:
-        record: 原始记录字典。
-        qi_cols: 准标识符列名列表。
-        hierarchies: 列名到泛化层次函数的映射。
-        k: K-匿名参数，用于决定泛化层级。
-
-    Returns:
-        泛化后的新记录字典（不修改原始字典）。
-
-    Note:
-        当前 MVP 版本主要依赖 BUILTIN_HIERARCHIES；自定义层次结构参数已预留，
-        但尚未实际合并到内置层次中。
+    执行步骤：
+    1. 增加 `KANO_OPERATIONS_TOTAL` 操作指标计数。
+    2. 拷贝输入记录字典，仅处理 `qi_cols` 中指定的准标识符列。
+    3. 寻找匹配的泛化层次函数（若未显式传参则查询内置 `BUILTIN_HIERARCHIES`）。
+    4. 根据 `k` 智选粒度层级 `choose_level`，应用泛化替换准标识符属性。
+    5. 返回泛化后的记录或封装结果。
     """
     KANO_OPERATIONS_TOTAL.labels(operation="record").inc()
     result = dict(record)
+    effective_hierarchies = {**BUILTIN_HIERARCHIES, **(hierarchies or {})}
+    applied_levels: Dict[str, int] = {}
+    hierarchies_used: Dict[str, str] = {}
     for col in qi_cols:
-        h = hierarchies.get(col)
+        h = effective_hierarchies.get(col)
         val = result.get(col)
         if h is not None and isinstance(val, str):
-            # 内置字段中，gender 最大泛化层级为 1，其余默认为 4
             max_level = 4 if col != "gender" else 1
-            result[col] = h(val, choose_level(k, max_level))
+            level = choose_level(k, max_level)
+            result[col] = h(val, level)
+            applied_levels[col] = level
+            hierarchies_used[col] = h.__name__
+    if return_details:
+        avg_level = (
+            sum(applied_levels.values()) // len(applied_levels)
+            if applied_levels
+            else 1
+        )
+        return KAnonymityRecordResult(
+            value=result,
+            k=k,
+            qi_cols=qi_cols,
+            applied_level=avg_level,
+            hierarchies_used=hierarchies_used,
+        )
     return result

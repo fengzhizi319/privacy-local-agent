@@ -6,6 +6,7 @@ import pytest
 from prometheus_client import REGISTRY
 
 from privacy_local_agent.privacy.masking import (
+    chunked_mask_records,
     hash_value,
     mask_dataframe,
     mask_default,
@@ -129,3 +130,55 @@ class TestHashAndTruncate:
     def test_truncate(self) -> None:
         assert truncate("abcdef", 3) == "abc***"
         assert truncate("ab", 3) == "ab"
+
+
+class TestChunkedMaskRecords:
+    """流式分块脱敏测试。"""
+
+    def test_basic_chunked_masking(self) -> None:
+        chunks = [
+            [{"mobile": "13812345678", "name": "张三丰", "age": 30}],
+            [{"mobile": "13912345678", "name": "李四", "age": 25}],
+        ]
+        results = list(chunked_mask_records(chunks))
+        assert len(results) == 2
+        assert results[0][0]["mobile"] == "138****5678"
+        assert results[0][0]["name"] == "张**丰"
+        assert results[0][0]["age"] == 30
+        assert results[1][0]["mobile"] == "139****5678"
+        assert results[1][0]["name"] == "李*"
+
+    def test_chunked_with_columns_filter(self) -> None:
+        chunks = [
+            [{"mobile": "13812345678", "name": "张三丰"}],
+        ]
+        results = list(chunked_mask_records(chunks, columns=["mobile"]))
+        assert results[0][0]["mobile"] == "138****5678"
+        assert results[0][0]["name"] == "张三丰"  # 未被脱敏
+
+    def test_chunked_return_details(self) -> None:
+        from privacy_local_agent.privacy.masking import MaskingResult
+
+        chunks = [
+            [{"mobile": "13812345678", "name": "张三丰"}],
+            [{"mobile": "13912345678"}],
+        ]
+        results = list(chunked_mask_records(chunks, return_details=True))
+        assert len(results) == 2
+        assert isinstance(results[0], MaskingResult)
+        assert results[0].operation == "chunked_mask_records"
+        assert "mobile" in results[0].masked_fields
+        assert results[0].total_masked >= 1
+
+    def test_chunked_empty_chunks(self) -> None:
+        results = list(chunked_mask_records([]))
+        assert results == []
+
+    def test_chunked_generator_input(self) -> None:
+        def gen():
+            yield [{"mobile": "13812345678"}]
+            yield [{"mobile": "13912345678"}]
+
+        results = list(chunked_mask_records(gen()))
+        assert len(results) == 2
+        assert results[0][0]["mobile"] == "138****5678"

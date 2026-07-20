@@ -43,6 +43,78 @@ service PrivacyService {
   rpc PerturbCategoricalBatch (PerturbCategoricalBatchRequest) returns (PerturbCategoricalBatchResponse);
   rpc EstimateBinaryFrequency (EstimateBinaryFrequencyRequest) returns (EstimateBinaryFrequencyResponse);
   rpc EstimateCategoricalHistogram (EstimateCategoricalHistogramRequest) returns (EstimateCategoricalHistogramResponse);
+  rpc DPAggregate (DPAggregateRequest) returns (DPAggregateResponse);
+  rpc DPVectorSum (DPVectorSumRequest) returns (DPVectorSumResponse);
+  rpc DPAdaptiveClip (DPAdaptiveClipRequest) returns (DPAdaptiveClipResponse);
+  rpc DPGroupBy (DPGroupByRequest) returns (DPGroupByResponse);
+}
+
+message DPResultProto {
+  double value = 1;
+  repeated double value_vector = 2 [packed = true];
+  string value_json = 3;
+  string noise_mechanism = 4;
+  double noise_scale = 5;
+  double epsilon_spent = 6;
+  double delta_spent = 7;
+  double confidence_interval_low = 8;
+  double confidence_interval_high = 9;
+}
+
+message DPAggregateRequest {
+  repeated RecordEntry rows = 1;
+  string specs_json = 2;
+  double epsilon = 3;
+  double delta = 4;
+  string mechanism = 5;
+  bool return_details = 6;
+}
+
+message DPAggregateResponse {
+  string results_json = 1;
+}
+
+message DPVectorSumRequest {
+  repeated DoubleChunk vectors = 1;
+  double max_norm = 2;
+  double epsilon = 3;
+  double delta = 4;
+  string mechanism = 5;
+  bool return_details = 6;
+}
+
+message DPVectorSumResponse {
+  repeated double noisy_vector = 1 [packed = true];
+  DPResultProto result_details = 2;
+}
+
+message DPAdaptiveClipRequest {
+  repeated double values = 1;
+  double epsilon = 2;
+  double target_quantile = 3;
+  int32 num_iterations = 4;
+  double initial_clip = 5;
+}
+
+message DPAdaptiveClipResponse {
+  double clip_lower = 1;
+  double clip_upper = 2;
+}
+
+message DPGroupByRequest {
+  repeated RecordEntry rows = 1;
+  string group_col = 2;
+  string target_col = 3;
+  string agg = 4;
+  double epsilon = 5;
+  double delta = 6;
+  double clip_lower = 7;
+  double clip_upper = 8;
+  string mechanism = 9;
+}
+
+message DPGroupByResponse {
+  string result_json = 1;
 }
 
 message MaskRequest {

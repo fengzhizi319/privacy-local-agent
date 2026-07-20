@@ -268,6 +268,79 @@ class PrivacyService:
             str(p.get("mechanism", "laplace")),
         )
 
+    def dp_aggregate(self, df: Any, specs: Dict[str, Any], params: Dict[str, Any] = None) -> Dict[str, Any]:
+        """Table-Level 原位表格 DP 聚合。"""
+        p = self.resolver.resolve("dp", params, namespace=self.namespace)
+        return self.dp_api.dp_aggregate(
+            df,
+            specs,
+            float(p["epsilon"]),
+            float(p.get("delta", 0.0)),
+            str(p.get("mechanism", "laplace")),
+            return_details=bool(p.get("return_details", False)),
+        )
+
+    def dp_vector_sum(self, vectors: Any, params: Dict[str, Any] = None) -> Any:
+        """高维向量 / 梯度 $L_2$ 范数截断与加噪。"""
+        p = self.resolver.resolve("dp", params, namespace=self.namespace)
+        max_norm = float(p.get("max_norm", 1.0))
+        return self.dp_api.vector_sum(
+            vectors,
+            max_norm,
+            float(p["epsilon"]),
+            float(p.get("delta", 0.0)),
+            str(p.get("mechanism", "gaussian")),
+            return_details=bool(p.get("return_details", False)),
+        )
+
+    def dp_vector_mean(self, vectors: Any, params: Dict[str, Any] = None) -> Any:
+        """高维向量 DP 均值：L2 范数截断 + 各向同性加噪 + noisy_count 归一化。"""
+        p = self.resolver.resolve("dp", params, namespace=self.namespace)
+        max_norm = float(p.get("max_norm", 1.0))
+        return self.dp_api.vector_mean(
+            vectors,
+            max_norm,
+            float(p["epsilon"]),
+            float(p.get("delta", 0.0)),
+            str(p.get("mechanism", "gaussian")),
+            min_count=float(p.get("min_count", 5.0)),
+            return_details=bool(p.get("return_details", False)),
+        )
+
+    def dp_adaptive_clip(self, values: Any, params: Dict[str, Any] = None) -> tuple[float, float]:
+        """差分隐私自适应二分搜索估计 [0, clip_upper] 上下界。"""
+        p = self.resolver.resolve("dp", params, namespace=self.namespace)
+        return self.dp_api.adaptive_clip(
+            values,
+            float(p["epsilon"]),
+            target_quantile=float(p.get("target_quantile", 0.95)),
+            num_iterations=int(p.get("num_iterations", 15)),
+            initial_clip=float(p.get("initial_clip", 10.0)),
+        )
+
+    def dp_groupby(
+        self,
+        df: Any,
+        group_col: str,
+        target_col: str,
+        agg: str,
+        params: Dict[str, Any] = None,
+    ) -> Dict[str, Any]:
+        """Tau-Thresholding 差分隐私 SQL Group-By 过滤。"""
+        p = self.resolver.resolve("dp", params, namespace=self.namespace)
+        return self.dp_api.dp_groupby(
+            df,
+            group_col=group_col,
+            target_col=target_col,
+            agg=agg,
+            epsilon=float(p["epsilon"]),
+            delta=float(p.get("delta", 1e-5)),
+            clip_lower=p.get("clip_lower"),
+            clip_upper=p.get("clip_upper"),
+            mechanism=str(p.get("mechanism", "laplace")),
+            return_details=bool(p.get("return_details", False)),
+        )
+
     def dp_noisy_mean(
         self,
         true_sum: float,
@@ -423,13 +496,13 @@ class PrivacyService:
 
     def perturb_binary_batch(self, values: List[int], epsilon: float) -> List[int]:
         """批量对二值数据进行本地 DP 扰动。"""
-        return self.local_dp_api.perturb_binary_batch(values, epsilon)
+        return self.local_dp_api.perturb_binary_batch(values, epsilon).tolist()
 
     def perturb_categorical_batch(
         self, values: List[Any], categories: List[Any], epsilon: float
     ) -> List[Any]:
         """批量对类别型数据进行本地 DP 扰动。"""
-        return self.local_dp_api.perturb_categorical_batch(values, categories, epsilon)
+        return self.local_dp_api.perturb_categorical_batch(values, categories, epsilon).tolist()
 
     def estimate_binary_frequency(self, reported_values: List[int], epsilon: float) -> float:
         """根据扰动后的二值样本估计真实比例为 1 的频率。"""

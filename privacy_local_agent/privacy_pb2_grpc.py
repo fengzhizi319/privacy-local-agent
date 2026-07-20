@@ -3,7 +3,7 @@
 import grpc
 import warnings
 
-from privacy_local_agent import privacy_pb2 as privacy__pb2
+from . import privacy_pb2 as privacy__pb2
 
 GRPC_GENERATED_VERSION = '1.82.1'
 GRPC_VERSION = grpc.__version__
@@ -213,6 +213,26 @@ class PrivacyServiceStub:
                 '/privacy.local.PrivacyService/EstimateCategoricalHistogram',
                 request_serializer=privacy__pb2.EstimateCategoricalHistogramRequest.SerializeToString,
                 response_deserializer=privacy__pb2.EstimateCategoricalHistogramResponse.FromString,
+                _registered_method=True)
+        self.DPAggregate = channel.unary_unary(
+                '/privacy.local.PrivacyService/DPAggregate',
+                request_serializer=privacy__pb2.DPAggregateRequest.SerializeToString,
+                response_deserializer=privacy__pb2.DPAggregateResponse.FromString,
+                _registered_method=True)
+        self.DPVectorSum = channel.unary_unary(
+                '/privacy.local.PrivacyService/DPVectorSum',
+                request_serializer=privacy__pb2.DPVectorSumRequest.SerializeToString,
+                response_deserializer=privacy__pb2.DPVectorSumResponse.FromString,
+                _registered_method=True)
+        self.DPAdaptiveClip = channel.unary_unary(
+                '/privacy.local.PrivacyService/DPAdaptiveClip',
+                request_serializer=privacy__pb2.DPAdaptiveClipRequest.SerializeToString,
+                response_deserializer=privacy__pb2.DPAdaptiveClipResponse.FromString,
+                _registered_method=True)
+        self.DPGroupBy = channel.unary_unary(
+                '/privacy.local.PrivacyService/DPGroupBy',
+                request_serializer=privacy__pb2.DPGroupByRequest.SerializeToString,
+                response_deserializer=privacy__pb2.DPGroupByResponse.FromString,
                 _registered_method=True)
 
 
@@ -435,6 +455,30 @@ class PrivacyServiceServicer:
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def DPAggregate(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def DPVectorSum(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def DPAdaptiveClip(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def DPGroupBy(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
 
 def add_PrivacyServiceServicer_to_server(servicer, server):
     rpc_method_handlers = {
@@ -617,6 +661,26 @@ def add_PrivacyServiceServicer_to_server(servicer, server):
                     servicer.EstimateCategoricalHistogram,
                     request_deserializer=privacy__pb2.EstimateCategoricalHistogramRequest.FromString,
                     response_serializer=privacy__pb2.EstimateCategoricalHistogramResponse.SerializeToString,
+            ),
+            'DPAggregate': grpc.unary_unary_rpc_method_handler(
+                    servicer.DPAggregate,
+                    request_deserializer=privacy__pb2.DPAggregateRequest.FromString,
+                    response_serializer=privacy__pb2.DPAggregateResponse.SerializeToString,
+            ),
+            'DPVectorSum': grpc.unary_unary_rpc_method_handler(
+                    servicer.DPVectorSum,
+                    request_deserializer=privacy__pb2.DPVectorSumRequest.FromString,
+                    response_serializer=privacy__pb2.DPVectorSumResponse.SerializeToString,
+            ),
+            'DPAdaptiveClip': grpc.unary_unary_rpc_method_handler(
+                    servicer.DPAdaptiveClip,
+                    request_deserializer=privacy__pb2.DPAdaptiveClipRequest.FromString,
+                    response_serializer=privacy__pb2.DPAdaptiveClipResponse.SerializeToString,
+            ),
+            'DPGroupBy': grpc.unary_unary_rpc_method_handler(
+                    servicer.DPGroupBy,
+                    request_deserializer=privacy__pb2.DPGroupByRequest.FromString,
+                    response_serializer=privacy__pb2.DPGroupByResponse.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -1591,6 +1655,114 @@ class PrivacyService:
             '/privacy.local.PrivacyService/EstimateCategoricalHistogram',
             privacy__pb2.EstimateCategoricalHistogramRequest.SerializeToString,
             privacy__pb2.EstimateCategoricalHistogramResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def DPAggregate(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/privacy.local.PrivacyService/DPAggregate',
+            privacy__pb2.DPAggregateRequest.SerializeToString,
+            privacy__pb2.DPAggregateResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def DPVectorSum(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/privacy.local.PrivacyService/DPVectorSum',
+            privacy__pb2.DPVectorSumRequest.SerializeToString,
+            privacy__pb2.DPVectorSumResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def DPAdaptiveClip(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/privacy.local.PrivacyService/DPAdaptiveClip',
+            privacy__pb2.DPAdaptiveClipRequest.SerializeToString,
+            privacy__pb2.DPAdaptiveClipResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def DPGroupBy(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/privacy.local.PrivacyService/DPGroupBy',
+            privacy__pb2.DPGroupByRequest.SerializeToString,
+            privacy__pb2.DPGroupByResponse.FromString,
             options,
             channel_credentials,
             insecure,

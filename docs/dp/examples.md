@@ -381,7 +381,170 @@ PYTHONPATH=. python docs/dp/examples/local_dp_usage.py
 9. **记录每次查询的预算消耗**：便于审计与后续预算调整。
 10. **监控 `privacy_traffic_bytes_total`**：观察 REST/gRPC 流量，辅助容量规划。
 
-## 6. 常见错误
+## 6. 高级特性示例
+
+### 6.1 自适应截断（Adaptive Clipping）
+
+当数据范围未知时，先用 `adaptive_clip` 搜索 clip 上界，再执行聚合查询。
+
+```python
+import numpy as np
+from privacy_local_agent.privacy.dp import DPApi
+
+api = DPApi(namespace="adaptive_demo")
+data = np.random.exponential(scale=5.0, size=10000).tolist()
+
+# Step 1: 自适应搜索 clip 上界（消耗 epsilon=0.5）
+clip_lower, clip_upper = api.adaptive_clip(data, epsilon=0.5, target_quantile=0.95)
+print(f"搜索到的 clip 上界: {clip_upper:.2f}")
+
+# Step 2: 使用搜索到的 clip bounds 进行 sum 查询（额外消耗 epsilon=0.5）
+result = api.sum(data, epsilon=0.5, clip_lower=clip_lower, clip_upper=clip_upper)
+print(f"DP sum: {result:.2f}")
+```
+
+### 6.2 表格级 DP 聚合（dp_aggregate）
+
+```python
+import pandas as pd
+from privacy_local_agent.privacy.dp import DPApi
+
+api = DPApi(namespace="table_demo")
+df = pd.DataFrame({
+    "age": [25, 30, 35, 40, 45, 50, 55],
+    "salary": [30000, 45000, 60000, 75000, 90000, 50000, 65000],
+})
+
+result = api.dp_aggregate(
+    df,
+    specs=[
+        {"column": "age", "agg": "count"},
+        {"column": "salary", "agg": "sum", "clip_lower": 0, "clip_upper": 100000},
+        {"column": "age", "agg": "mean", "clip_lower": 0, "clip_upper": 150},
+    ],
+    epsilon=1.0,
+)
+print(result)
+```
+
+### 6.3 DP-SGD 平均梯度（vector_mean）
+
+```python
+import numpy as np
+from privacy_local_agent.privacy.dp import DPApi
+
+api = DPApi(namespace="dpsgd_demo")
+
+# 模拟 100 个样本的梯度（每个 3 维）
+np.random.seed(42)
+gradients = np.random.randn(100, 3).tolist()
+
+# DP 平均梯度
+avg_grad = api.vector_mean(
+    gradients, max_norm=1.0, epsilon=0.5, delta=1e-5, mechanism="gaussian"
+)
+print(f"DP 平均梯度: {avg_grad}")
+```
+
+### 6.4 Tau-Thresholding Group-By
+
+```python
+import pandas as pd
+from privacy_local_agent.privacy.dp import DPApi
+
+api = DPApi(namespace="groupby_demo")
+df = pd.DataFrame({
+    "department": ["Eng"]*100 + ["Sales"]*50 + ["HR"]*3 + ["Legal"]*2,
+    "salary": list(range(100)) + list(range(50)) + [30000, 35000, 40000] + [50000, 55000],
+})
+
+# 自动过滤稀有分组（HR/Legal 可能被过滤）
+result = api.dp_groupby(
+    df, group_col="department", target_col="salary",
+    agg="count", epsilon=1.0, delta=1e-5,
+)
+print(f"DP Group-By count: {result}")
+```
+
+### 6.5 分布式累加器（Accumulator）
+
+```python
+from privacy_local_agent.privacy.dp import DPApi
+
+api = DPApi(namespace="distributed_demo")
+
+# Worker 1: 本地无噪累加
+chunk1 = [1.0, 2.0, 3.0, 4.0]
+acc1 = api.create_accumulator(chunk1, clip_lower=0.0, clip_upper=10.0)
+
+# Worker 2: 本地无噪累加
+chunk2 = [5.0, 6.0, 7.0]
+acc2 = api.create_accumulator(chunk2, clip_lower=0.0, clip_upper=10.0)
+
+# Master: 合并 + 统一加噪
+merged = acc1 + acc2
+result = api.finalize_dp(merged, epsilon=1.0, agg_type="sum")
+print(f"DP sum (distributed): {result}")
+```
+
+### 6.6 Rényi DP 会计
+
+```python
+from privacy_local_agent.privacy.budget import RDPAccountant
+
+rdp = RDPAccountant(target_delta=1e-5)
+
+# 记录 10 次 Gaussian 查询
+for _ in range(10):
+    rdp.record_gaussian(sigma=1.0, sensitivity=1.0)
+
+# 获取总 ε（自动搜索最优 α）
+total_epsilon = rdp.get_epsilon(delta=1e-5)
+print(f"RDP 总 ε: {total_epsilon:.4f}")
+print(f"基本组合总 ε: {10 * 0.5:.4f}")  # 对比基本组合
+
+### 6.7 User-Level DP (用户级贡献绑定)
+
+```python
+import numpy as np
+from privacy_local_agent.privacy.dp import DPApi
+
+api = DPApi(namespace="user_dp_demo")
+
+# 模拟 100 条日志，其中 user_A 贡献了 90 条，user_B 贡献了 10 条
+salaries = np.array([5000.0] * 90 + [8000.0] * 10)
+user_ids = ["user_A"] * 90 + ["user_B"] * 10
+
+# 限制每个用户最多保留 2 条记录，敏感度自动调整为 2 * (clip_upper - clip_lower)
+res = api.sum(
+    salaries,
+    epsilon=1.0,
+    clip_lower=0.0,
+    clip_upper=10000.0,
+    user_ids=user_ids,
+    max_contributions=2,
+)
+print(f"User-Level DP sum: {res}")
+```
+
+### 6.8 Discrete Laplace 整数加噪与 PyArrow Metadata 导出
+
+```python
+from privacy_local_agent.privacy.dp import DPApi
+
+api = DPApi(namespace="arrow_discrete_demo")
+
+# Step 1: 使用 Discrete Laplace 在整数格 ℤ 上精确加噪，返回 DPResult 结构体
+dp_result = api.count([1.0, 2.0, 3.0, 4.0, 5.0], epsilon=1.0, discrete=True, return_details=True)
+
+# Step 2: 导出为附带 DP Metadata 的 PyArrow Table
+arrow_table = dp_result.to_arrow()
+print("PyArrow Schema Metadata:")
+print(arrow_table.schema.metadata[b"dp_metadata"].decode("utf-8"))
+```
+```
+
+## 7. 常见错误
 
 | 错误 | 原因 | 解决 |
 |---|---|---|---|

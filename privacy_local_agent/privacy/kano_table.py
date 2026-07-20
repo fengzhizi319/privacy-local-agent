@@ -9,9 +9,64 @@ algorithm. Generalizes numeric QIs to intervals and categorical QIs to value set
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from dataclasses import dataclass, field
+from typing import Any, Dict, List, Optional, Union
 
 from ..observability.metrics import KANO_OPERATIONS_TOTAL
+
+
+@dataclass
+class KAnonymityResult:
+    """K-匿名处理结果及结构化元数据包装。
+
+    Attributes:
+        value: 泛化后的记录列表 (List[Dict]) 或 DataFrame。
+        k: K-匿名阈值参数。
+        qi_cols: 准标识符列名列表。
+        equivalence_classes_count: 形成的等价类（Equivalence Class）分区总数。
+    """
+
+    value: Any
+    k: int
+    qi_cols: List[str]
+    equivalence_classes_count: int = 1
+
+    def to_arrow(self):
+        """将 KAnonymityResult 包装转换为附带 K-匿名 Metadata 的 PyArrow Table。
+
+        执行步骤：
+        1. 提取 K-匿名的隐私元数据（k 值、准标识符列表、等价组数量）构造 JSON。
+        2. 将元数据编码存储为 Schema Metadata Key `b"k_anonymity_metadata"`。
+        3. 根据 `value`（Dict 列表或 DataFrame）转换为 `pyarrow.Table`。
+        4. 替换 Table Schema Metadata 后导出。
+        """
+        import json
+        import pyarrow as pa
+
+        meta = {
+            "k": str(self.k),
+            "qi_cols": str(self.qi_cols),
+            "equivalence_classes_count": str(self.equivalence_classes_count),
+        }
+        custom_metadata = {b"k_anonymity_metadata": json.dumps(meta).encode("utf-8")}
+
+        if isinstance(self.value, list):
+            table = pa.Table.from_pylist(self.value)
+        else:
+            try:
+                import pandas as pd
+                if isinstance(self.value, pd.DataFrame):
+                    table = pa.Table.from_pandas(self.value)
+                else:
+                    arr = pa.array([str(self.value)])
+                    table = pa.Table.from_arrays([arr], names=["kanonymity_value"])
+            except ImportError:
+                arr = pa.array([str(self.value)])
+                table = pa.Table.from_arrays([arr], names=["kanonymity_value"])
+
+        existing_meta = table.schema.metadata or {}
+        merged_meta = {**existing_meta, **custom_metadata}
+        return table.replace_schema_metadata(merged_meta)
 
 
 def _is_numeric(value: Any) -> bool:
@@ -20,10 +75,7 @@ def _is_numeric(value: Any) -> bool:
 
 
 def _span(records: List[Dict[str, Any]], col: str) -> float:
-    """计算某列的跨度，用于选择分割维度。
-
-    数值型列返回 max - min；分类型列返回不同取值数量减 1。
-    """
+    """计算某列的跨度，用于选择分割维度。"""
     values = [r.get(col) for r in records if r.get(col) is not None]
     if not values:
         return 0.0
@@ -41,16 +93,7 @@ def _choose_dimension(records: List[Dict[str, Any]], qi_cols: List[str]) -> str:
 def _median_split(
     records: List[Dict[str, Any]], dim: str, k: int
 ) -> Optional[int]:
-    """按指定维度的中位数进行分割，并确保左右两部分均不少于 k 条记录。
-
-    Args:
-        records: 当前记录集合。
-        dim: 分割维度列名。
-        k: K-匿名阈值。
-
-    Returns:
-        合法的分割下标；若不存在则返回 None。
-    """
+    """按指定维度的中位数进行分割，并确保左右两部分均不少于 k 条记录。"""
     if len(records) < 2 * k:
         return None
 
@@ -62,7 +105,6 @@ def _median_split(
 
     sorted_records = sorted(records, key=_sort_key)
     mid = len(sorted_records) // 2
-    # 保证左侧 >= k 且右侧 >= k
     split_idx = max(k, min(mid, len(sorted_records) - k))
     if split_idx < k or len(sorted_records) - split_idx < k:
         return None
@@ -72,11 +114,7 @@ def _median_split(
 def _generalize(
     records: List[Dict[str, Any]], qi_cols: List[str]
 ) -> List[Dict[str, Any]]:
-    """对等价组内的记录进行泛化。
-
-    数值型 QI 泛化为 "[min-max]"，分类型 QI 泛化为 "{v1,v2,...}"，
-    非 QI 字段保持不变。
-    """
+    """对等价组内的记录进行泛化。"""
     if not records:
         return []
 
@@ -92,7 +130,6 @@ def _generalize(
         else:
             unique = sorted(set(str(v) for v in values))
             if len(unique) == 1:
-                # 保持原值
                 generalized.append({col: unique[0]})
             else:
                 generalized.append({col: "{" + ",".join(unique) + "}"})
@@ -111,20 +148,16 @@ def k_anonymize_table(
     qi_cols: List[str],
     k: int = 5,
     max_depth: int = 10,
-) -> List[Dict[str, Any]]:
+    return_details: bool = False,
+) -> Union[List[Dict[str, Any]], KAnonymityResult]:
     """对整张表执行 Mondrian K-匿名泛化。
 
-    Args:
-        rows: 原始记录列表。
-        qi_cols: 准标识符列名列表。
-        k: K-匿名阈值，每个等价组至少包含 k 条记录。
-        max_depth: 最大递归深度，防止过泛化。
-
-    Returns:
-        泛化后的记录列表（顺序可能与输入不同）。
-
-    Raises:
-        ValueError: 输入记录数不足 k，或 qi_cols 包含输入中不存在的列。
+    执行步骤：
+    1. 校验输入数据集行数 >= k，校验准标识符列 qi_cols 必须非空且存在于表中。
+    2. 计算多维分割：使用 Pandas 向量化或递归递归选定跨度最大的准标识符维度。
+    3. 寻找合法中位数切分点，使得切分后的左右两个等价组记录数均 >= k。
+    4. 对终止切分的叶子节点（等价组）实施区间/组合集合泛化。
+    5. 返回泛化后的记录，若 `return_details=True` 封装导出 `KAnonymityResult`。
     """
     KANO_OPERATIONS_TOTAL.labels(operation="table").inc()
     if not rows:
@@ -201,7 +234,10 @@ def k_anonymize_table(
             return pd.concat([left, right])
 
         result_df = _mondrian_pd(df, max_depth)
-        return result_df.to_dict(orient="records")
+        res_list = result_df.to_dict(orient="records")
+        if return_details:
+            return KAnonymityResult(value=res_list, k=k, qi_cols=qi_cols, equivalence_classes_count=len(res_list)//max(1, k))
+        return res_list
     except ImportError:
         pass
 
@@ -224,7 +260,10 @@ def k_anonymize_table(
         right = _mondrian(sorted_records[split_idx:], depth - 1)
         return left + right
 
-    return _mondrian(rows, max_depth)
+    final_res = _mondrian(rows, max_depth)
+    if return_details:
+        return KAnonymityResult(value=final_res, k=k, qi_cols=qi_cols, equivalence_classes_count=len(final_res)//max(1, k))
+    return final_res
 
 
 def k_anonymize_dataframe(
@@ -232,6 +271,7 @@ def k_anonymize_dataframe(
     qi_cols: List[str],
     k: int = 5,
     max_depth: int = 10,
+    return_details: bool = False,
 ) -> Any:
     """对 DataFrame 执行 Mondrian K-匿名泛化。
 
@@ -243,9 +283,10 @@ def k_anonymize_dataframe(
         qi_cols: 准标识符列名列表。
         k: K-匿名阈值。
         max_depth: 最大递归深度。
+        return_details: 是否返回 KAnonymityResult 结构体。
 
     Returns:
-        泛化后的 DataFrame（pandas DataFrame）。
+        泛化后的 DataFrame（pandas DataFrame），或当 return_details=True 时返回 KAnonymityResult。
     """
     from .data_adapters import from_records, to_records
 
@@ -317,10 +358,23 @@ def k_anonymize_dataframe(
                 right = _mondrian_pd(sorted_sub.iloc[split_idx:], depth - 1)
                 return pd.concat([left, right])
 
-            return _mondrian_pd(df, max_depth)
+            result_df = _mondrian_pd(df, max_depth)
+            if return_details:
+                res_list = result_df.to_dict(orient="records")
+                return KAnonymityResult(
+                    value=res_list,
+                    k=k,
+                    qi_cols=qi_cols,
+                    equivalence_classes_count=len(res_list) // max(1, k),
+                )
+            return result_df
     except ImportError:
         pass
 
     records = to_records(df)
-    anonymized = k_anonymize_table(records, qi_cols, k=k, max_depth=max_depth)
+    anonymized = k_anonymize_table(
+        records, qi_cols, k=k, max_depth=max_depth, return_details=return_details
+    )
+    if return_details:
+        return anonymized
     return from_records(anonymized, df)

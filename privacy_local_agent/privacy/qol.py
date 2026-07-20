@@ -7,10 +7,55 @@ Query obfuscation primitive. Mixes a real user query with dummy queries to
 mitigate inference attacks against query logs.
 """
 
+from __future__ import annotations
+
 import random
-from typing import List, Optional
+from dataclasses import dataclass, field
+from typing import Any, List, Optional, Union
 
 from ..observability.metrics import QOL_OPERATIONS_TOTAL
+
+
+@dataclass
+class QoLResult:
+    """查询混淆结果及结构化元数据包装。
+
+    Attributes:
+        queries: 包含真实查询与虚假 dummy 查询在内的混淆文本列表。
+        real_query_index: 真实查询在混淆列表中的索引下划位置。
+        domain: 应用的混淆领域（"medical" / "generic"）。
+        num_dummies: 生成的 Dummy 虚假查询数量。
+    """
+
+    queries: List[str]
+    real_query_index: int
+    domain: str
+    num_dummies: int
+
+    def to_arrow(self):
+        """将 QoLResult 包装转换为附带 查询混淆 Metadata 的 PyArrow Table。
+
+        执行步骤：
+        1. 提取 QoLResult 的混淆元数据（真实查询索引、领域、虚假查询数量）构造 JSON。
+        2. 将元数据编码存入 Schema Metadata Key `b"qol_metadata"`。
+        3. 构建 `queries` 列并生成 PyArrow Table 导出。
+        """
+        import json
+        import pyarrow as pa
+
+        meta = {
+            "real_query_index": str(self.real_query_index),
+            "domain": str(self.domain),
+            "num_dummies": str(self.num_dummies),
+        }
+        custom_metadata = {b"qol_metadata": json.dumps(meta).encode("utf-8")}
+
+        arr = pa.array(self.queries)
+        table = pa.Table.from_arrays([arr], names=["obfuscated_query"])
+
+        existing_meta = table.schema.metadata or {}
+        merged_meta = {**existing_meta, **custom_metadata}
+        return table.replace_schema_metadata(merged_meta)
 
 
 # 扩展后的内置医疗领域虚假查询词库（共 20 个）
@@ -81,26 +126,19 @@ def obfuscate_query(
     medical_pool: List[str] = None,
     generic_pool: List[str] = None,
     seed: Optional[int] = None,
-) -> List[str]:
+    return_details: bool = False,
+) -> Union[List[str], QoLResult]:
     """对单个查询进行混淆。
 
-    根据 domain 选择对应的 dummy 查询池，或在无自定义池时使用语义模板替换生成虚假查询，
-    并将真实 query 随机插入到列表中的某个位置。
-
-    Args:
-        query: 用户真实查询字符串。
-        num_dummies: 生成的虚假查询数量，默认 3。
-        domain: 查询所属领域，"medical" 使用医疗 dummy 池，其他使用通用池。
-        medical_pool: 自定义医疗 dummy 池，若指定则覆盖内置词库。
-        generic_pool: 自定义通用 dummy 池，若指定则覆盖内置词库。
-        seed: 可选随机种子，用于可复现测试。
-
-    Returns:
-        混淆后的查询列表，长度为 num_dummies + 1，真实查询必在列表中。
+    执行步骤：
+    1. 根据 domain 选择医疗（medical）或通用（generic）虚假查询池。
+    2. 优先使用语义实体槽位（Slot-Filling）匹配并生成近邻语义 Dummy 查询。
+    3. 若未能匹配实体，基于长度相近原则（长度差 <= 6 字符）从 Dummy 池中抽取补齐。
+    4. 将真实 query 随机插入到混淆列表中的某个随机位置。
+    5. 返回混淆列表，若 `return_details=True` 封装导出包含真实 Query 索引的 `QoLResult`。
     """
     QOL_OPERATIONS_TOTAL.labels(domain=domain.lower()).inc()
 
-    # 1. 确定基准池
     is_medical = domain.lower() == "medical"
     pool = (medical_pool if is_medical else generic_pool)
     if pool is None:
@@ -109,13 +147,11 @@ def obfuscate_query(
     dummies: List[str] = []
     rng = random.Random(seed)
 
-    # 2. 如果使用内置池，尝试进行语义槽位（Slot-Filling）模板替换生成
     if (is_medical and medical_pool is None) or (not is_medical and generic_pool is None):
         matched_term = None
         terms_list = DISEASES if is_medical else ENTITIES
         placeholder = "{disease}" if is_medical else "{entity}"
 
-        # 寻找 Query 中包含的已知实体词
         for t in terms_list:
             if t in query:
                 matched_term = t
@@ -123,39 +159,39 @@ def obfuscate_query(
 
         if matched_term:
             template = query.replace(matched_term, placeholder)
-            # 过滤掉当前已命中的实体词
             choices = [t for t in terms_list if t != matched_term]
             if len(choices) >= num_dummies:
-                # 随机抽取不重复的实体填入模板中
                 selected_terms = rng.sample(choices, num_dummies)
                 for st in selected_terms:
                     dummies.append(template.replace(placeholder, st))
 
-    # 3. 兜底/补齐机制：若未命中模板，或者生成数量不够，从池中根据长度相近原则补齐
     needed = num_dummies - len(dummies)
     if needed > 0:
-        # 排除掉与真实查询相同的条目
         filtered_pool = [p for p in pool if p != query]
         if not filtered_pool:
             filtered_pool = list(pool)
 
-        # 尝试筛选与真实查询长度相差在 6 个字符以内的候选集以防御长度分析
         query_len = len(query)
         close_candidates = [p for p in filtered_pool if abs(len(p) - query_len) <= 6]
         if not close_candidates:
-            # 扩展筛选到 12 字符
             close_candidates = [p for p in filtered_pool if abs(len(p) - query_len) <= 12]
         if not close_candidates:
             close_candidates = filtered_pool
 
-        # 补齐所需数量
         while len(dummies) < num_dummies:
             dummies.append(rng.choice(close_candidates))
 
-    # 4. 将真实查询插入随机位置
     pos = rng.randint(0, len(dummies))
     result = list(dummies)
     result.insert(pos, query)
+
+    if return_details:
+        return QoLResult(
+            queries=result,
+            real_query_index=pos,
+            domain=domain,
+            num_dummies=num_dummies,
+        )
     return result
 
 
@@ -166,8 +202,14 @@ def obfuscate_query_batch(
     medical_pool: List[str] = None,
     generic_pool: List[str] = None,
     seed: Optional[int] = None,
-) -> List[List[str]]:
-    """批量对查询进行混淆。"""
+    return_details: bool = False,
+) -> Union[List[List[str]], List[QoLResult]]:
+    """批量对查询进行混淆。
+
+    执行步骤：
+    1. 遍历 `queries` 数组，对每个查询依次调用 `obfuscate_query`。
+    2. 支持透传 `return_details` 参数返回 `QoLResult` 结构的列表。
+    """
     return [
         obfuscate_query(
             query,
@@ -176,6 +218,7 @@ def obfuscate_query_batch(
             medical_pool=medical_pool,
             generic_pool=generic_pool,
             seed=seed,
+            return_details=return_details,
         )
         for query in queries
     ]

@@ -377,3 +377,9 @@ PYTHONPATH=. pytest tests/test_dp.py -v --slow
 - [x] REST/gRPC 接口参数透传测试通过。
 - [x] `privacy_traffic_bytes_total` 指标接入测试通过。
 - [x] 统计测试在 5000 次采样下通过。
+- [x] `adaptive_clip` 自适应截断边界与预算消耗测试覆盖。
+- [x] `dp_aggregate` 表格级聚合预算拆分与结果正确性测试覆盖。
+- [x] `vector_sum` / `vector_mean` 高维向量加噪与 L₂ clip 测试覆盖。
+- [x] `dp_groupby` Tau-Thresholding 稀有分组过滤测试覆盖。
+- [x] `Accumulator` 分布式累加器序列化、合并、finalize 测试覆盖。
+- [x] `RDPAccountant` Rényi DP 多阶会计与最优 α 搜索测试覆盖。
