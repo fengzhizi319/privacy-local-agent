@@ -371,23 +371,100 @@ def test_dp_noisy_sum_rest():
     assert resp.json()["result"] >= 80.0
 
 
-def test_dp_noisy_mean_rest():
-    """测试对已聚合 sum/count 加噪得到均值的 REST 接口。"""
+def test_dp_arrow_ipc_rest():
+    """测试 REST 端点 PyArrow IPC Stream 二进制二进制传输。"""
+    import pyarrow as pa
+    import pyarrow.ipc as ipc
+    from privacy_local_agent.privacy.data_adapters import table_to_arrow_ipc_bytes
+
+    input_table = pa.Table.from_arrays([pa.array([10.0, 20.0, 30.0, 40.0])], names=["value"])
+    ipc_payload = table_to_arrow_ipc_bytes(input_table)
+
     resp = client.post(
-        "/v1/privacy/dp/noisy_mean",
-        json={
-            "true_sum": 150.0,
-            "true_count": 10.0,
-            "params": {
-                "epsilon": 10.0,
-                "mechanism": "laplace",
-                "clip_lower": 0.0,
-                "clip_upper": 100.0,
-            },
-        },
+        "/v1/privacy/dp/arrow_ipc?aggregation=sum&epsilon=1.0&clip_lower=0.0&clip_upper=100.0",
+        content=ipc_payload,
+        headers={"Content-Type": "application/vnd.apache.arrow.stream"},
     )
     assert resp.status_code == 200
-    assert 0 <= resp.json()["result"] <= 100
+    assert resp.headers["content-type"] == "application/vnd.apache.arrow.stream"
+
+    # 解包响应 Stream 并验证带噪 DP 结果与 Metadata
+    reader = ipc.RecordBatchStreamReader(resp.content)
+    result_table = reader.read_all()
+    assert b"dp_metadata" in result_table.schema.metadata
+    assert "dp_value" in result_table.column_names
+    assert len(result_table.column("dp_value")) == 1
+
+
+def test_dp_arrow_ipc_vector_sum():
+    """测试 Arrow IPC 端点的 vector_sum 聚合与 max_norm 参数。"""
+    import pyarrow as pa
+    import pyarrow.ipc as ipc
+    from privacy_local_agent.privacy.data_adapters import table_to_arrow_ipc_bytes
+
+    # 构造 3 条 4 维向量
+    vectors = [[1.0, 2.0, 3.0, 4.0], [5.0, 6.0, 7.0, 8.0], [0.5, 0.5, 0.5, 0.5]]
+    input_table = pa.Table.from_arrays(
+        [pa.array(v) for v in zip(*vectors)],
+        names=["d0", "d1", "d2", "d3"],
+    )
+    ipc_payload = table_to_arrow_ipc_bytes(input_table)
+
+    resp = client.post(
+        "/v1/privacy/dp/arrow_ipc?aggregation=vector_sum&epsilon=1.0&delta=1e-5"
+        "&mechanism=gaussian&max_norm=10.0",
+        content=ipc_payload,
+        headers={"Content-Type": "application/vnd.apache.arrow.stream"},
+    )
+    assert resp.status_code == 200
+    assert resp.headers["content-type"] == "application/vnd.apache.arrow.stream"
+
+    reader = ipc.RecordBatchStreamReader(resp.content)
+    result_table = reader.read_all()
+    assert b"dp_metadata" in result_table.schema.metadata
+
+
+def test_dp_arrow_ipc_vector_mean():
+    """测试 Arrow IPC 端点的 vector_mean 聚合。"""
+    import pyarrow as pa
+    import pyarrow.ipc as ipc
+    from privacy_local_agent.privacy.data_adapters import table_to_arrow_ipc_bytes
+
+    vectors = [[1.0, 2.0], [3.0, 4.0], [5.0, 6.0], [7.0, 8.0], [9.0, 10.0]]
+    input_table = pa.Table.from_arrays(
+        [pa.array(v) for v in zip(*vectors)],
+        names=["d0", "d1"],
+    )
+    ipc_payload = table_to_arrow_ipc_bytes(input_table)
+
+    resp = client.post(
+        "/v1/privacy/dp/arrow_ipc?aggregation=vector_mean&epsilon=2.0&delta=1e-5"
+        "&mechanism=gaussian&max_norm=5.0",
+        content=ipc_payload,
+        headers={"Content-Type": "application/vnd.apache.arrow.stream"},
+    )
+    assert resp.status_code == 200
+
+    reader = ipc.RecordBatchStreamReader(resp.content)
+    result_table = reader.read_all()
+    assert b"dp_metadata" in result_table.schema.metadata
+
+
+def test_dp_arrow_ipc_unsupported_aggregation():
+    """测试 Arrow IPC 端点对不支持的聚合类型返回 400。"""
+    import pyarrow as pa
+    from privacy_local_agent.privacy.data_adapters import table_to_arrow_ipc_bytes
+
+    input_table = pa.Table.from_arrays([pa.array([1.0, 2.0])], names=["v"])
+    ipc_payload = table_to_arrow_ipc_bytes(input_table)
+
+    resp = client.post(
+        "/v1/privacy/dp/arrow_ipc?aggregation=median&epsilon=1.0",
+        content=ipc_payload,
+        headers={"Content-Type": "application/vnd.apache.arrow.stream"},
+    )
+    assert resp.status_code == 400
+    assert "Unsupported aggregation" in resp.json()["detail"]
 
 
 def test_dp_noisy_histogram_rest():

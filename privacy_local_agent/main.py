@@ -15,7 +15,7 @@ import os
 from contextlib import asynccontextmanager
 from typing import Any, Dict, List, Optional
 
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Request
 from pydantic import BaseModel
 
 from .classification_routes import classification_router
@@ -782,6 +782,106 @@ def recommend_profile(req: RecommendRequest):
         "namespace": req.namespace,
         "recommended_params": recommended
     }
+
+
+@app.post(
+    "/v1/privacy/dp/arrow_ipc",
+    dependencies=[*SECURITY_DEPS, require_permission("privacy:dp")],
+)
+async def dp_arrow_ipc(
+    request: Request,
+    aggregation: str = "count",
+    epsilon: float = 1.0,
+    delta: float = 0.0,
+    mechanism: str = "laplace",
+    clip_lower: Optional[float] = None,
+    clip_upper: Optional[float] = None,
+    max_norm: Optional[float] = None,
+    column: Optional[str] = None,
+):
+    """高效二进制 REST 端点：接收 application/vnd.apache.arrow.stream 字节载荷并返回带 DP Metadata 的 Arrow IPC Stream。
+
+    跳过 JSON 序列化/反序列化开销，直接通过零拷贝 PyArrow 二进制 Stream 进行交互。
+
+    Query Parameters:
+        aggregation: 聚合类型，支持 count / sum / mean / vector_sum / vector_mean。
+        epsilon: 隐私预算 epsilon。
+        delta: 隐私预算 delta。
+        mechanism: 噪声机制（"laplace" 或 "gaussian"）。
+        clip_lower: 数值截断下界（sum / mean 必填）。
+        clip_upper: 数值截断上界（sum / mean 必填；vector_sum / vector_mean 用作 max_norm 回退）。
+        max_norm: 向量 L2 范数截断阈值（vector_sum / vector_mean 专用，优先于 clip_upper）。
+        column: Arrow Table 中的目标列名（可选，默认取第一列）。
+    """
+    try:
+        from fastapi.responses import Response
+        from .privacy.data_adapters import parse_arrow_ipc_bytes, table_to_arrow_ipc_bytes
+        from .privacy.dp import DPResult
+
+        # Step 1: Read raw Arrow IPC Stream bytes from request body
+        body_bytes = await request.body()
+        arr = parse_arrow_ipc_bytes(body_bytes, column=column)
+
+        # Step 2: Dispatch to the corresponding DPApi method based on aggregation type
+        if aggregation == "count":
+            dp_res = service.dp_api.count(
+                arr, epsilon=epsilon, delta=delta, mechanism=mechanism,
+                return_details=True,
+            )
+        elif aggregation == "sum":
+            dp_res = service.dp_api.sum(
+                arr, epsilon=epsilon, delta=delta, mechanism=mechanism,
+                clip_lower=clip_lower, clip_upper=clip_upper,
+                return_details=True,
+            )
+        elif aggregation == "mean":
+            dp_res = service.dp_api.mean(
+                arr, epsilon=epsilon, delta=delta, mechanism=mechanism,
+                clip_lower=clip_lower, clip_upper=clip_upper,
+                return_details=True,
+            )
+        elif aggregation == "vector_sum":
+            # max_norm explicitly provided takes priority; fall back to clip_upper for backward compatibility
+            resolved_norm = max_norm if max_norm is not None else (clip_upper or 1.0)
+            dp_res = service.dp_api.vector_sum(
+                arr, max_norm=resolved_norm,
+                epsilon=epsilon, delta=delta, mechanism=mechanism,
+                return_details=True,
+            )
+        elif aggregation == "vector_mean":
+            resolved_norm = max_norm if max_norm is not None else (clip_upper or 1.0)
+            dp_res = service.dp_api.vector_mean(
+                arr, max_norm=resolved_norm,
+                epsilon=epsilon, delta=delta, mechanism=mechanism,
+                return_details=True,
+            )
+        else:
+            raise ValueError(
+                f"Unsupported aggregation '{aggregation}'. "
+                "Supported: count, sum, mean, vector_sum, vector_mean"
+            )
+
+        # Step 3: Ensure dp_res is a DPResult (all branches above return DPResult via return_details=True)
+        if isinstance(dp_res, (int, float)):
+            # Scalar fallback: should not normally reach here since return_details=True,
+            # but guard against unexpected code paths
+            dp_res = DPResult(
+                value=dp_res,
+                noise_mechanism=mechanism,
+                noise_scale=0.0,
+                epsilon_spent=epsilon,
+                delta_spent=delta,
+                confidence_interval=(float(dp_res), float(dp_res)),
+            )
+
+        # Step 4: Export DPResult to Arrow Table with embedded DP metadata, then serialize to IPC bytes
+        table = dp_res.to_arrow()
+        ipc_bytes = table_to_arrow_ipc_bytes(table)
+        return Response(content=ipc_bytes, media_type="application/vnd.apache.arrow.stream")
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"{type(e).__name__}: {str(e)}")
 
 
 if __name__ == "__main__":

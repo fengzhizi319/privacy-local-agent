@@ -231,7 +231,52 @@ def extract_values(
     if hasattr(data, "tolist"):
         return _to_numpy_array(data.tolist())
 
+    # 6. PyArrow RecordBatch / Table Stream / Bytes
+    if isinstance(data, (bytes, bytearray)):
+        return parse_arrow_ipc_bytes(data, column=column)
+
     raise TypeError(f"Unsupported data type for DP values: {type(data)}")
+
+
+def parse_arrow_ipc_bytes(b: bytes, column: Optional[str] = None) -> np.ndarray:
+    """从 PyArrow IPC Stream 字节流解析二进制数据并抽取为 np.ndarray。
+
+    执行步骤：
+    1. 使用 `pyarrow.ipc.open_stream` 读取二进制 Stream。
+    2. 将 RecordBatch Stream 还原为 `pyarrow.Table`。
+    3. 若指定 column 则提取目标列为 np.ndarray，否则默认提取第一列。
+    """
+    import pyarrow as pa
+    import pyarrow.ipc as ipc
+
+    reader = ipc.RecordBatchStreamReader(b)
+    table = reader.read_all()
+    if column is not None:
+        if column not in table.column_names:
+            raise ValueError(f"Column '{column}' not found in Arrow IPC Table")
+        arr = table.column(column).to_numpy()
+    else:
+        if table.num_columns == 0:
+            return np.array([], dtype=np.float64)
+        arr = table.column(0).to_numpy()
+    return _to_numpy_array(arr)
+
+
+def table_to_arrow_ipc_bytes(table: Any) -> bytes:
+    """将 PyArrow Table 转换为 Arrow IPC RecordBatch Stream 二进制字节流。
+
+    执行步骤：
+    1. 使用 `pyarrow.ipc.new_stream` 打开二进制 Sink 缓存区。
+    2. 写入 `table` 及其全量 Schema Metadata（如 `b"dp_metadata"`）。
+    3. 导出包含全量数据与 Metadata 的二进制 bytes。
+    """
+    import pyarrow as pa
+    import pyarrow.ipc as ipc
+
+    sink = pa.BufferOutputStream()
+    with ipc.new_stream(sink, table.schema) as writer:
+        writer.write_table(table)
+    return sink.getvalue().to_pybytes()
 
 
 def extract_chunks(
