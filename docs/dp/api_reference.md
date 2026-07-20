@@ -1,8 +1,159 @@
 # 差分隐私模块 API 参考
 
-## 1. Python SDK
+本文档汇总 `privacy-local-agent` 差分隐私（DP）模块的算法设计、API 签名、REST/gRPC 接口定义与使用场景。实现细节与数学证明请参阅 [design.md](./design.md)。
 
-### `DPApi`
+## 1. 算法设计原理
+
+本节概述差分隐私模块的核心算法原理。完整的数学推导、代码实现与证明请参阅 [design.md](./design.md)。
+
+### 1.1 差分隐私定义
+
+对任意两个仅相差一条记录的相邻数据集 $D$ 和 $D'$，随机化机制 $M$ 对任意输出集合 $S$ 满足：
+
+$$(\varepsilon, \delta)\text{-DP}: \quad \Pr[M(D) \in S] \leq e^\varepsilon \cdot \Pr[M(D') \in S] + \delta$$
+
+当 $\delta = 0$ 时为纯 $\varepsilon$-DP。
+
+> **差分隐私是算法（运算、查询、机制）的属性，而非数据本身的属性。** 没有运算，敏感度无从定义，DP 保证失去锚点。
+
+#### 为什么必须绑定运算
+
+差分隐私定义中的 $M$ 是一个**随机化算法**，敏感度 $\Delta f$ 的下标是查询函数 $f$：
+
+$$\Delta f = \max_{D \sim D'} |f(D) - f(D')|$$
+
+- 同一数据集，不同查询有不同敏感度：count 的 $\Delta f = 1$，无截断 sum 的 $\Delta f = \infty$
+- **数据本身没有敏感度，是运算赋予了数据敏感度**
+- 隐私预算针对**运算序列**消耗，而非数据本身
+
+#### 与其他隐私方法的对比
+
+| 方法 | 层面 | 是否依赖运算 |
+|------|------|------------|
+| K-匿名 / 数据脱敏 | 数据层面 | 否，通过泛化/替换数据本身实现 |
+| **差分隐私** | **算法层面** | **是，必须绑定具体运算** |
+
+#### 为什么不能直接给每条记录加噪声
+
+在中心式 DP 模型下，噪声应加在**查询结果**上，噪声尺度由查询敏感度决定。给每条记录加噪声后，攻击者可多次观测取平均抵消噪声，无法提供 DP 保证。这属于**本地差分隐私**（Local DP）或启发式扰动，与中心式 DP 是完全不同的信任模型。
+
+- **中心式 DP**：只发布带噪声的聚合结果（count/sum/mean/histogram）
+- **需要微观数据时**：使用合成数据生成算法（DP-GAN、PrivBayes）
+- **本地 DP**：在数据采集端部署本地随机化机制
+
+### 1.2 敏感度
+
+敏感度（Sensitivity）是连接 DP 定义与机制设计的核心桥梁。DP 定义只约束输出分布在相邻数据集上的相似程度，敏感度则量化"一个人的数据变化最多能让查询结果改变多少"。
+
+对查询函数 $f$，其全局 $L_1$ / $L_2$ 敏感度为：
+
+$$\Delta_1 f = \max_{D \sim D'} \|f(D) - f(D')\|_1, \quad \Delta_2 f = \max_{D \sim D'} \|f(D) - f(D')\|_2$$
+
+**作用**：
+
+1. **标定噪声尺度**——隐私机制的"调音旋钮"：
+   - Laplace 机制：$M(D) = f(D) + \text{Lap}(\Delta_1 f / \varepsilon)$
+   - Gaussian 机制：$M(D) = f(D) + \mathcal{N}(0, \sigma^2)$，$\sigma \approx \Delta_2 f \sqrt{2\ln(1.25/\delta)} / \varepsilon$
+2. **把抽象定义转化为可操作参数**：DP 定义给出目标，敏感度给出实现该目标所需的噪声"剂量"
+3. **决定隐私与效用的权衡**：给定 $\varepsilon$，误差正比于敏感度；工程上通过裁剪（clipping）控制敏感度
+
+| 类型 | 定义 | 特点 |
+|------|------|------|
+| 全局敏感度 | 在所有相邻数据集对上取最大值 | 简单、可离线校准；对某些查询过于保守 |
+| 局部敏感度 | 固定当前数据集 $D$，在邻域内取最大值 | 通常更小，但直接使用会泄漏 $D$ 的信息 |
+
+> **敏感度度量单个个体的最大影响，差分隐私通过注入与敏感度成比例的噪声来掩盖这种影响——它是定义与实现之间的量化纽带。**
+
+### 1.3 Laplace 机制
+
+Laplace 机制是**唯一**能提供**纯 $\varepsilon$-DP**的连续噪声机制，向查询结果添加 Laplace 分布噪声：
+
+$$M(D) = f(D) + \text{Lap}\left(\frac{\Delta f}{\varepsilon}\right)$$
+
+尺度参数 $b = \Delta f / \varepsilon$，概率密度 $p(x) = \frac{1}{2b}\exp(-|x|/b)$。
+
+**噪声生成（逆变换采样）**：生成 $U \sim \text{Uniform}(0,1)$，令 $V = U - 0.5$，则 $X = -b \cdot \text{sign}(V) \cdot \ln(1 - 2|V|)$。
+
+**示例**：count 查询，$f(D) = 1000$，$\Delta f = 1$，$\varepsilon = 1$，则 $b = 1$，发布结果 $\approx 1000 \pm \text{Lap}(1)$。
+
+**求和示例**：1000 名患者总医疗费用 $f(D) = 5{,}000{,}000$，每人上限 100,000，$\Delta f = 100{,}000$，$\varepsilon = 2$，则 $b = 50{,}000$，相对误差仅约 1%——体现"敏感度小则噪声小"原则。
+
+### 1.4 Gaussian 机制
+
+Gaussian 机制提供 **$(\varepsilon, \delta)$-DP**，向查询结果添加正态分布噪声：
+
+$$M(D) = f(D) + \mathcal{N}(0, \sigma^2), \quad \sigma = \frac{\Delta_2 f \cdot \sqrt{2\ln(1.25/\delta)}}{\varepsilon}$$
+
+本模块默认采用 **Balle & Wang (2018) 解析高斯机制（Analytic Gaussian Mechanism）**，对任意 $\varepsilon > 0$、$\delta > 0$ 数值求解满足 $(\varepsilon, \delta)$-DP 的最小 $\sigma$，噪声通常小于经典公式且不受 $\varepsilon \leq 1$ 限制。实现位于 `privacy_local_agent.privacy.dp.calibrate_analytic_gaussian()`。
+
+**与 Laplace 的核心区别**：
+
+| 特性 | Laplace | Gaussian |
+|---|---|---|
+| 隐私保证 | 纯 $\varepsilon$-DP（$\delta = 0$） | $(\varepsilon, \delta)$-DP（$\delta > 0$） |
+| 敏感度 | L1 敏感度 | L2 敏感度 |
+| 噪声分布 | 拉普拉斯分布 | 正态分布 |
+| 适用场景 | 简单查询、纯 $\varepsilon$ 保证 | 高维、多次组合、需要紧致界 |
+
+**噪声生成（Box-Muller 变换）**：生成 $U_1, U_2 \sim \text{Uniform}(0,1)$，$Z = \sqrt{-2\ln U_1} \cdot \cos(2\pi U_2)$，$X = \sigma \cdot Z$。
+
+**何时选择 Gaussian**：高维查询输出向量时组合界更紧致；需利用高级组合定理时分析更自然；允许极小失败概率 $\delta$ 的场景。
+
+### 1.5 mean 组合实现与组合定理
+
+**mean 的组合实现**：通过组合 count 与 sum 实现，将 $(\varepsilon, \delta)$ 平分为两份：
+
+$$\text{mean} = \frac{\text{noisy\_sum}(\varepsilon/2, \delta/2)}{\text{noisy\_count}(\varepsilon/2, \delta/2)}$$
+
+为防止噪声计数接近 0 导致均值发散（Cauchy 型长尾），引入 `min_count` 阈值：当估计计数低于阈值时返回 0.0 作为安全 fallback。
+
+**基本组合定理**：若 $k$ 个机制分别满足 $(\varepsilon_i, \delta_i)$-DP，则整体满足 $(\sum\varepsilon_i, \sum\delta_i)$-DP。BudgetAccountant 据此拒绝超支查询。
+
+**高级组合（Advanced Composition）**：当 $k$ 个机制均满足 $(\varepsilon, \delta)$-DP 时，对任意 $\delta' > 0$，整体满足 $(\varepsilon', k\delta + \delta')$-DP，其中 $\varepsilon' \approx \sqrt{2k \cdot \ln(1/\delta')} \cdot \varepsilon + k \cdot \varepsilon^2$。在 $k$ 较大时可将总 $\varepsilon$ 从 $k \cdot \varepsilon$ 降低到约 $\sqrt{k} \cdot \varepsilon$ 量级。
+
+> **当前实现**：BudgetAccountant 仅支持基本组合（直接相加）。高级组合与 Rényi DP 虽能改善多次查询下的预算估计，但会增加 API 复杂度与审计难度，在 POC/MVP 阶段未实现。
+
+### 1.6 本地差分隐私（Local DP）
+
+本地 DP 与中心式 DP 的信任模型不同：用户数据在**离开设备前**即被随机化，服务器无法反推个体值。本地 DP 提供更强隐私保证（无需信任服务器），但相同 $\varepsilon$ 下统计效用通常低于中心式 DP。
+
+#### 随机响应（Randomized Response）
+
+**二值**：输入 $b \in \{0, 1\}$，以概率 $p = \frac{e^\varepsilon}{1 + e^\varepsilon}$ 保持原值，否则翻转。满足 $\varepsilon$-LDP。
+
+纠偏估计：$n$ 个用户中报告为 1 的比例 $\hat{f}_{\text{reported}}$，真实频率估计为 $\hat{f} = \frac{\hat{f}_{\text{reported}} - (1-p)}{2p - 1}$。
+
+**k-ary 类别**：输入 $v \in \{1, \dots, k\}$，以概率 $p = \frac{e^\varepsilon}{k - 1 + e^\varepsilon}$ 保持原类别，否则均匀随机选择。纠偏估计：$\hat{f}_j = \frac{\hat{f}_{j,\text{reported}} - q}{p - q}$，$q = \frac{1-p}{k-1}$。
+
+#### 与中心式 DP 的对比
+
+| 维度 | 中心式 DP | 本地 DP |
+|---|---|---|
+| 信任模型 | 信任数据管理者 | 不信任任何中心方 |
+| 噪声位置 | 聚合结果 | 每条用户记录 |
+| 典型噪声 | 较小 | 较大 |
+| 代表机制 | Laplace / Gaussian | Randomized Response / RAPPOR |
+| 适用场景 | 企业内部分析、可信平台 | 浏览器 telemetry、移动设备 |
+
+**使用限制**：本地 DP 噪声远大于中心式 DP，只适合大样本下的频率/分布估计（$n \geq 1000$），不适合需要精确个体值或复杂聚合的场景。
+
+### 1.7 模块设计概览
+
+DP 模块包含以下核心组件：
+
+- **`DPApi`**：中心式 DP 聚合查询（count / sum / mean / histogram）与 noisify / chunked 接口
+- **`LocalDPApi`**：本地 DP 随机响应与纠偏估计
+- **`BudgetAccountant`**：隐私预算追踪，支持内存 / SQLite 存储与时间窗口重置
+
+REST / gRPC 接口参数与 Python SDK 语义一致。数据适配器支持 pandas / NumPy / SecretFlow 等输入格式。噪声采样使用密码学安全随机数生成器（CSRPNG），测试模式支持 seed 复现。
+
+Laplace / Gaussian 机制的完整数学推导、代码示例与实现细节请参阅 [design.md](./design.md)。
+
+---
+
+## 2. Python SDK
+
+### 2.1 `DPApi`
 
 位置：`privacy_local_agent.privacy.dp.DPApi`
 
@@ -341,7 +492,7 @@ chunked_histogram(
 
 ---
 
-### `extract_values`（数据适配器）
+### 2.2 `extract_values`（数据适配器）
 
 位置：`privacy_local_agent.privacy.data_adapters.extract_values`
 
@@ -377,7 +528,7 @@ extract_values(
 
 ---
 
-### `LocalDPApi`
+### 2.3 `LocalDPApi`
 
 位置：`privacy_local_agent.privacy.dp.LocalDPApi`
 
@@ -476,7 +627,7 @@ estimate_categorical_histogram(
 
 ---
 
-### `BudgetAccountant`
+### 2.4 `BudgetAccountant`
 
 位置：`privacy_local_agent.privacy.budget.BudgetAccountant`
 
@@ -518,7 +669,128 @@ BudgetAccountant(
 
 ---
 
-## 2. REST API
+### 2.5 数据表 / CSV 场景下的正确使用方式
+
+实际业务中常见的输入是一张数据表（如 CSV、数据库表、Pandas DataFrame），其中包含多个字段、多条记录。需要明确的是：**`DPApi` 的 `values` 参数不是整张表，而是单个聚合查询所针对的某一列数据。**
+
+#### 为什么不能直接传入整张表
+
+中心式 DP 的噪声尺度由**具体查询的敏感度**决定，而敏感度取决于查询函数 $f$。整张表本身没有唯一的敏感度：
+
+| 查询 | 输入 | 敏感度 |
+|---|---|---|
+| 员工人数 | `employee_id` 列 | 1 |
+| 总工资 | `salary` 列（clip 到 $[0, C]$） | $C$ |
+| 平均年龄 | `age` 列（clip 到 $[0, 150]$） | 通过 count + sum 组合 |
+| 部门人数分布 | `department` 列 | 每个桶 1 |
+
+如果允许一次性传入整张表而不指定查询，系统无法确定该为哪种查询加多少噪声，也就无法给出严格的 DP 保证。
+
+#### CSV / 数据表的正确使用流程
+
+1. 按业务需求确定要发布的聚合查询（count / sum / mean / histogram）。
+2. 从数据表中提取该查询对应的**单列**作为 `values`。
+3. 根据该列的业务取值范围设定 `clip_lower` / `clip_upper`（sum / mean 必填）。
+4. 调用对应接口，消耗对应命名空间的隐私预算。
+
+**示例**：对 `data.csv` 的 `salary` 列做差分隐私求和。
+
+```python
+import pandas as pd
+from privacy_local_agent.privacy.dp import DPApi
+
+df = pd.read_csv("data.csv")
+api = DPApi(namespace="hr_dataset")
+
+# 方式 1：手动提取单列
+result = api.sum(
+    values=df["salary"].tolist(),
+    epsilon=1.0,
+    delta=1e-6,
+    mechanism="gaussian",
+    clip_lower=0.0,
+    clip_upper=100000.0,
+)
+
+# 方式 2：直接传入 DataFrame，使用 column 参数指定目标列
+result = api.sum(
+    values=df,
+    column="salary",
+    epsilon=1.0,
+    delta=1e-6,
+    mechanism="gaussian",
+    clip_lower=0.0,
+    clip_upper=100000.0,
+)
+```
+
+SecretFlow 联邦 DataFrame 同样支持直接传入（需安装 secretflow）：
+
+```python
+from privacy_local_agent.privacy.dp import DPApi
+
+api = DPApi(namespace="hr_dataset")
+
+# VDataFrame：列分布在不同参与方，自动定位包含 salary 的 partition
+result = api.sum(
+    values=vdf,
+    column="salary",
+    epsilon=1.0,
+    delta=1e-6,
+    mechanism="gaussian",
+    clip_lower=0.0,
+    clip_upper=100000.0,
+)
+
+# HDataFrame：样本水平分割，需指定参与方
+result = api.sum(
+    values=hdf,
+    column="salary",
+    party="alice",
+    epsilon=1.0,
+    delta=1e-6,
+    mechanism="gaussian",
+    clip_lower=0.0,
+    clip_upper=100000.0,
+)
+```
+
+REST 侧同理：`values` 字段只包含目标列的样本值；如需指定列/参与方，可在 `params` 中传入 `column` 和 `party`。
+
+#### 多字段 / 多列 / 分组分析怎么办
+
+如果需要同时分析多个字段，应该拆分为多个独立的 DP 查询，并分别消耗隐私预算。例如：
+
+- 先对 `salary` 列做 sum（消耗 $\varepsilon_1$）
+- 再对 `age` 列做 mean（消耗 $\varepsilon_2$）
+- 再对 `department` 列做 histogram（消耗 $\varepsilon_3$）
+
+总隐私消耗按组合定理累加：$\varepsilon_{\text{total}} = \varepsilon_1 + \varepsilon_2 + \varepsilon_3$。
+
+**分组聚合**（如按部门求平均工资）属于更复杂的查询，需要额外设计：
+
+- 每个分组的计数值是否足够大（避免 noisy_count 接近 0 导致结果爆炸）
+- 是否对分组数量做限制（防止输出维度泄漏信息）
+- 如何为每个分组分配预算
+
+这些超出了 `DPApi.count/sum/mean` 的职责范围，应作为独立功能（如 `dp_histogram`、`dp_groupby`）另行设计。
+
+#### 如果需要发布"脱敏后的整张表"
+
+这不是中心式 DP 聚合查询能解决的问题。应使用专门的**差分隐私合成数据生成**算法，例如：
+
+- **DP-GAN**：在训练生成模型时注入 DP 噪声，生成统计特征相似的合成记录。
+- **PrivBayes**：基于贝叶斯网络建模字段间关系，逐维度加噪声后采样合成数据。
+
+这些算法本身也是满足 DP 的"运算"，需要独立的模块、接口和隐私预算管理，不能通过扩展 `DPApi` 的 `values` 参数来实现。
+
+#### 一句话总结
+
+> **对数据表做差分隐私，本质是对数据表上的某个具体聚合查询做差分隐私。`DPApi` 一次只处理一个查询对应的一列数据；多列、多查询、分组聚合、合成数据发布都是更高层的能力，需要单独设计，不能混为一谈。**
+
+---
+
+## 3. REST API
 
 ### POST `/v1/privacy/dp/count`
 
@@ -863,7 +1135,7 @@ BudgetAccountant(
 ---
 
 
-## 3. gRPC API
+## 4. gRPC API
 
 ### 方法列表
 
@@ -1017,7 +1289,7 @@ BudgetAccountant(
 
 ---
 
-## 4. 异常与错误码
+## 5. 异常与错误码
 
 | 异常/错误 | 触发条件 | HTTP 状态码 | gRPC 状态码 |
 |---|---|---|---|
@@ -1033,9 +1305,9 @@ BudgetAccountant(
 
 ---
 
-## 5. 使用场景与参数建议
+## 6. 使用场景与参数建议
 
-### 5.1 典型应用场景
+### 6.1 典型应用场景
 
 #### 场景 1：医疗健康数据分析
 
@@ -1349,7 +1621,7 @@ print(f"带噪声总响应时间: {result:.2f}ms")
 
 ---
 
-### 5.2 参数选择指南
+### 6.2 参数选择指南
 
 #### Epsilon (ε) 选择
 
@@ -1510,7 +1782,7 @@ export PRIVACY_BUDGET_WINDOW_SECONDS=604800
 
 ---
 
-### 5.3 性能优化建议
+### 6.3 性能优化建议
 
 #### 批量查询 vs 单次查询
 
@@ -1566,7 +1838,7 @@ chunk_size = (available_memory_mb * 1024 * 1024) // bytes_per_record // 2
 
 ---
 
-### 5.4 安全注意事项
+### 6.4 安全注意事项
 
 #### 浮点精度攻击（Mironov Attack）
 
@@ -1610,7 +1882,7 @@ if remaining["epsilon"] < 0.5:
 
 ---
 
-### 5.5 故障排查速查表
+### 6.5 故障排查速查表
 
 | 现象 | 可能原因 | 解决方案 |
 |------|---------|---------|
@@ -1625,7 +1897,7 @@ if remaining["epsilon"] < 0.5:
 
 ---
 
-### 5.6 与其他隐私技术的对比
+### 6.6 与其他隐私技术的对比
 
 | 技术 | 隐私保证强度 | 数据效用 | 适用场景 |
 |------|------------|---------|---------|
@@ -1642,7 +1914,7 @@ if remaining["epsilon"] < 0.5:
 
 ---
 
-## 6. 最佳实践总结
+## 7. 最佳实践总结
 
 1. **明确隐私目标**：根据数据敏感度和合规要求确定总 ε/δ 预算
 2. **合理选择机制**：简单查询用 Laplace，复杂场景用 Gaussian

@@ -42,7 +42,7 @@ def guess_field_type(field_name: str) -> str:
 def mask_mobile(value: str) -> str:
     """中国大陆手机号脱敏。
 
-    保留前 3 位与后 2 位，中间 4 位替换为 ****。非 11 位号码原样返回。
+    保留前 3 位与后 4 位，中间 4 位替换为 ****。非 11 位号码原样返回。
 
     Args:
         value: 原始手机号。

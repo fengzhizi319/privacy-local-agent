@@ -284,154 +284,67 @@ REST 侧同理：`values` 字段只包含目标列的样本值；如需指定列
 
 ### 3.2 敏感度
 
-敏感度 $\Delta f$ 是差分隐私中**决定噪声大小的唯一核心参数**。它回答了一个问题：
+敏感度（Sensitivity）是连接差分隐私"定义"与"机制设计"的核心桥梁。它本身不出现在差分隐私的定义式中，但决定了要满足该定义需要注入多少噪声。
 
-> **如果数据集中只改变一个人的记录（增加或删除），查询结果最多能变多少？**
+#### 3.2.1 差分隐私的定义回顾
 
-这个"最多"的变化量，就是敏感度。噪声量 = 敏感度 / $\varepsilon$，所以 **敏感度越大，需要加的噪声就越大**。
+随机算法 $M$ 满足 $(\varepsilon, \delta)$-差分隐私，当且仅当对任意相邻数据集 $D, D'$（仅差一条记录）和任意输出集合 $S$：
 
-#### 3.2.1 数学定义
+$$\Pr[M(D) \in S] \le e^{\varepsilon} \cdot \Pr[M(D') \in S] + \delta$$
 
-对于两个**邻接数据集** $D$ 和 $D'$（只相差一条记录）：
+注意这个定义只约束输出分布在相邻数据集上的相似程度，**并不直接规定怎么实现**。要让机制满足它，需要回答一个问题：一个人的数据变化，最多能让查询结果改变多少？这正是敏感度。
 
-$$\Delta f = \max_{D \sim D'} |f(D) - f(D')|$$
+#### 3.2.2 敏感度的定义与作用
 
-根据使用的机制不同，敏感度分为：
+对查询函数 $f$，其全局 $L_1$ 敏感度为：
 
-- **L1 敏感度**：$\Delta_1 f = \max_{D \sim D'} \|f(D) - f(D')\|_1$，用于 Laplace 机制。
-- **L2 敏感度**：$\Delta_2 f = \max_{D \sim D'} \|f(D) - f(D')\|_2$，用于 Gaussian 机制。
+$$\Delta_1 f = \max_{D \sim D'} \|f(D) - f(D')\|_1$$
 
-#### 3.2.2 各查询敏感度
+（相应地有 $L_2$ 敏感度 $\Delta_2 f$。）
 
-| 查询 | L1 敏感度 | L2 敏感度 |
-|---|---|---|
-| count | 1 | 1 |
-| sum | $\text{clip\_upper} - \text{clip\_lower}$ | $\text{clip\_upper} - \text{clip\_lower}$ |
-| mean | $\frac{\text{clip\_upper} - \text{clip\_lower}}{n}$ | $\frac{\text{clip\_upper} - \text{clip\_lower}}{n}$ |
+它的作用体现在以下几个方面：
 
-sum/mean 在计算敏感度前，先将每条记录裁剪到 `[clip_lower, clip_upper]` 区间；敏感度由 clip 区间决定，不依赖于输入数据分布。
+**（1）标定噪声尺度——隐私机制的"调音旋钮"**
 
-#### 3.2.3 不同查询的敏感度计算
+- **拉普拉斯机制**（用于纯 $\varepsilon$-DP）：
 
-##### 场景1：计数查询（Count）
+$$M(D) = f(D) + \text{Lap}\left(\frac{\Delta_1 f}{\varepsilon}\right)$$
 
-**查询**：数据集中有多少人？
+- **高斯机制**（用于 $(\varepsilon, \delta)$-DP）：
 
-- 增加/删除一个人 → 计数变化 **1**
-- **敏感度 $\Delta f = 1$**
+$$M(D) = f(D) + \mathcal{N}(0, \sigma^2), \quad \sigma \approx \frac{\Delta_2 f \sqrt{2\ln(1.25/\delta)}}{\varepsilon}$$
 
-**例子**：某学校有 3000 名学生，查询"戴眼镜的学生人数"。
-- 无论哪个学生加入或离开，计数最多变化 1
-- 若 $\varepsilon = 1$，噪声尺度 $b = 1/1 = 1$，发布结果 $=$ 真实值 $\pm$ 约 $1$
+噪声尺度与敏感度成正比、与 $\varepsilon$ 成反比。敏感度高意味着一个人的数据可能大幅改变结果，为了"掩盖"这个人的痕迹，就必须加更多噪声。
 
-##### 场景2：求和查询（Sum）—— 无截断时
+**（2）把抽象定义转化为可操作的设计参数**
 
-**查询**：所有学生的身高总和是多少？
+DP 定义描述的是"输出分布要多相似"，但没有说怎么做。敏感度提供了量化途径：只要噪声足以淹没单条记录引起的最大输出偏移 $\Delta f$，相邻数据集上两个输出分布就不可区分到 $\varepsilon$ 以内。可以说：
 
-- 如果一个人的身高可以是任意值（0 到 $\infty$），增加一个人，总和变化可能是**无穷大**
-- **敏感度 $\Delta f = \infty$**
+> **DP 定义给出目标，敏感度给出实现该目标所需的噪声"剂量"。**
 
-**这意味着什么**：不加处理的话，求和查询理论上无法用 Laplace 机制做差分隐私，因为需要加无限大的噪声。
+**（3）决定隐私与效用的权衡**
 
-##### 场景3：求和查询（Sum）—— 有截断（Clipping）时
+给定隐私预算 $\varepsilon$，误差直接正比于敏感度。因此工程上的关键技巧很多都围绕降低敏感度：
 
-**处理**：先对数据做**截断（Clipping）**，限制每个值的范围。
+- 机器学习中的梯度**裁剪**（clipping）：把每条样本的梯度范数截断到 $C$，将原本无界的敏感度控制为 $C$——这是 DP-SGD 的核心步骤；
+- 对查询加边界（如限定计数范围、截断贡献）；
+- 选择合适的函数形式，使其对单条记录不敏感。
 
-假设把身高限制在 $[150, 200]$ cm：
-- 最大值 200，最小值 150
-- 增加/删除一个人，总和最多变化 $200 - 150 = 50$？不对。
+#### 3.2.3 全局敏感度 vs 局部敏感度
 
-**正确计算**：增加一个人最多加 200，删除一个人最多减 150（或反过来）。实际上，对于**有界数据** $[a, b]$：
-- **敏感度 $\Delta f = \max(|a|, |b|)$**，或者更严格地，$\Delta f = b - a$（取决于邻接定义）
+- **全局敏感度**：在所有可能的相邻数据集对上取最大值，只依赖查询函数本身，与具体数据无关。优点是简单、可直接用于机制校准；缺点是对某些查询（如中位数、平滑度差的函数）过于保守，导致噪声过大。
+- **局部敏感度**：固定当前数据集 $D$，只在它的邻域内取最大值：$\text{LS}_f(D) = \max_{D' \sim D}\|f(D)-f(D')\|$。它通常更小，但直接用它校准噪声会泄露 $D$ 的信息，所以出现了平滑敏感度（smooth sensitivity）、Sample-and-Aggregate、Propose-Test-Release 等间接利用方法。
 
-**常用简化**：对于非负数据截断到 $[0, C]$，$\Delta f = C$。
+#### 3.2.4 小结
 
-**例子**：某医院计算患者总医疗费用，先把每个人的费用截断到 $[0, 100000]$ 元。
-- 敏感度 $\Delta f = 100000$
-- 若 $\varepsilon = 1$，噪声尺度 $b = 100000$，发布结果 $=$ 真实总和 $\pm$ 约 $10$ 万
+| 角度 | 敏感度的角色 |
+|---|---|
+| 定义层面 | 不在 DP 定义式中，但定义要求相邻数据集输出相似，敏感度量化"相似需要到什么程度" |
+| 机制层面 | 拉普拉斯/高斯噪声的标准差直接由 $\Delta f / \varepsilon$ 决定 |
+| 效用层面 | 敏感度越大，精度损失越大，降低敏感度是优化 DP 算法的主线 |
+| 工程层面 | 裁剪、边界设定等技术本质上都是在"人为控制敏感度" |
 
-**代价**：截断会引入**偏差**——超过 10 万的费用被压成 10 万，总和会偏低。需要在隐私和精度之间权衡。
-
-##### 场景4：均值查询（Mean）
-
-均值 = 总和 / 计数。不能直接对均值加噪声，因为均值查询的敏感度分析复杂。
-
-**正确做法**：分别发布带噪声的**总和**和**计数**，然后让使用者自己相除。
-
-- 噪声总和：$S_{noisy} = \sum x_i + \text{Lap}(\Delta_{sum}/\varepsilon_1)$
-- 噪声计数：$N_{noisy} = n + \text{Lap}(1/\varepsilon_2)$
-- 用户计算：$\text{Mean}_{noisy} = S_{noisy} / N_{noisy}$
-
-**注意**：这不再满足纯 $\varepsilon$-DP，而是**组合隐私**（$\varepsilon_1 + \varepsilon_2$）。且当 $N_{noisy}$ 接近 0 时，结果会爆炸，需要做**后处理**（如丢弃计数过小的结果）。
-
-##### 场景5：直方图查询（Histogram）
-
-**查询**：把年龄分成区间，统计每个区间的人数。
-
-- 增加/删除一个人，只会影响**一个区间**的计数（他所在的年龄组）
-- 那个区间的计数变化 **1**，其他区间变化 0
-- **每个区间的敏感度 $\Delta f = 1$**
-
-**关键**：如果同时发布 10 个区间的计数，总敏感度是多少？
-
-- **基本组合**：10 个区间各加噪声，每个 $\varepsilon = 1$，总隐私消耗 $= 10$
-- **更优做法**：利用直方图的特殊结构。因为一个人只贡献给一个区间，10 个区间的**联合敏感度**（L1 敏感度）= 1（所有区间的变化量绝对值之和 = 1）
-- 因此可以给整个直方图加一组噪声，总消耗可以控制在 $\varepsilon = 1$
-
-**例子**：发布某城市人口年龄分布（0-10岁, 11-20岁, ..., 91-100岁，共 10 个区间）。
-- 每个区间真实计数：{120, 150, 200, ...}
-- 每个区间加噪声 $\text{Lap}(1/\varepsilon)$
-- 发布带噪声的直方图
-
-##### 场景6：最大值/最小值查询（Max/Min）
-
-**查询**：数据集中的最高分数是多少？
-
-- 增加一个人，他可能带来一个更高的分数
-- 敏感度取决于数据域。如果分数范围是 $[0, 100]$：
-  - 删除最高分的人，次高分变成新的 max，变化可能很小
-  - 但差分隐私要求考虑**最坏情况**：增加一个人，他把 max 从 0 推到 100
-  - **敏感度 $\Delta f = 100$**
-
-**问题**：Max/Min 查询对噪声极其敏感。加 $\text{Lap}(100/\varepsilon)$ 的噪声后，结果几乎不可信。
-
-**替代方案**：使用**指数机制（Exponential Mechanism）**而非 Laplace 机制，或者发布**分位数**而非精确最值。
-
-##### 场景7：线性回归系数
-
-**查询**：用身高预测体重，求回归系数 $w$。
-
-- 增加/删除一个人，回归系数的变化量取决于数据分布
-- 敏感度没有闭式解，通常需要**经验估计**或**使用 DP-SGD 等迭代算法**
-
-**DP-SGD**（深度学习中常用的差分隐私优化）：
-- 每次迭代，先计算梯度，然后对梯度做**裁剪**（限制 L2 范数上限为 C）
-- 裁剪后的梯度敏感度 = C
-- 加噪声：$\text{Gaussian}(C \cdot \sigma)$（这里用高斯机制，因为 DP-SGD 通常用 $(\varepsilon, \delta)$-DP）
-- 通过**矩会计（Moments Accountant）**追踪累积隐私消耗
-
-##### 场景8：发布整个数据集（合成数据）
-
-**查询**：生成一个与原始数据集统计特征相似的合成数据集。
-
-- 每个合成记录都可能"泄露"真实记录的信息
-- 敏感度分析极其复杂，通常使用：
-  - **PrivBayes**：基于贝叶斯网络，逐维度加噪声
-  - **DP-GAN**：训练生成模型时注入 DP 噪声
-- 隐私预算通常设得较高（$\varepsilon = 5 \sim 10$），因为任务本身极难
-
-#### 3.2.4 敏感度控制的核心技巧
-
-| 技巧 | 原理 | 代价 |
-|---|---|---|
-| **截断（Clipping）** | 把单个值限制在 $[a, b]$ | 引入偏差，极端值信息丢失 |
-| **分桶（Binning）** | 把连续值分成区间 | 降低精度，但降低敏感度 |
-| **查询分解** | 把复杂查询拆成多个简单查询 | 组合隐私预算消耗增加 |
-| **平滑（Smoothing）** | 对结果做后处理，限制输出范围 | 不消耗隐私预算，但可能引入偏差 |
-
-#### 3.2.5 一句话总结
-
-> **敏感度 = "一个人的影响力"。计数查询天然优秀（$\Delta f=1$），求和查询必须截断，最值查询很难做，复杂模型靠梯度裁剪。敏感度控制是差分隐私工程中最关键的实操环节——它直接决定了你需要加多少噪声，以及结果还能不能用。**
+> **敏感度度量单个个体的最大影响，差分隐私通过注入与敏感度成比例的噪声来掩盖这种影响——它是定义与实现之间的量化纽带。**
 
 ### 3.3 Laplace 机制
 
@@ -569,7 +482,7 @@ $$\sigma = \frac{\Delta_2 f \cdot \sqrt{2 \ln(1.25 / \delta)}}{\varepsilon}$$
 
 #### 3.4.2 Gaussian 噪声生成（Box-Muller 变换）
 
-若仅有均匀分布随机数生成器，可通过 **Box-Muller 变换**生成标准正态分布噪声 $Z \sim \mathcal{N}(0, 1)$，再乘以 $\sigma$：
+若仅有均匀分布随机数生成器，可通过 **Box-Muller 变换**生成标准正态分布噪声 $Z \sim \mathcal{N}(0, 1)$，再乘以 $\sigma$,得到$X \sim \mathcal{N}(0, \sigma^2)$：
 
 **步骤**：
 1. 生成 $U_1, U_2 \sim \text{Uniform}(0, 1)$
@@ -590,7 +503,7 @@ $$\sigma = \frac{\Delta_2 f \cdot \sqrt{2 \ln(1.25 / \delta)}}{\varepsilon}$$
 
 **噪声尺度**：
 
-$$\sigma = \frac{1 \cdot \sqrt{2 \ln(1.25 / 10^{-6})}}{1} = \sqrt{2 \ln(1,250,000)} \approx \sqrt{2 \times 14.04} \approx 5.30$$
+$$\sigma =\frac{\Delta_2 f \cdot \sqrt{2 \ln(1.25 / \delta)}}{\varepsilon} = \frac{1 \cdot \sqrt{2 \ln(1.25 / 10^{-6})}}{1} = \sqrt{2 \ln(1,250,000)} \approx \sqrt{2 \times 14.0386} = \sqrt{28.077} \approx 5.30$$
 
 **生成过程**（假设 $U_1 = 0.37, U_2 = 0.82$）：
 1. $Z = \sqrt{-2 \ln(0.37)} \cdot \cos(2\pi \times 0.82)$
@@ -668,12 +581,56 @@ $$\sigma = \frac{100,000 \cdot \sqrt{2 \ln(1.25 / 10^{-6})}}{2} \approx \frac{10
 
 ### 3.5 mean 的组合实现
 
-mean 通过组合 count 与 sum 实现：
+#### 为什么 mean 不能直接加噪
 
-- Laplace：$\text{mean} = \frac{\text{sum\_with\_noise}(\varepsilon/2)}{\text{count\_with\_noise}(\varepsilon/2)}$，总消耗 $(\varepsilon, 0)$。
-- Gaussian：$\text{mean} = \frac{\text{sum\_with\_noise}(\varepsilon/2, \delta/2)}{\text{count\_with\_noise}(\varepsilon/2, \delta/2)}$，总消耗 $(\varepsilon, \delta)$。
+与 count、sum 不同，均值 $\bar{x} = \frac{1}{n}\sum_{i=1}^n x_i$ 的敏感度分析更为复杂。如果将 mean 视为一个查询函数 $f(D) = \frac{\sum x_i}{|D|}$，其敏感度同时受分子（sum）和分母（count）的影响：
 
-为防止噪声计数接近 0 导致均值结果发散（Cauchy 型长尾），实现中引入 `min_count` 阈值：
+- 增加/删除一条记录，分子变化最多 $\max(|x_{\min}|, |x_{\max}|)$
+- 分母同时变化 1
+
+这使得 mean 的敏感度不是简单的常数，而是与数据规模和取值范围都相关。直接为 mean 设计一个端到端的噪声机制在理论上可行但实现复杂。
+
+#### 组合策略：拆分为 count + sum
+
+本模块采用**组合实现**：将 mean 拆解为两个独立的 DP 查询，分别加噪后相除：
+
+$$\text{noisy_mean} = \frac{\text{noisy_sum}}{\text{noisy_count}}$$
+
+其中 noisy_sum 和 noisy_count 各自独立注入 Laplace 或 Gaussian 噪声。这种方法的优点是：
+
+1. **复用已有机制**：count 的敏感度为 1，sum 的敏感度为 $\text{clip_upper} - \text{clip_lower}$，均可直接校准噪声。
+2. **隐私预算可追踪**：两次查询的预算消耗通过组合定理累加，清晰透明。
+3. **实现简单**：无需为 mean 单独推导敏感度公式。
+
+#### 预算分配
+
+总预算 $(\varepsilon, \delta)$ 平分为两份，分别分配给 count 和 sum：
+
+- **Laplace**：$\text{mean} = \frac{\text{sum_with_noise}(\varepsilon/2)}{\text{count_with_noise}(\varepsilon/2)}$，总消耗 $(\varepsilon, 0)$。
+- **Gaussian**：$\text{mean} = \frac{\text{sum_with_noise}(\varepsilon/2, \delta/2)}{\text{count_with_noise}(\varepsilon/2, \delta/2)}$，总消耗 $(\varepsilon, \delta)$。
+
+均分策略是最简单的预算分配方式。更精细的方案（如按敏感度加权分配）可以进一步优化效用，但会增加 API 复杂度，当前版本未采用。
+
+#### 隐私保证
+
+由基本组合定理，两次查询分别满足 $(\varepsilon/2, \delta/2)$-DP，整体满足：
+
+$$\left(\frac{\varepsilon}{2} + \frac{\varepsilon}{2},\; \frac{\delta}{2} + \frac{\delta}{2}\right) = (\varepsilon, \delta)\text{-DP}$$
+
+因此组合实现不会超出声明的总隐私预算。
+
+#### 分母接近零的发散问题
+
+组合实现面临的核心风险是**分母发散**：当 noisy_count 接近 0 时，$\text{noisy_sum} / \text{noisy_count}$ 的取值可能趋向无穷大，产生极端异常值。这在数学上类似于 **Cauchy 分布的长尾特性**——两个独立正态（或 Laplace）变量之比的尾部极重。
+
+具体来说：
+
+- 当真实计数 $n$ 较大时，$\text{noisy_count} \approx n + \text{noise}$，噪声相对较小，除法结果稳定。
+- 当真实计数 $n$ 很小（如 $n < 5$）时，噪声可能将 noisy_count 拉到 0 附近甚至为负，导致结果爆炸。
+
+#### min_count 阈值保护
+
+为防止发散，实现中引入 `min_count` 阈值（默认 5.0）：
 
 ```python
 def mean(..., min_count: float = 5.0) -> float:
@@ -683,7 +640,29 @@ def mean(..., min_count: float = 5.0) -> float:
     return noisy_sum / noisy_count
 ```
 
-当估计计数低于阈值时，接口返回 0.0 作为安全 fallback。调用方可通过 `params.min_count` 自定义该阈值。
+当估计计数低于阈值时，接口返回 0.0 作为安全 fallback，表示"样本量不足，结果不可靠"。调用方可通过 `params.min_count` 自定义该阈值：
+
+| 场景 | 推荐 `min_count` | 说明 |
+|---|---|---|
+| 保守（医疗/金融） | 10.0 | 严格要求统计显著性 |
+| 默认 | 5.0（默认值） | 平衡可用性与稳定性 |
+| 宽松（探索性分析） | 2.0 | 允许更大方差，减少 fallback 频率 |
+
+#### 示例
+
+假设数据集有 1000 条记录，值域 $[0, 100]$，$\varepsilon = 2, \delta = 10^{-6}$，使用 Gaussian 机制：
+
+1. count 部分：$\varepsilon/2 = 1, \delta/2 = 5 \times 10^{-7}$，敏感度 = 1，$\sigma_{\text{count}} \approx 5.3$
+2. sum 部分：$\varepsilon/2 = 1, \delta/2 = 5 \times 10^{-7}$，敏感度 = 100，$\sigma_{\text{sum}} \approx 530$
+
+若真实 sum = 50,000，真实 count = 1000：
+- noisy_count $\approx 1000 \pm 5.3$（相对误差 ~0.5%，稳定）
+- noisy_sum $\approx 50{,}000 \pm 530$（相对误差 ~1%）
+- noisy_mean $\approx 50{,}000 / 1000 = 50.0$（接近真实均值）
+
+若数据集仅有 3 条记录：
+- noisy_count $\approx 3 \pm 5.3$，可能为负或接近 0
+- 触发 `min_count` 保护，返回 0.0
 
 ### 3.6 组合定理
 
@@ -712,9 +691,59 @@ $$M(b) = \begin{cases} b & \text{概率 } p \\ 1-b & \text{概率 } 1-p \end{cas
 
 该机制满足 $\varepsilon$-LDP。
 
-对于 $n$ 个用户，设扰动后报告为 1 的比例为 $\hat{f}_{\text{reported}}$，真实比例为 $f$ 的纠偏估计为：
+##### 二值随机响应的公式推导
 
-$$\hat{f} = \frac{\hat{f}_{\text{reported}} - (1 - p)}{2p - 1}$$
+**1. 概率 $p$ 的推导**
+
+由 $\varepsilon$-LDP 的定义，对任意两个可能的输入 $b, b' \in \{0,1\}$ 和任意输出 $o$，需满足：
+
+$$\frac{\Pr[M(b) = o]}{\Pr[M(b') = o]} \leq e^\varepsilon$$
+
+考虑最紧的约束情形——输出等于真实值时概率最大（$p$），输出等于翻转值时概率最小（$1-p$），取比值：
+
+$$\frac{p}{1 - p} = e^\varepsilon$$
+
+解出 $p$：
+
+$$p = e^\varepsilon (1 - p) \implies p + p \cdot e^\varepsilon = e^\varepsilon \implies p(1 + e^\varepsilon) = e^\varepsilon$$
+
+$$\boxed{p = \frac{e^\varepsilon}{1 + e^\varepsilon}}$$
+
+当 $\varepsilon \to 0$ 时 $p \to 1/2$（完全随机）；当 $\varepsilon \to \infty$ 时 $p \to 1$（不扰动），符合直觉。
+
+**2. 纠偏估计量 $\hat{f}$ 的推导**
+
+设 $n$ 个用户中真实值为 1 的比例为 $f$。扰动后报告为 1 的期望比例为：
+
+$$\mathbb{E}[\hat{f}_{\text{reported}}] = f \cdot p + (1 - f) \cdot (1 - p)$$
+
+展开并整理：
+
+$$\mathbb{E}[\hat{f}_{\text{reported}}] = fp + 1 - p - f + fp = f(2p - 1) + (1 - p)$$
+
+令观测值 $\hat{f}_{\text{reported}}$ 等于期望值，反解 $f$：
+
+$$\hat{f}_{\text{reported}} = f(2p - 1) + (1 - p)$$
+
+$$\boxed{\hat{f} = \frac{\hat{f}_{\text{reported}} - (1 - p)}{2p - 1}}$$
+
+该估计量是无偏的：$\mathbb{E}[\hat{f}] = f$。
+
+**3. 估计量的方差**
+
+由于每个用户的报告是独立的 Bernoulli 试验，$\hat{f}_{\text{reported}}$ 的方差为：
+
+$$\text{Var}(\hat{f}_{\text{reported}}) = \frac{\mathbb{E}[\hat{f}_{\text{reported}}](1 - \mathbb{E}[\hat{f}_{\text{reported}}])}{n}$$
+
+因此纠偏估计量的方差为：
+
+$$\text{Var}(\hat{f}) = \frac{\text{Var}(\hat{f}_{\text{reported}})}{(2p - 1)^2} = \frac{f(1-f)}{n(2p-1)^2}$$
+
+其中 $2p - 1 = \frac{e^\varepsilon - 1}{e^\varepsilon + 1} = \tanh(\varepsilon/2)$，故：
+
+$$\text{Var}(\hat{f}) = \frac{f(1-f)}{n \cdot \tanh^2(\varepsilon/2)}$$
+
+这说明：$\varepsilon$ 越小（隐私保护越强），方差越大，需要更多样本才能获得准确的频率估计。
 
 ##### k-ary 随机响应
 
@@ -725,9 +754,153 @@ $$p = \frac{e^\varepsilon}{k - 1 + e^\varepsilon}$$
 - 以概率 $p$ 保持原类别
 - 以均匀概率 $(1-p)/(k-1)$ 返回其他每个类别
 
-对类别 $j$ 的真实频率纠偏估计：
+##### k-ary 随机响应的公式推导
 
-$$\hat{f}_j = \frac{\hat{f}_{j,\text{reported}} - q}{p - q}, \quad q = \frac{1 - p}{k - 1}$$
+**1. 概率 $p$ 的推导**
+
+类似二值情形，由 $\varepsilon$-LDP 定义，输出为真实类别的概率 $p$ 与输出为任一其他特定类别的概率 $q$ 之比需满足：
+
+$$\frac{p}{q} = e^\varepsilon$$
+
+同时概率归一化条件要求：
+
+$$p + (k-1) \cdot q = 1$$
+
+将 $q = p \cdot e^{-\varepsilon}$ 代入：
+
+$$p + (k-1) \cdot p \cdot e^{-\varepsilon} = 1 \implies p(1 + (k-1)e^{-\varepsilon}) = 1$$
+
+分子分母同乘 $e^\varepsilon$：
+
+$$\boxed{p = \frac{e^\varepsilon}{k - 1 + e^\varepsilon}}$$
+
+从而：
+
+$$q = \frac{1 - p}{k - 1} = \frac{1}{k - 1 + e^\varepsilon}$$
+
+**2. 纠偏估计量 $\hat{f}_j$ 的推导**
+
+设类别 $j$ 的真实频率为 $f_j$。扰动后报告为类别 $j$ 的期望比例为：
+
+$$\mathbb{E}[\hat{f}_{j,\text{reported}}] = f_j \cdot p + (1 - f_j) \cdot q$$
+
+其中 $(1 - f_j) \cdot q$ 表示所有非 $j$ 类别的用户以概率 $q$ 被错误报告为 $j$。
+
+展开：
+
+$$\mathbb{E}[\hat{f}_{j,\text{reported}}] = f_j \cdot p + q - f_j \cdot q = f_j(p - q) + q$$
+
+令观测值等于期望值，反解 $f_j$：
+
+$$\boxed{\hat{f}_j = \frac{\hat{f}_{j,\text{reported}} - q}{p - q}}$$
+
+**3. 估计量的方差**
+
+类似二值情形的推导，纠偏估计量的方差为：
+
+$$\text{Var}(\hat{f}_j) = \frac{\text{Var}(\hat{f}_{j,\text{reported}})}{(p - q)^2} = \frac{f_j(1 - f_j)}{n(p - q)^2}$$
+
+其中 $p - q = \frac{e^\varepsilon - 1}{k - 1 + e^\varepsilon}$。当 $k = 2$ 时退化为二值情形，$p - q = 2p - 1 = \tanh(\varepsilon/2)$。
+
+##### k-ary 频率估计与属性相关性处理
+
+标准 k-ary 随机响应假设各属性值之间相互独立，但实际数据中属性往往存在相关性（如"操作系统 = Android"与"浏览器 = Chrome"高度共现）。直接在每个属性上独立施加随机响应会破坏属性间的联合分布，导致纠偏后的联合频率估计出现偏差。
+
+**问题形式化**
+
+设用户持有 $d$ 个属性 $\mathbf{v} = (v_1, v_2, \dots, v_d)$，其中 $v_i \in \{1, \dots, k_i\}$。若对每个属性独立施加 k-ary 随机响应，则扰动后的联合报告为 $\mathbf{y} = (y_1, \dots, y_d)$。纠偏时需要知道联合转移概率矩阵 $P(\mathbf{y} | \mathbf{v})$。
+
+由于各属性独立扰动：
+
+$$P(\mathbf{y} | \mathbf{v}) = \prod_{i=1}^{d} P(y_i | v_i)$$
+
+其中每个 $P(y_i | v_i)$ 为对应属性的 k-ary 随机响应转移矩阵。
+
+**纠偏估计**
+
+对联合类别 $\mathbf{j} = (j_1, \dots, j_d)$ 的真实频率 $f_{\mathbf{j}}$，设扰动后报告为 $\mathbf{j}$ 的比例为 $\hat{f}_{\mathbf{j},\text{reported}}$，则：
+
+$$\mathbb{E}[\hat{f}_{\mathbf{j},\text{reported}}] = \sum_{\mathbf{v}} f_{\mathbf{v}} \cdot P(\mathbf{j} | \mathbf{v}) = \sum_{\mathbf{v}} f_{\mathbf{v}} \prod_{i=1}^{d} P(j_i | v_i)$$
+
+当属性数 $d$ 较大时，直接求解上述线性方程组的复杂度为 $O(\prod_i k_i^2)$，不可行。实际采用以下近似策略：
+
+**1. 属性分组（Attribute Grouping）**
+
+将高维属性按业务相关性分为若干小组，每组内部使用完整的联合转移矩阵纠偏，组间假设独立：
+
+$$\hat{f}_{(G_1, G_2)} = \hat{f}_{G_1} \cdot \hat{f}_{G_2}$$
+
+其中每个组 $G$ 的 $k_G = \prod_{i \in G} k_i$ 维转移矩阵大小为 $k_G \times k_G$，复杂度降为 $O(\sum_g k_g^2)$。
+
+**2. 基于采样的迭代纠偏（Iterative Demarginalization）**
+
+当无法合理分组时，使用迭代方法：
+
+1. 初始化：假设所有属性独立，$\hat{f}^{(0)}_{\mathbf{v}} = \prod_i \hat{f}^{(0)}_{v_i}$。
+2. E 步：利用当前联合估计 $\hat{f}^{(t)}$ 和转移矩阵，计算每个属性的边际纠偏估计。
+3. M 步：用边际估计更新联合分布 $\hat{f}^{(t+1)}$，保持与观测边际一致。
+4. 收敛后输出 $\hat{f}^{(\infty)}$。
+
+该方法本质是 EM 算法在离散联合分布估计上的特化，通常 5-10 轮迭代收敛。
+
+**3. 隐私预算分配**
+
+对 $d$ 个属性分别施加随机响应时，由顺序组合定理，总隐私预算为 $\sum_{i=1}^d \varepsilon_i$。若所有属性使用相同的 $\varepsilon_0$，则总消耗为 $d \cdot \varepsilon_0$。可通过以下方式优化：
+
+- **并行组合**：若属性组 $G_1, G_2$ 的数据来自不同用户（非同一用户的不同属性），则总预算为 $\max(\varepsilon_{G_1}, \varepsilon_{G_2})$。
+- **预算加权**：对重要性不同的属性分配不同的 $\varepsilon_i$，重要属性分配更多预算以获得更低的估计方差。
+
+##### RAPPOR（Randomized Aggregatable Privacy-Preserving Ordinal Reporting）
+
+RAPPOR 是 Google 提出的一种面向高基数类别型数据的本地 DP 机制，核心思想是使用 Bloom Filter 编码 + 随机响应，适合域名、URL、应用名等高基数集合成员关系查询。
+
+**编码流程**
+
+每个用户持有一个类别值 $v$（如一个 URL），编码过程如下：
+
+1. **Bloom Filter 编码**：用 $h$ 个哈希函数将 $v$ 映射到位数组 $B$ 的 $h$ 个位置，置为 1。
+   $$B[j] = \begin{cases} 1 & \text{若 } \exists i \in \{1,\dots,h\}, H_i(v) = j \\ 0 & \text{其他} \end{cases}$$
+
+2. **永久随机响应（Permanent Randomized Response, PRR）**：对 Bloom Filter 的每一位 $B[j]$ 独立施加随机扰动，生成 $B'[j]$：
+   $$B'[j] = \begin{cases} B[j] & \text{概率 } f \text{（保持）} \\ 1 & \text{概率 } \frac{1-f}{2} \\ 0 & \text{概率 } \frac{1-f}{2} \end{cases}$$
+   其中 $f$ 为"保持概率"（blinding factor），$f$ 越小隐私保护越强。
+
+3. **瞬时随机响应（Instantaneous Randomized Response, IRR）**：对 PRR 的每一位 $B'[j]$ 再施加一层随机响应，生成最终报告 $B''[j]$：
+   $$B''[j] = \begin{cases} B'[j] & \text{概率 } p \\ 1 - B'[j] & \text{概率 } 1 - p \end{cases}$$
+   其中 $p = \frac{e^{\varepsilon/2}}{1 + e^{\varepsilon/2}}$（二值随机响应，消耗 $\varepsilon/2$）。
+
+**隐私保证**
+
+RAPPOR 通过两层随机响应实现隐私保护：
+
+- PRR 层：每位独立扰动，提供 $(h \cdot \ln \frac{1+f}{1-f})$-LDP（对 Bloom Filter 整体）。
+- IRR 层：提供 $(\varepsilon/2)$-LDP。
+- 由顺序组合定理，整体满足 $\varepsilon_{\text{total}}$-LDP，其中 $\varepsilon_{\text{total}} = h \cdot \ln \frac{1+f}{1-f} + \varepsilon/2$（保守估计）。
+
+实际部署中，Google Chrome 使用 $m = 1024$ 位 Bloom Filter，$h = 2$ 个哈希函数，$f = 0.5$，$p = e/(1+e)$。
+
+**服务器端频率估计**
+
+服务器收集 $n$ 个用户的 $B''$，对每个候选值 $v^*$：
+
+1. 计算 $v^*$ 的 Bloom Filter 编码 $B_{v^*}$。
+2. 统计所有用户报告中 $B''$ 与 $B_{v^*}$ 逐位匹配的比例。
+3. 利用已知的转移概率矩阵进行纠偏，得到 $v^*$ 的频率估计。
+
+单 bit 的纠偏公式为：
+
+$$\Pr[B''[j] = 1 | v] = \frac{1}{2} + \frac{2p-1}{2} \cdot \left(f \cdot B_{v}[j] + \frac{1-f}{2}\right)$$
+
+通过最大似然估计或最小二乘法拟合频率分布。
+
+**RAPPOR 的优势与局限**
+
+| 维度 | 优势 | 局限 |
+|---|---|---|
+| 高基数 | Bloom Filter 将任意基数映射到固定长度位数组 | 哈希冲突引入假阳性，需纠偏 |
+| 集合成员查询 | 天然支持"某值是否在集合中"的查询 | 不支持直接的范围查询 |
+| 通信开销 | 固定 $m$ bit 传输，与原始值大小无关 | $m$ 需足够大以控制假阳性率 |
+| 隐私 | 双层随机响应，隐私保证清晰 | 相同 $\varepsilon$ 下效用低于直接 k-ary RR |
 
 #### 3.7.2 本地直方图
 
@@ -736,6 +909,47 @@ $$\hat{f}_j = \frac{\hat{f}_{j,\text{reported}} - q}{p - q}, \quad q = \frac{1 -
 - 浏览器/移动设备 telemetry 统计
 - 用户偏好分布调查
 - 不需要精确个体值的群体趋势分析
+
+##### 基于随机响应的直方图估计
+
+对于 $k$ 个类别的直方图，最直接的方式是对每个用户的类别值施加 k-ary 随机响应，服务器统计扰动后的频率向量 $\hat{\mathbf{f}}_{\text{reported}}$，再利用转移矩阵纠偏：
+
+$$\hat{f}_j = \frac{\hat{f}_{j,\text{reported}} - q}{p - q}, \quad j = 1, \dots, k$$
+
+该方法的方差为 $O\left(\frac{k}{n(p-q)^2}\right)$，当 $k$ 较大时方差显著增大。
+
+##### 基于 RAPPOR 的高基数直方图
+
+当类别数 $k$ 很大（如数千个 URL、应用名）时，标准 k-ary RR 的 $p - q$ 极小，导致纠偏方差不可接受。此时使用 RAPPOR + Bloom Filter 方案：
+
+1. 每个用户将类别值编码为 Bloom Filter，经双层随机响应后上报。
+2. 服务器维护候选值集合（可通过先验知识或探索阶段获得）。
+3. 对每个候选值计算 Bloom Filter 编码，与所有用户报告逐位比较，利用最大似然估计拟合频率。
+
+频率估计的精度取决于：
+
+- Bloom Filter 位数 $m$：$m$ 越大，哈希冲突越少，假阳性率越低。
+- 哈希函数数 $h$：最优 $h \approx \frac{m}{k_{\text{set}}} \ln 2$，其中 $k_{\text{set}}$ 为集合中元素数。
+- 隐私参数 $f, p$：$f$ 越大（PRR 保持概率高），信号越强但隐私越弱。
+
+##### 直方图估计的优化技术
+
+**1. 前缀树编码（Prefix Tree）**
+
+对于字符串型类别（如 URL、文件路径），使用 Trie 树将高基数类别组织为层次结构。每个节点代表一个前缀，用户只在 Trie 路径上报告，将有效 $k$ 从原始基数降低为路径长度 $O(\log k)$。
+
+**2. 哈希分组（Hash Grouping）**
+
+将 $k$ 个类别随机哈希到 $g \ll k$ 个桶中，对桶施加随机响应，再通过哈希逆映射估计原始频率。该方法将方差从 $O(k/n)$ 降低为 $O(g/n)$，但引入哈希碰撞偏差。
+
+**3. 自适应精度控制**
+
+通过两阶段协议实现自适应精度：
+
+1. **探索阶段**：使用较大的 $\varepsilon_1$（较少隐私预算）进行粗粒度估计，识别出频率较高的"重 hitters"。
+2. **精化阶段**：将剩余预算 $\varepsilon_2 = \varepsilon - \varepsilon_1$ 集中在重 hitters 上进行精细估计。
+
+由顺序组合定理，总预算消耗为 $\varepsilon_1 + \varepsilon_2 = \varepsilon$。该策略在总预算固定时显著提高了高频类别的估计精度。
 
 #### 3.7.3 与中心式 DP 的对比
 
@@ -754,20 +968,138 @@ $$\hat{f}_j = \frac{\hat{f}_{j,\text{reported}} - q}{p - q}, \quad q = \frac{1 -
 
 ### 3.8 Noisify 接口设计
 
-Noisify 接口面向"外部引擎已完成聚合，sidecar 仅负责注入噪声与预算扣减"的工作模式。典型场景包括：
+#### 3.8.1 概念说明
+
+**Sidecar（边车）**
+
+在本项目中，sidecar 指以“边车模式”伴随主应用部署的隐私保护服务进程。它与主应用运行在同一节点（如同一 Pod、同一主机），通过本地 REST/gRPC 接口提供隐私原语能力。主应用无需集成任何隐私保护 SDK，只需将需要差分隐私处理的中间结果发送给 sidecar，由 sidecar 完成噪声注入、预算扣减并返回结果。这种架构使得隐私保护逻辑与业务逻辑解耦，便于独立升级和审计。
+
+```
+┌─────────────────────────────────────┐
+│  主应用 (Java/Go/Node.js/...)        │
+│  ┌─────────────┐                    │
+│  │ 数据聚合引擎 │─── 聚合结果 ───┐    │
+│  └─────────────┘                │    │
+└─────────────────────────────────┼────┘
+                                  │ REST/gRPC (本地回环)
+                          ┌───────┴───────┐
+                          │   Sidecar     │
+                          │ ┌───────────┐ │
+                          │ │ Noisify   │ │
+                          │ │ 噪声注入  │ │
+                          │ │ 预算扣减  │ │
+                          │ └───────────┘ │
+                          └───────────────┘
+```
+
+**Noisify 接口**
+
+Noisify 接口是 sidecar 提供的一类特殊 REST/gRPC 端点，面向“外部引擎已完成聚合，sidecar 仅负责注入噪声与预算扣减”的工作模式。与标准 DP 接口（接收原始数据、内部完成聚合+加噪）不同，Noisify 接口接收的是**已由外部引擎计算好的中间聚合结果**（如 `true_count`、`true_sum`、`true_counts`），sidecar 不再接触原始记录。
+
+| 对比维度 | 标准 DP 接口 | Noisify 接口 |
+|---|---|---|
+| 输入 | 原始数据（values 列表） | 聚合后的标量/向量 |
+| 聚合位置 | sidecar 内部 | 外部引擎（Spark/SQL/...） |
+| 加噪位置 | sidecar 内部 | sidecar 内部（相同） |
+| 敏感度来源 | sidecar 从原始数据自动推断 | 调用方显式提供 |
+| 适用场景 | 数据量可传入 sidecar 内存 | 数据量过大、已在分布式引擎中聚合 |
+
+典型场景包括：
 
 - Spark / Flink / DuckDB / SQL 在数据源侧完成 `COUNT` / `SUM` / 直方图分桶。
 - 调用方将中间聚合结果（如 `true_sum`、`true_count`、`true_counts`）发送到 sidecar。
 - sidecar 根据调用方提供的敏感度计算噪声，加入结果后返回，并扣减命名空间预算。
 
-#### 为什么需要调用方提供敏感度
+#### 3.8.2 为什么需要调用方提供敏感度
 
-中心式 DP 的噪声尺度由查询敏感度决定。Noisify 接口不再接触原始记录，因此无法自行推断 `sum` 的 clip 区间或 `count` 的邻接变化量。调用方必须提供以下二者之一：
+##### 敏感度的定义与作用
 
-- `sensitivity`：直接给出 L1/L2 敏感度。
-- `clip_lower` + `clip_upper`：sidecar 计算 `sensitivity = clip_upper - clip_lower`。
+在差分隐私中，**敏感度**（sensitivity）衡量的是单条记录的加入或删除对查询结果的最大影响量。它是决定噪声尺度的核心参数：
 
-#### 接口映射
+- **Laplace 机制**：噪声尺度 $b = \Delta f / \varepsilon$，其中 $\Delta f$ 为 L1 敏感度。
+- **Gaussian 机制**：噪声标准差 $\sigma = \Delta_2 f \cdot \sqrt{2 \ln(1.25/\delta)} / \varepsilon$，其中 $\Delta_2 f$ 为 L2 敏感度。
+
+敏感度越大，需要注入的噪声越多，才能保证相同的隐私保证 $(\varepsilon, \delta)$。
+
+##### Noisify 接口无法自行推断敏感度的原因
+
+在标准 DP 接口（`dp_count`、`dp_sum`、`dp_mean`）中，sidecar 直接接收原始数据，可以：
+
+1. 观察数据的值域范围，自动计算 clipping 边界。
+2. 根据查询类型推断敏感度（如 `count` 的敏感度恒为 1，`sum` 的敏感度为 `clip_upper - clip_lower`）。
+
+但在 Noisify 接口中，sidecar **只接收聚合后的标量结果**（如 `true_sum = 123456.78`），原始记录已不可见。此时 sidecar 面临以下信息缺失：
+
+| 信息 | 标准接口 | Noisify 接口 |
+|---|---|---|
+| 原始记录数 $n$ | 可见 | 不可见 |
+| 单条记录的值域 | 可见，可自动 clip | 不可见 |
+| 查询函数的敏感度 | 可自动推断 | 无法推断 |
+| 数据分布范围 | 可计算 | 仅知聚合结果 |
+
+**具体示例**：假设调用方发送 `noisy_sum(true_sum=123456.78)`。sidecar 无法知道：
+
+- 这个总和是由 10 条记录（每条约 12345）还是 100 万条记录（每条约 0.12）累加而成。
+- 单条记录的值域是 $[0, 100]$ 还是 $[0, 100000]$。
+- 因此无法确定 `sum` 的敏感度应为 100 还是 100000。
+
+敏感度不同，噪声尺度差异巨大：若 $\varepsilon = 1.0$，敏感度 100 时 Laplace 噪声尺度 $b = 100$；敏感度 100000 时 $b = 100000$，相差 1000 倍。
+
+##### 调用方提供敏感度的两种方式
+
+**方式一：直接指定 `sensitivity`**
+
+调用方已了解数据的敏感度，直接传入：
+
+```json
+{
+  "true_sum": 123456.78,
+  "sensitivity": 100.0,
+  "epsilon": 1.0,
+  "mechanism": "laplace"
+}
+```
+
+sidecar 直接使用 $\Delta f = 100.0$ 计算噪声。
+
+**方式二：提供 `clip_lower` + `clip_upper`**
+
+调用方告知 sidecar 原始数据在聚合前使用的裁剪边界：
+
+```json
+{
+  "true_sum": 123456.78,
+  "clip_lower": 0.0,
+  "clip_upper": 100.0,
+  "epsilon": 1.0,
+  "mechanism": "laplace"
+}
+```
+
+sidecar 自动计算 $\Delta f = \text{clip_upper} - \text{clip_lower} = 100.0$。
+
+这种方式更推荐，因为：
+
+1. **语义清晰**：`clip_lower` / `clip_upper` 直接对应数据裁剪的业务含义。
+2. **一致性保证**：确保 Noisify 接口与标准接口使用相同的裁剪边界，避免因敏感度估计不一致导致隐私保证减弱或效用损失。
+3. **审计友好**：裁剪边界可记录在审计日志中，便于合规检查。
+
+##### 各查询类型的敏感度规则
+
+| 查询 | 敏感度 | 推导 |
+|---|---|---|
+| `noisy_count` | $\Delta f = 1$ | 增删一条记录，计数最多变化 1。无需调用方提供。 |
+| `noisy_sum` | $\Delta f = \text{clip_upper} - \text{clip_lower}$ | 增删一条记录，总和最多变化一条记录的值。需先裁剪才能确定边界。 |
+| `noisy_mean` | count 部分 $\Delta f = 1$；sum 部分 $\Delta f = \text{clip_upper} - \text{clip_lower}$ | mean 通过组合 noisy_count 与 noisy_sum 实现，分别扣减预算。 |
+| `noisy_histogram` | $\Delta f = 1$（联合敏感度） | 各桶互斥，一条记录只影响一个桶，联合敏感度为 1。 |
+
+##### 敏感度设置不当的风险
+
+- **敏感度过高**：噪声过大，查询结果几乎不可用。例如将 `sum` 的敏感度设为数据实际值域的 10 倍，噪声也会放大 10 倍。
+- **敏感度过低**：隐私保证不足。若实际数据中存在超出声称敏感度的异常值，差分隐私的数学保证将被破坏。
+- **建议实践**：在数据预处理阶段统一进行 clipping，并将裁剪边界作为数据管道的元数据传递给 Noisify 接口，确保敏感度与裁剪一致。
+
+#### 3.8.3 接口映射
 
 | 接口 | 输入 | 输出 | 敏感度 |
 |---|---|---|---|
@@ -1078,11 +1410,8 @@ $$\approx 4.48$$
 ## 8. 安全与兼容性设计
 
 - 默认 `mechanism=laplace`，$\delta = 0$。
-- sum/mean 必须提供 `clip_lower` / `clip_upper`；未提供时返回明确错误。
-- Gaussian 机制下 `delta` 必须大于 0。
-- 默认 `mechanism=laplace`，$δ = 0$。
-- sum/mean 必须提供 `clip_lower` / `clip_upper`；未提供时返回明确错误。
-- Gaussian 机制下 `delta` 必须大于 0。
+- Gaussian 机制下 `delta` 必须大于 0，且必须显式提供 `clip_lower` / `clip_upper`。
+- Laplace 机制下若未提供 `clip_lower` / `clip_upper`，系统会自动从输入数据中自适应推断 `[min, max]` 作为截断区间并触发 Warning 警告；生产环境强烈建议显式指定。
 - **NumPy 依赖**：clip 操作优先使用 NumPy（`numpy>=1.24.0` 为核心依赖）；若 NumPy 不可用或转换失败，自动回退到纯 Python，保证核心功能可用。
 - **SecretFlow 可选依赖**：SecretFlow 相关数据适配为可选能力，未安装时不影响 list/NumPy/pandas 输入。
 - **浮点数与随机数安全**：当前采样噪声已升级为密码学安全的随机数生成器（CSRPNG，通过 `SecureRandom` 包装 `secrets.SystemRandom`），防止攻击者通过多次查询收集的样本还原生成器状态；同时保留了测试模式下 `.seed()` 调用的确定性兼容。针对浮点数表示缺陷引起的物理泄漏风险（Mironov, 2012），可考虑后续集成 discrete Laplace 或 snapping 机制。
