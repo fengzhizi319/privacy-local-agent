@@ -459,6 +459,17 @@ class BudgetAccountant:
                     "delta": self.delta_total - self.delta_spent,
                 }
 
+    def __repr__(self) -> str:
+        """返回 BudgetAccountant 的可读字符串表示。"""
+        eps_rem = self.epsilon_total - self.epsilon_spent
+        del_rem = self.delta_total - self.delta_spent
+        return (
+            f"BudgetAccountant(namespace={self.namespace!r}, "
+            f"epsilon={eps_rem:.4f}/{self.epsilon_total}, "
+            f"delta={del_rem:.2e}/{self.delta_total})"
+        )
+
+
 
 class BudgetRegistry:
     """BudgetAccountant 的 namespace 级注册表工厂。
@@ -538,6 +549,33 @@ class BudgetRegistry:
 
 # 全局默认注册表单例
 default_registry = BudgetRegistry()
+
+
+def get_budget(
+    namespace: str,
+    epsilon_total: Optional[float] = None,
+    delta_total: Optional[float] = None,
+    window_seconds: Optional[float] = None,
+) -> BudgetAccountant:
+    """获取或创建指定命名空间的 BudgetAccountant 实例。
+
+    模块级便捷函数，等价于 ``default_registry.get_or_create(namespace, ...)``。
+
+    Args:
+        namespace: 命名空间名称。
+        epsilon_total: epsilon 总预算。
+        delta_total: delta 总预算。
+        window_seconds: 预算重置时间窗口（秒）。
+
+    Returns:
+        BudgetAccountant 实例。
+    """
+    return default_registry.get_or_create(
+        namespace=namespace,
+        epsilon_total=epsilon_total,
+        delta_total=delta_total,
+        window_seconds=window_seconds,
+    )
 
 
 class RDPAccountant:

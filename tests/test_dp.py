@@ -182,7 +182,7 @@ class TestDPBudget:
     def test_laplace_consumes_epsilon_only(self) -> None:
         ns = "test-budget-laplace"
         api = DPApi(namespace=ns)
-        accountant = BudgetAccountant(ns, epsilon_total=10.0, delta_total=1e-4)
+        accountant = default_registry.get_or_create(ns, epsilon_total=10.0, delta_total=1e-4)
         # Laplace sum consumes epsilon=1.0, delta=0.0
         api.sum([1.0, 2.0], epsilon=1.0, mechanism="laplace", clip_lower=0.0, clip_upper=10.0)
         remaining = accountant.remaining()
@@ -193,7 +193,7 @@ class TestDPBudget:
     def test_gaussian_consumes_delta(self) -> None:
         ns = "test-budget-gaussian"
         api = DPApi(namespace=ns)
-        accountant = BudgetAccountant(ns, epsilon_total=10.0, delta_total=1e-4)
+        accountant = default_registry.get_or_create(ns, epsilon_total=10.0, delta_total=1e-4)
         # Gaussian sum consumes both epsilon=1.0 and delta=1e-5
         api.sum(
             [1.0, 2.0],
@@ -211,7 +211,7 @@ class TestDPBudget:
     def test_mean_composition_consumes_full_budget(self, monkeypatch) -> None:
         ns = "test-budget-mean"
         api = DPApi(namespace=ns)
-        accountant = BudgetAccountant(ns, epsilon_total=10.0, delta_total=1e-4)
+        accountant = default_registry.get_or_create(ns, epsilon_total=10.0, delta_total=1e-4)
         # Fix Gaussian noise to a constant (0.1) to prevent noisy_count from
         # being clipped to 0, which would trigger the min_count early-return
         # and skip the sum sub-query (thus not consuming full budget).
@@ -232,12 +232,11 @@ class TestDPBudget:
         assert remaining["epsilon"] == pytest.approx(8.0, abs=1e-9)
         assert remaining["delta"] == pytest.approx(9e-5, abs=1e-9)
 
-
     def test_exhausted_budget_raises(self) -> None:
         ns = "test-budget-exhaust"
         # Create BudgetAccountant with tight total budget (0.5);
         # DPApi reuses the singleton, so subsequent queries share this limit.
-        BudgetAccountant(ns, epsilon_total=0.5, delta_total=1e-4)
+        default_registry.get_or_create(ns, epsilon_total=0.5, delta_total=1e-4)
         api = DPApi(namespace=ns)
         # Attempting to spend epsilon=1.0 > remaining 0.5 => PrivacyBudgetExhausted
         with pytest.raises(PrivacyBudgetExhausted):
@@ -430,7 +429,7 @@ class TestAnalyticGaussianAndMeanThreshold:
 
     def test_mean_thresholding_protection(self) -> None:
         ns = "test-mean-thresh"
-        BudgetAccountant(ns, epsilon_total=100.0, delta_total=1.0)
+        default_registry.get_or_create(ns, epsilon_total=100.0, delta_total=1.0)
         api = DPApi(namespace=ns)
         # Normal case: 10 samples with min_count=2 => noisy_count >> 2 => valid result
         res = api.mean([10.0] * 10, epsilon=10.0, min_count=2.0)
@@ -443,7 +442,7 @@ class TestAnalyticGaussianAndMeanThreshold:
     def test_dp_histogram_joint_sensitivity(self) -> None:
         """Histogram uses joint sensitivity = 1 (adding/removing one record affects one bin)."""
         ns = "test-hist-joint"
-        BudgetAccountant(ns, epsilon_total=100.0, delta_total=1.0)
+        default_registry.get_or_create(ns, epsilon_total=100.0, delta_total=1.0)
         api = DPApi(namespace=ns)
         values = ["A"] * 100 + ["B"] * 200 + ["C"] * 50
         categories = ["A", "B", "C", "D"]
@@ -500,13 +499,13 @@ class TestNoisyAggregation:
 
     def test_noisy_count_laplace(self):
         ns = "test-noisy-count"
-        BudgetAccountant(ns, epsilon_total=10.0, delta_total=1.0)
+        default_registry.get_or_create(ns, epsilon_total=10.0, delta_total=1.0)
         api = DPApi(namespace=ns)
         api.rng.seed(42)
         # Inject Laplace noise with b = sensitivity/epsilon = 1/1.0 = 1.0
         result = api.noisy_count(100.0, epsilon=1.0, mechanism="laplace")
         assert result >= 0.0
-        accountant = BudgetAccountant(ns)
+        accountant = default_registry.get_or_create(ns)
         # Budget consumed: epsilon=1.0 from total 10.0
         assert accountant.remaining()["epsilon"] == pytest.approx(9.0, abs=1e-9)
 
@@ -519,7 +518,7 @@ class TestNoisyAggregation:
 
     def test_noisy_sum_laplace(self):
         ns = "test-noisy-sum"
-        BudgetAccountant(ns, epsilon_total=10.0, delta_total=1.0)
+        default_registry.get_or_create(ns, epsilon_total=10.0, delta_total=1.0)
         api = DPApi(namespace=ns)
         api.rng.seed(42)
         # Noise scale b = sensitivity/epsilon = 10/1 = 10
@@ -528,12 +527,12 @@ class TestNoisyAggregation:
         )
         # With b=10, result is within ~30 of true sum with high probability
         assert result >= 80.0
-        accountant = BudgetAccountant(ns)
+        accountant = default_registry.get_or_create(ns)
         assert accountant.remaining()["epsilon"] == pytest.approx(9.0, abs=1e-9)
 
     def test_noisy_mean_low_count_shield(self):
         ns = "test-noisy-mean-shield"
-        BudgetAccountant(ns, epsilon_total=10.0, delta_total=1.0)
+        default_registry.get_or_create(ns, epsilon_total=10.0, delta_total=1.0)
         api = DPApi(namespace=ns)
         api.rng.seed(42)
         # true_count=2 < min_count=5 => ratio estimator unstable => return 0.0
@@ -549,7 +548,7 @@ class TestNoisyAggregation:
 
     def test_noisy_histogram(self):
         ns = "test-noisy-hist"
-        BudgetAccountant(ns, epsilon_total=10.0, delta_total=1.0)
+        default_registry.get_or_create(ns, epsilon_total=10.0, delta_total=1.0)
         api = DPApi(namespace=ns)
         api.rng.seed(42)
         # Joint sensitivity = 1 for histogram; noise b = 1/10 = 0.1 per bin
@@ -575,7 +574,7 @@ class TestChunkedAggregation:
 
     def test_chunked_count(self):
         ns = "test-chunked-count"
-        BudgetAccountant(ns, epsilon_total=10.0, delta_total=1.0)
+        default_registry.get_or_create(ns, epsilon_total=10.0, delta_total=1.0)
         api = DPApi(namespace=ns)
         api.rng.seed(42)
         # 3 chunks with total non-zero count = 5 (three 1.0s in chunk 0, two in chunk 1)
@@ -583,7 +582,7 @@ class TestChunkedAggregation:
         result = api.chunked_count(chunks, epsilon=10.0, mechanism="laplace")
         # True count = 5; with large epsilon, result should be nearby
         assert 4 <= result <= 7
-        accountant = BudgetAccountant(ns)
+        accountant = default_registry.get_or_create(ns)
         # Entire budget consumed by the single chunked query
         assert accountant.remaining()["epsilon"] == pytest.approx(0.0, abs=1e-9)
 
@@ -596,7 +595,7 @@ class TestChunkedAggregation:
 
     def test_chunked_sum(self):
         ns = "test-chunked-sum"
-        BudgetAccountant(ns, epsilon_total=10.0, delta_total=1.0)
+        default_registry.get_or_create(ns, epsilon_total=10.0, delta_total=1.0)
         api = DPApi(namespace=ns)
         api.rng.seed(42)
         # Chunk 0: [1,2,3], Chunk 1: [100->10(clipped),5], Chunk 2: [8]
@@ -613,7 +612,7 @@ class TestChunkedAggregation:
 
     def test_chunked_mean(self):
         ns = "test-chunked-mean"
-        BudgetAccountant(ns, epsilon_total=10.0, delta_total=1.0)
+        default_registry.get_or_create(ns, epsilon_total=10.0, delta_total=1.0)
         api = DPApi(namespace=ns)
         api.rng.seed(42)
         # Concatenated data: [1,2,3,4,5]; true mean = 3.0
@@ -630,7 +629,7 @@ class TestChunkedAggregation:
 
     def test_chunked_histogram(self):
         ns = "test-chunked-hist"
-        BudgetAccountant(ns, epsilon_total=10.0, delta_total=1.0)
+        default_registry.get_or_create(ns, epsilon_total=10.0, delta_total=1.0)
         api = DPApi(namespace=ns)
         api.rng.seed(42)
         # Concatenated: A=3, B=3, C=1; noise scale b = 1/10 = 0.1 per bin
@@ -656,7 +655,7 @@ class TestDataAdapters:
         # Count query accepts a pandas Series directly
         pd = pytest.importorskip("pandas")
         ns = "test-count-pd-series"
-        BudgetAccountant(ns, epsilon_total=10.0, delta_total=1.0)
+        default_registry.get_or_create(ns, epsilon_total=10.0, delta_total=1.0)
         api = DPApi(namespace=ns)
         api.rng.seed(42)
         series = pd.Series([1.0, 0.0, 1.0, 1.0])
@@ -667,7 +666,7 @@ class TestDataAdapters:
         # DataFrame input requires explicit column selection via `column` parameter
         pd = pytest.importorskip("pandas")
         ns = "test-sum-pd-df"
-        BudgetAccountant(ns, epsilon_total=10.0, delta_total=1.0)
+        default_registry.get_or_create(ns, epsilon_total=10.0, delta_total=1.0)
         api = DPApi(namespace=ns)
         api.rng.seed(42)
         df = pd.DataFrame({"salary": [1.0, 2.0, 3.0, 100.0], "age": [20, 30, 40, 50]})
@@ -687,7 +686,7 @@ class TestDataAdapters:
         # numpy ndarray input is handled via the same adapter path
         np = pytest.importorskip("numpy")
         ns = "test-sum-np"
-        BudgetAccountant(ns, epsilon_total=10.0, delta_total=1.0)
+        default_registry.get_or_create(ns, epsilon_total=10.0, delta_total=1.0)
         api = DPApi(namespace=ns)
         api.rng.seed(42)
         arr = np.array([1.0, 2.0, 3.0, 100.0])
@@ -701,7 +700,7 @@ class TestDataAdapters:
         # Categorical histogram accepts pandas Series of strings
         pd = pytest.importorskip("pandas")
         ns = "test-hist-pd"
-        BudgetAccountant(ns, epsilon_total=10.0, delta_total=1.0)
+        default_registry.get_or_create(ns, epsilon_total=10.0, delta_total=1.0)
         api = DPApi(namespace=ns)
         api.rng.seed(42)
         series = pd.Series(["A", "B", "A", "C"])
@@ -741,7 +740,7 @@ class TestDPResultAndPostProcessing:
         from privacy_local_agent.privacy.dp import DPResult
 
         ns = "test-dp-result"
-        BudgetAccountant(ns, epsilon_total=10.0, delta_total=1.0)
+        default_registry.get_or_create(ns, epsilon_total=10.0, delta_total=1.0)
         api = DPApi(namespace=ns)
         api.rng.seed(42)
         res = api.sum(
@@ -763,7 +762,7 @@ class TestDPResultAndPostProcessing:
         # round_int => result is an integer-valued float
         # clip_non_negative => negative noise results are clamped to 0.0
         ns = "test-dp-postprocess"
-        BudgetAccountant(ns, epsilon_total=10.0, delta_total=1.0)
+        default_registry.get_or_create(ns, epsilon_total=10.0, delta_total=1.0)
         api = DPApi(namespace=ns)
         api.rng.seed(42)
         res = api.count(
@@ -788,7 +787,7 @@ class TestSparseMatrixDP:
     def test_sparse_matrix_count_and_sum(self):
         sp = pytest.importorskip("scipy.sparse")
         ns = "test-sparse-dp"
-        BudgetAccountant(ns, epsilon_total=20.0, delta_total=1.0)
+        default_registry.get_or_create(ns, epsilon_total=20.0, delta_total=1.0)
         api = DPApi(namespace=ns)
         api.rng.seed(42)
 
@@ -818,7 +817,7 @@ class TestBatchDP:
         from privacy_local_agent.privacy.dp import DPResult
 
         ns = "test-batch-dp"
-        BudgetAccountant(ns, epsilon_total=100.0, delta_total=1.0)
+        default_registry.get_or_create(ns, epsilon_total=100.0, delta_total=1.0)
         api = DPApi(namespace=ns)
         api.rng.seed(42)
 
@@ -861,7 +860,7 @@ class TestRefinedDPFixes:
         from privacy_local_agent.privacy.dp import DPResult
 
         ns = "test-sparse-mean-delta"
-        BudgetAccountant(ns, epsilon_total=50.0, delta_total=1.0)
+        default_registry.get_or_create(ns, epsilon_total=50.0, delta_total=1.0)
         api = DPApi(namespace=ns)
         api.rng.seed(42)
 
@@ -906,7 +905,7 @@ class TestAdvancedDPFeatures:
         # dp_aggregate applies heterogeneous DP queries to different DataFrame columns
         pd = pytest.importorskip("pandas")
         ns = "test-dp-aggregate"
-        BudgetAccountant(ns, epsilon_total=20.0, delta_total=1.0)
+        default_registry.get_or_create(ns, epsilon_total=20.0, delta_total=1.0)
         api = DPApi(namespace=ns)
 
         df = pd.DataFrame({
@@ -939,7 +938,7 @@ class TestAdvancedDPFeatures:
         from privacy_local_agent.privacy.dp import Accumulator
 
         ns = "test-accumulator"
-        BudgetAccountant(ns, epsilon_total=20.0, delta_total=1.0)
+        default_registry.get_or_create(ns, epsilon_total=20.0, delta_total=1.0)
         api = DPApi(namespace=ns)
         api.rng.seed(42)
 
@@ -964,7 +963,7 @@ class TestAdvancedDPFeatures:
         # DP-SGD: clip each gradient vector by max_norm, then add Gaussian noise
         np = pytest.importorskip("numpy")
         ns = "test-vector-sum"
-        BudgetAccountant(ns, epsilon_total=20.0, delta_total=1.0)
+        default_registry.get_or_create(ns, epsilon_total=20.0, delta_total=1.0)
         api = DPApi(namespace=ns)
 
         # 2 gradient vectors of dimension 3
@@ -994,7 +993,7 @@ class TestAdvancedDPFeatures:
         # to suppress groups with too few members (prevents privacy leakage)
         pd = pytest.importorskip("pandas")
         ns = "test-dp-groupby"
-        BudgetAccountant(ns, epsilon_total=100.0, delta_total=1.0)
+        default_registry.get_or_create(ns, epsilon_total=100.0, delta_total=1.0)
         api = DPApi(namespace=ns)
 
         df = pd.DataFrame({
@@ -1012,7 +1011,7 @@ class TestAdvancedDPFeatures:
         # via downsampling, then apply standard DP mechanism
         np = pytest.importorskip("numpy")
         ns = "test-user-level-dp"
-        BudgetAccountant(ns, epsilon_total=20.0, delta_total=1.0)
+        default_registry.get_or_create(ns, epsilon_total=20.0, delta_total=1.0)
         api = DPApi(namespace=ns)
 
         # user_A has 100 records in the log; downsample to at most 2 contributions

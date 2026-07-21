@@ -682,31 +682,27 @@ estimate_categorical_histogram(
 
 ---
 
-### 2.4 `BudgetAccountant`
+### 2.4 `BudgetAccountant` & `BudgetRegistry`
 
 位置：`privacy_local_agent.privacy.budget.BudgetAccountant`
 
-隐私预算账户，追踪命名空间级别的累计 `(ε, δ)` 消耗。
+隐私预算账户，追踪命名空间级别的累计 `(ε, δ)` 消耗。推荐通过 `get_budget()` 或 `default_registry.get_or_create()` 创建与获取。
 
-#### 构造函数
+#### 推荐获取方式
 
 ```python
-BudgetAccountant(
-    namespace: str,
-    epsilon_total: float = 10.0,
-    delta_total: float = 1e-4,
-)
+from privacy_local_agent.privacy.budget import get_budget, default_registry
+
+# 方式 1：模块级便捷函数（推荐）
+accountant = get_budget("hr_data", epsilon_total=10.0, delta_total=1e-4)
+
+# 方式 2：使用全局注册表
+accountant = default_registry.get_or_create("hr_data", epsilon_total=10.0, delta_total=1e-4)
 ```
 
-| 参数 | 类型 | 必填 | 说明 |
-|---|---|---|---|
-| `namespace` | `str` | 是 | 命名空间标识 |
-| `epsilon_total` | `float` | 否 | epsilon 总预算，默认 10.0 |
-| `delta_total` | `float` | 否 | delta 总预算，默认 1e-4 |
+> **注意**：直接构造 `BudgetAccountant("ns")` 为已弃用的向后兼容用法，推荐迁移至 `get_budget()` 或 `default_registry.get_or_create()`。
 
-> 注意：`BudgetAccountant` 为单例模式，首次创建后传入的 `epsilon_total`/`delta_total` 会被保留，后续同 namespace 调用将忽略这些参数。
-
-#### 主要属性
+#### 主要属性与字符串表示
 
 | 属性 | 类型 | 说明 |
 |---|---|---|
@@ -714,6 +710,12 @@ BudgetAccountant(
 | `delta_total` | `float` | delta 总预算 |
 | `epsilon_spent` | `float` | 已消耗 epsilon |
 | `delta_spent` | `float` | 已消耗 delta |
+
+`__repr__()` 提供清晰的预算状态表示：
+```python
+repr(accountant)
+# -> "BudgetAccountant(namespace='hr_data', epsilon=7.5000/10.0, delta=9.00e-05/0.0001)"
+```
 
 #### 主要方法
 
