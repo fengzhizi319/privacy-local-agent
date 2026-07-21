@@ -19,6 +19,7 @@ import os
 import sqlite3
 import threading
 import time
+import warnings
 from typing import Dict, Optional
 
 from ..observability.metrics import BUDGET_REMAINING
@@ -121,8 +122,28 @@ class BudgetAccountant:
         未提供的参数视为"不关心"：实例不存在时使用注册表默认值创建；实例已存在
         时不参与冲突检测。显式传入且与已有配置不一致的参数会触发 UserWarning。
 
+        .. deprecated::
+            直接构造 ``BudgetAccountant("ns")`` 仅为向后兼容保留，新代码应使用
+            ``default_registry.get_or_create("ns")``。
+
         注意：返回值始终是 BudgetAccountant 实例，不支持通过子类化扩展。
+
+        Raises:
+            TypeError: 当通过子类调用 ``__new__`` 时（不支持继承）。
         """
+        # 继承安全检查：BudgetAccountant 不支持通过子类化扩展
+        if cls is not BudgetAccountant:
+            raise TypeError(
+                "BudgetAccountant does not support subclassing via direct construction; "
+                "use BudgetRegistry.get_or_create() instead."
+            )
+        # 弃用警告：推动调用方迁移到显式 Registry API
+        warnings.warn(
+            "Direct construction of BudgetAccountant is deprecated. "
+            "Use default_registry.get_or_create() instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         return default_registry.get_or_create(
             namespace=namespace,
             epsilon_total=epsilon_total,
