@@ -1740,13 +1740,10 @@ class BudgetRegistry:
 - 在 `_init_db` 中初始化 SQLite（如果配置了 `PRIVACY_BUDGET_DB`）；
 - 在 `spend()` / `remaining()` 中执行预算扣减与查询。
 
-为了保持向后兼容，`BudgetAccountant("ns")` 仍被保留，但它会委托给全局默认注册表：
+直接构造 `BudgetAccountant("ns")` **已关闭**，调用会抛出 `TypeError`。所有代码必须使用注册表 API：
 
 ```python
-# 向后兼容（推荐仅用于旧代码）
-accountant = BudgetAccountant("hr_data", epsilon_total=10.0)
-
-# 新代码推荐显式使用注册表
+# 唯一合法方式：通过注册表获取或创建
 accountant = default_registry.get_or_create("hr_data", epsilon_total=10.0)
 ```
 
@@ -1840,7 +1837,7 @@ class DPApi:
 - **参数冲突告警**：`get_or_create` 在实例已存在且**显式传入**的参数与现有配置不一致时，会发出 `UserWarning`；未提供的参数视为"不关心"，不会触发告警。这避免了旧实现中"静默丢弃参数"的隐蔽 Bug。
 - **首次创建生效**：`epsilon_total` / `delta_total` / `window_seconds` 仅在对应 namespace 首次创建时生效；后续调用若配置冲突会被警告并忽略。
 - **测试隔离**：单元测试中应使用注册表提供的公共接口：`default_registry.reset()` 清空所有实例，`default_registry.remove(ns)` 移除指定 namespace。不要直接操作 `BudgetRegistry._instances` 内部字典。
-- **向后兼容**：`BudgetAccountant("ns")` 仍委托给 `default_registry`，但新代码推荐直接使用 `default_registry.get_or_create("ns")`。未来可能对该直接构造方式增加 `DeprecationWarning`。
+- **直接构造已关闭**：`BudgetAccountant("ns")` 会抛出 `TypeError`，所有代码必须使用 `default_registry.get_or_create("ns")`。
 - **多进程限制**：内存模式的 Registry 只在单进程内有效。多进程/多节点部署必须使用 SQLite 模式（`PRIVACY_BUDGET_DB` 环境变量），通过数据库事务实现跨进程的预算一致性。
 
 ### 5.2 预算消耗规则

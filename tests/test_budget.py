@@ -185,21 +185,19 @@ def test_get_or_create_no_warning_when_params_omitted(recwarn):
     assert not user_warnings
 
 
-def test_direct_construction_deprecation_warning():
-    """测试直接调用 BudgetAccountant() 触发 DeprecationWarning。"""
+def test_direct_construction_raises_typeerror():
+    """测试直接调用 BudgetAccountant() 抛出 TypeError。"""
     default_registry.reset()
-    with pytest.deprecated_call():
-        acct = BudgetAccountant("legacy-ns", epsilon_total=10.0, delta_total=1e-4)
-    assert acct.namespace == "legacy-ns"
-    assert default_registry.get("legacy-ns") is acct
+    with pytest.raises(TypeError, match="cannot be instantiated directly"):
+        BudgetAccountant("legacy-ns", epsilon_total=10.0, delta_total=1e-4)
 
 
 def test_subclass_construction_raises_typeerror():
-    """测试继承 BudgetAccountant 时直接构造抛出 TypeError。"""
+    """测试继承 BudgetAccountant 时直接构造同样抛出 TypeError。"""
     class CustomAccountant(BudgetAccountant):
         pass
 
-    with pytest.raises(TypeError, match="subclassing"):
+    with pytest.raises(TypeError, match="cannot be instantiated directly"):
         CustomAccountant("subclass-ns")
 
 

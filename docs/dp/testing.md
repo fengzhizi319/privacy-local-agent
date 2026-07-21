@@ -107,11 +107,11 @@ def test_laplace_noise_statistics():
 
 ```python
 from privacy_local_agent.privacy.dp import DPApi
-from privacy_local_agent.privacy.budget import BudgetAccountant
+from privacy_local_agent.privacy.budget import default_registry
 
 
 def test_mean_min_count_protection():
-    BudgetAccountant("test-mean-thresh", epsilon_total=100.0, delta_total=1.0)
+    default_registry.get_or_create("test-mean-thresh", epsilon_total=100.0, delta_total=1.0)
     api = DPApi(namespace="test-mean-thresh")
 
     # 正常计算
@@ -124,7 +124,7 @@ def test_mean_min_count_protection():
 
 
 def test_histogram_joint_sensitivity():
-    BudgetAccountant("test-hist", epsilon_total=100.0, delta_total=1.0)
+    default_registry.get_or_create("test-hist", epsilon_total=100.0, delta_total=1.0)
     api = DPApi(namespace="test-hist")
     values = ["A"] * 100 + ["B"] * 200 + ["C"] * 50
     categories = ["A", "B", "C", "D"]
@@ -178,11 +178,11 @@ PYTHONPATH=. pytest tests/test_dp.py -v -k "LocalDP or Randomized"
 
 ```python
 from privacy_local_agent.privacy.dp import DPApi
-from privacy_local_agent.privacy.budget import BudgetAccountant
+from privacy_local_agent.privacy.budget import default_registry
 
 
 def test_noisy_sum():
-    BudgetAccountant("test-noisy", epsilon_total=100.0, delta_total=1.0)
+    default_registry.get_or_create("test-noisy", epsilon_total=100.0, delta_total=1.0)
     api = DPApi(namespace="test-noisy")
     result = api.noisy_sum(
         true_sum=1000.0,
@@ -206,11 +206,11 @@ def test_noisy_sum_requires_sensitivity():
 
 ```python
 from privacy_local_agent.privacy.dp import DPApi
-from privacy_local_agent.privacy.budget import BudgetAccountant
+from privacy_local_agent.privacy.budget import default_registry
 
 
 def test_chunked_count():
-    BudgetAccountant("test-chunked", epsilon_total=100.0, delta_total=1.0)
+    default_registry.get_or_create("test-chunked", epsilon_total=100.0, delta_total=1.0)
     api = DPApi(namespace="test-chunked")
     chunks = [[1, 0, 1], [1, 0, 1, 1]]
     result = api.chunked_count(chunks, epsilon=10.0, mechanism="laplace")
@@ -280,14 +280,12 @@ def test_traffic_metric_recorded():
 
 ```python
 import time
-from privacy_local_agent.privacy.budget import BudgetAccountant
+from privacy_local_agent.privacy.budget import default_registry
 
 
 def test_budget_window_reset():
-    from privacy_local_agent.privacy.budget import default_registry
-
     default_registry.reset()
-    accountant = BudgetAccountant(
+    accountant = default_registry.get_or_create(
         "test-window", epsilon_total=2.0, delta_total=1e-5, window_seconds=0.1
     )
     accountant.spend(1.5, 0.0)

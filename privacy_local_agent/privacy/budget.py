@@ -79,13 +79,12 @@ class BudgetAccountant:
     """隐私预算会计师。
 
     记录指定 namespace 的总预算与已消耗预算。
-    实例的创建与共享由 BudgetRegistry 统一管理（参见 default_registry）。
-    直接调用构造函数 ``BudgetAccountant("ns")`` 会委托给全局 default_registry，
-    仅为向后兼容保留；新代码推荐显式使用 ``default_registry.get_or_create("ns")``。
+    实例的创建与获取由 BudgetRegistry 统一管理（参见 default_registry）。
+
+    **直接构造已关闭**：调用 ``BudgetAccountant("ns")`` 会抛出 ``TypeError``。
+    请使用 ``default_registry.get_or_create("ns")`` 或便捷函数 ``get_budget("ns")``。
 
     注意：
-    - 直接构造不支持继承：``__new__`` 始终返回 default_registry 中的
-      BudgetAccountant 实例，子类调用不会得到子类实例。
     - ``__init__`` 是空操作保护：真实的初始化逻辑在 ``_init_instance`` 中，
       由 BudgetRegistry 在创建新实例时调用一次。Python 在 ``__new__`` 返回
       已有实例后仍会调用 ``__init__``，空实现可防止已有实例被重复初始化
@@ -116,39 +115,21 @@ class BudgetAccountant:
         delta_total: Optional[float] = None,
         window_seconds: Optional[float] = None,
     ):
-        """获取或创建指定命名空间的 BudgetAccountant 实例。
+        """禁止直接构造。
 
-        为保证向后兼容，默认委托给全局注册表 default_registry.get_or_create()。
-        未提供的参数视为"不关心"：实例不存在时使用注册表默认值创建；实例已存在
-        时不参与冲突检测。显式传入且与已有配置不一致的参数会触发 UserWarning。
+        BudgetAccountant 不支持直接实例化。请使用 Registry API 获取或创建实例：
 
-        .. deprecated::
-            直接构造 ``BudgetAccountant("ns")`` 仅为向后兼容保留，新代码应使用
-            ``default_registry.get_or_create("ns")``。
+        .. code-block:: python
 
-        注意：返回值始终是 BudgetAccountant 实例，不支持通过子类化扩展。
+            from privacy_local_agent.privacy.budget import default_registry
+            acct = default_registry.get_or_create("my-namespace")
 
         Raises:
-            TypeError: 当通过子类调用 ``__new__`` 时（不支持继承）。
+            TypeError: 始终抛出，提示使用 ``default_registry.get_or_create()``。
         """
-        # 继承安全检查：BudgetAccountant 不支持通过子类化扩展
-        if cls is not BudgetAccountant:
-            raise TypeError(
-                "BudgetAccountant does not support subclassing via direct construction; "
-                "use BudgetRegistry.get_or_create() instead."
-            )
-        # 弃用警告：推动调用方迁移到显式 Registry API
-        warnings.warn(
-            "Direct construction of BudgetAccountant is deprecated. "
-            "Use default_registry.get_or_create() instead.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        return default_registry.get_or_create(
-            namespace=namespace,
-            epsilon_total=epsilon_total,
-            delta_total=delta_total,
-            window_seconds=window_seconds,
+        raise TypeError(
+            "BudgetAccountant cannot be instantiated directly. "
+            "Use default_registry.get_or_create() instead."
         )
 
     def __init__(

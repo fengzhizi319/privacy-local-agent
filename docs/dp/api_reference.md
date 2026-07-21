@@ -700,7 +700,7 @@ accountant = get_budget("hr_data", epsilon_total=10.0, delta_total=1e-4)
 accountant = default_registry.get_or_create("hr_data", epsilon_total=10.0, delta_total=1e-4)
 ```
 
-> **注意**：直接构造 `BudgetAccountant("ns")` 为已弃用的向后兼容用法，推荐迁移至 `get_budget()` 或 `default_registry.get_or_create()`。
+> **注意**：直接构造 `BudgetAccountant("ns")` 已关闭（抛出 `TypeError`）。请使用 `default_registry.get_or_create("ns")` 或便捷函数 `get_budget("ns")`。
 
 #### 主要属性与字符串表示
 
