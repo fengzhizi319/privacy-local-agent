@@ -9,7 +9,6 @@ import math
 
 import numpy as np
 import pytest
-from scipy import stats
 
 from privacy_local_agent.privacy.budget import default_registry
 from privacy_local_agent.privacy.dp import DPApi, calibrate_analytic_gaussian
@@ -20,6 +19,10 @@ def _reset():
     default_registry.reset()
     yield
     default_registry.reset()
+
+
+# scipy 为可选依赖，未安装时自动跳过 KS 检验
+scipy_stats = pytest.importorskip("scipy.stats", reason="scipy required for KS tests")
 
 
 N_SAMPLES = 50_000
@@ -36,8 +39,8 @@ class TestLaplaceDistribution:
 
         # Theoretical CDF: Laplace(0, 1)
         # CDF(x) = 0.5 * exp(x) for x < 0, 1 - 0.5 * exp(-x) for x >= 0
-        # Use laplace.cdf directly to avoid scipy internal is_torch_array check
-        ks_stat, p_value = stats.kstest(samples, stats.laplace.cdf, args=(0, 1.0))
+        # Use frozen distribution object for cleaner API
+        ks_stat, p_value = scipy_stats.kstest(samples, scipy_stats.laplace(loc=0, scale=1.0).cdf)
         assert p_value > KS_ALPHA, (
             f"Laplace(0,1) KS test failed: stat={ks_stat:.4f}, p={p_value:.6f}"
         )
@@ -48,8 +51,7 @@ class TestLaplaceDistribution:
         scale = 2.5
         samples = np.array([api._sample_laplace(scale) for _ in range(N_SAMPLES)])
 
-        # scipy.stats.laplace(loc, scale) — use cdf func to avoid torch metaclass conflict
-        ks_stat, p_value = stats.kstest(samples, stats.laplace.cdf, args=(0, scale))
+        ks_stat, p_value = scipy_stats.kstest(samples, scipy_stats.laplace(loc=0, scale=scale).cdf)
         assert p_value > KS_ALPHA, (
             f"Laplace(0,{scale}) KS test failed: stat={ks_stat:.4f}, p={p_value:.6f}"
         )
@@ -73,8 +75,8 @@ class TestGaussianDistribution:
         api = DPApi(namespace="ks-gauss-1", random_state=12345)
         samples = np.array([api._sample_gaussian(1.0) for _ in range(N_SAMPLES)])
 
-        # Use norm.cdf directly for compatibility with newer scipy versions
-        ks_stat, p_value = stats.kstest(samples, stats.norm.cdf, args=(0, 1.0))
+        # Use frozen distribution object for cleaner API
+        ks_stat, p_value = scipy_stats.kstest(samples, scipy_stats.norm(loc=0, scale=1.0).cdf)
         assert p_value > KS_ALPHA, (
             f"N(0,1) KS test failed: stat={ks_stat:.4f}, p={p_value:.6f}"
         )
@@ -85,7 +87,7 @@ class TestGaussianDistribution:
         sigma = 3.0
         samples = np.array([api._sample_gaussian(sigma) for _ in range(N_SAMPLES)])
 
-        ks_stat, p_value = stats.kstest(samples, stats.norm.cdf, args=(0, sigma))
+        ks_stat, p_value = scipy_stats.kstest(samples, scipy_stats.norm(loc=0, scale=sigma).cdf)
         assert p_value > KS_ALPHA, (
             f"N(0,{sigma}^2) KS test failed: stat={ks_stat:.4f}, p={p_value:.6f}"
         )

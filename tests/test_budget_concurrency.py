@@ -1,8 +1,9 @@
-"""并发压力测试：验证 BudgetAccountant 在高并发场景下的线程安全性。
+"""高并发与锁多线程压力测试。
 
-使用 concurrent.futures.ThreadPoolExecutor 模拟多线程同时调用 spend()，
-验证内存模式和 SQLite 模式下的原子性、数据一致性与死锁防护。
+验证 BudgetAccountant 在内存与 SQLite 存储后端下的多线程并发扣减安全性、
+数据一致性、BudgetRegistry 单例工厂的高并发争用正确性，以及 SQLite 线程级连接复用。
 """
+
 from __future__ import annotations
 
 import os
@@ -74,7 +75,7 @@ class TestMemoryConcurrency:
         # At most 10 threads should succeed (1.0 / 0.1 = 10)
         assert ok_count <= 10
         assert exhausted_count > 0
-        # Spent should not exceed total
+        # Spent should not exceed total (with float tolerance)
         assert acct.epsilon_spent <= 1.0 + 1e-9
 
     def test_concurrent_spend_and_remaining(self):
@@ -163,3 +164,25 @@ class TestSQLiteConcurrency:
         acct.spend(1.0, 0.0)
         conn3 = acct._thread_local.conn
         assert conn3 is not conn1
+
+
+class TestRegistryConcurrency:
+    """BudgetRegistry 单例工厂的高并发争用测试。"""
+
+    def test_concurrent_registry_get_or_create(self):
+        """50 线程并发请求注册表，验证单例对象指针 100% 相同。"""
+        ns = "concurrent-reg"
+        instances = []
+
+        def _get_or_create():
+            return default_registry.get_or_create(ns, epsilon_total=10.0, delta_total=1e-4)
+
+        with ThreadPoolExecutor(max_workers=20) as pool:
+            futures = [pool.submit(_get_or_create) for _ in range(50)]
+            for f in as_completed(futures):
+                instances.append(f.result())
+
+        # 50 个线程获取到的对象指针应当 100% 相同
+        first = instances[0]
+        for inst in instances[1:]:
+            assert inst is first

@@ -361,7 +361,7 @@ class BudgetAccountant:
                     new_eps = eps_spent + epsilon
                     new_delta = del_spent + delta
 
-                    if new_eps > eps_total or new_delta > del_total:
+                    if new_eps > eps_total + 1e-12 or new_delta > del_total + 1e-12:
                         conn.rollback()
                         raise PrivacyBudgetExhausted(
                             f"Privacy budget exhausted in namespace {self.namespace}: "
@@ -405,7 +405,7 @@ class BudgetAccountant:
 
                 new_eps = self.epsilon_spent + epsilon
                 new_delta = self.delta_spent + delta
-                if new_eps > self.epsilon_total or new_delta > self.delta_total:
+                if new_eps > self.epsilon_total + 1e-12 or new_delta > self.delta_total + 1e-12:
                     raise PrivacyBudgetExhausted(
                         f"Privacy budget exhausted in namespace {self.namespace}: "
                         f"epsilon={new_eps}/{self.epsilon_total}, delta={new_delta}/{self.delta_total}"
