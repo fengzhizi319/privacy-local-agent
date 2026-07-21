@@ -19,9 +19,10 @@ import grpc
 from . import privacy_pb2
 from . import privacy_pb2_grpc
 from .classification_grpc import ClassificationGrpcServicer
-from .observability.logging_config import configure_logging
+from .observability.logging_config import configure_logging, get_logger
 from .observability.middleware import GrpcObservabilityInterceptor
 from .observability.tracing import init_tracing
+from .privacy.budget import PrivacyBudgetExhausted
 from .security.auth import AuthInterceptor
 from .security.config import get_security_settings
 from .security.ratelimit import RateLimitInterceptor
@@ -31,6 +32,26 @@ from .service import PrivacyService
 # 与 REST 模块共享环境变量配置，确保两种协议使用同一 profile 与命名空间
 PROFILE_PATH = os.environ.get("PRIVACY_PROFILE", "privacy-profile.yaml")
 NAMESPACE = os.environ.get("PRIVACY_NAMESPACE", "default")
+
+logger = get_logger(__name__)
+
+
+def _grpc_error_mapper(fn):
+    """将 gRPC 方法异常映射到语义化 gRPC 状态码，避免全部返回 UNKNOWN。"""
+    def wrapper(self, request, context):
+        try:
+            return fn(self, request, context)
+        except PrivacyBudgetExhausted as e:
+            context.set_code(grpc.StatusCode.RESOURCE_EXHAUSTED)
+            context.set_details(str(e))
+        except ValueError as e:
+            context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
+            context.set_details(str(e))
+        except Exception:
+            logger.exception("grpc_request_error")
+            context.set_code(grpc.StatusCode.INTERNAL)
+            context.set_details("Internal server error")
+    return wrapper
 
 
 class PrivacyServicer(
@@ -49,6 +70,7 @@ class PrivacyServicer(
     def __init__(self):
         """初始化 gRPC servicer，创建 PrivacyService 实例并复用它。"""
         self.service = PrivacyService(profile_path=PROFILE_PATH, namespace=NAMESPACE)
+        self._service_cache = {NAMESPACE: self.service}
         ClassificationGrpcServicer.__init__(self)
 
     def Mask(self, request, context):
@@ -266,7 +288,10 @@ class PrivacyServicer(
         values = list(request.values) if request.values else None
         qi_cols = list(request.qi_cols) if request.qi_cols else None
 
-        rec_service = PrivacyService(profile_path=PROFILE_PATH, namespace=request.namespace)
+        rec_service = self._service_cache.get(request.namespace)
+        if rec_service is None:
+            rec_service = PrivacyService(profile_path=PROFILE_PATH, namespace=request.namespace)
+            self._service_cache[request.namespace] = rec_service
         recommended = rec_service.recommend_and_save_params(values, rows, qi_cols)
 
         import json
@@ -353,6 +378,14 @@ class PrivacyServicer(
         res_json = json.dumps(res, default=str)
         return privacy_pb2.DPGroupByResponse(result_json=res_json)
 
+
+# 为所有公共 RPC 方法统一包装异常映射，避免直接返回 UNKNOWN 状态码
+for _name in dir(PrivacyServicer):
+    if _name.startswith("_"):
+        continue
+    _attr = getattr(PrivacyServicer, _name)
+    if callable(_attr):
+        setattr(PrivacyServicer, _name, _grpc_error_mapper(_attr))
 
 
 def serve(port: int = 50051, max_workers: int = 10, wait_for_termination: bool = True):

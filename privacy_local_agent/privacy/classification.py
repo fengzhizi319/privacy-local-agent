@@ -398,7 +398,7 @@ class ClassificationAPI:
                 engine_layer = EngineLayer.L2_SMALL_NER
 
         # Step 4: Layer-3 LLM classification fallback
-        if cp.enable_llm or (not cp.enable_llm and confidence < 0.6):
+        if cp.enable_llm or confidence < cp.llm_confidence_threshold:
             llm_result = self.llm.classify(str(value), final_level, confidence)
             if llm_result:
                 final_level = parse_level(llm_result.get("final_level", final_level))
@@ -442,6 +442,24 @@ class ClassificationAPI:
             engine_layer=engine_layer,
             needs_human_review=any(t.needs_human_review for t in tags),
             reasoning=reasoning,
+        )
+
+    @staticmethod
+    def _make_tag(
+        level: SensitivityLevel,
+        category: str,
+        confidence: float,
+        rule_id: str,
+        needs_human_review: bool = False,
+    ) -> SecurityTag:
+        """构造 Small-NER 输出 SecurityTag，减少重复字段构造。"""
+        return SecurityTag(
+            level=level,
+            category=category,
+            confidence=confidence,
+            source_engine="SMALL_NER",
+            rule_id=rule_id,
+            needs_human_review=needs_human_review,
         )
 
     def _run_small_ner(self, field_name: str, value: Any) -> List[SecurityTag]:
@@ -491,12 +509,11 @@ class ClassificationAPI:
             # Genomic hint: highest sensitivity L5, requires human review
             if label == "GENOMIC_HINT":
                 tags.append(
-                    SecurityTag(
-                        level=SensitivityLevel.L5,
-                        category="GENOMIC_HINT",
-                        confidence=conf,
-                        source_engine="SMALL_NER",
-                        rule_id="NER_GENE_001",
+                    self._make_tag(
+                        SensitivityLevel.L5,
+                        "GENOMIC_HINT",
+                        conf,
+                        "NER_GENE_001",
                         needs_human_review=True,
                     )
                 )
@@ -504,55 +521,50 @@ class ClassificationAPI:
             elif label == "MEDICAL_DISEASE":
                 if any(kw in text for kw in sensitive_keywords):
                     tags.append(
-                        SecurityTag(
-                            level=SensitivityLevel.L4,
-                            category="MEDICAL_SENSITIVE_DISEASE",
-                            confidence=conf,
-                            source_engine="SMALL_NER",
-                            rule_id="NER_DIS_SENSITIVE",
+                        self._make_tag(
+                            SensitivityLevel.L4,
+                            "MEDICAL_SENSITIVE_DISEASE",
+                            conf,
+                            "NER_DIS_SENSITIVE",
                         )
                     )
                 else:
                     tags.append(
-                        SecurityTag(
-                            level=SensitivityLevel.L3,
-                            category="MEDICAL_DISEASE",
-                            confidence=conf,
-                            source_engine="SMALL_NER",
-                            rule_id="NER_DIS_NORMAL",
+                        self._make_tag(
+                            SensitivityLevel.L3,
+                            "MEDICAL_DISEASE",
+                            conf,
+                            "NER_DIS_NORMAL",
                         )
                     )
             # Medication: standard L3 sensitivity
             elif label == "MEDICATION":
                 tags.append(
-                    SecurityTag(
-                        level=SensitivityLevel.L3,
-                        category="MEDICATION",
-                        confidence=conf,
-                        source_engine="SMALL_NER",
-                        rule_id="NER_DRU_001",
+                    self._make_tag(
+                        SensitivityLevel.L3,
+                        "MEDICATION",
+                        conf,
+                        "NER_DRU_001",
                     )
                 )
             # Surgery/procedure: standard L3 sensitivity
             elif label == "SURGERY":
                 tags.append(
-                    SecurityTag(
-                        level=SensitivityLevel.L3,
-                        category="SURGERY",
-                        confidence=conf,
-                        source_engine="SMALL_NER",
-                        rule_id="NER_PRO_001",
+                    self._make_tag(
+                        SensitivityLevel.L3,
+                        "SURGERY",
+                        conf,
+                        "NER_PRO_001",
                     )
                 )
             # Body part: standard L3 sensitivity
             elif label == "BODY_PART":
                 tags.append(
-                    SecurityTag(
-                        level=SensitivityLevel.L3,
-                        category="BODY_PART",
-                        confidence=conf,
-                        source_engine="SMALL_NER",
-                        rule_id="NER_BOD_001",
+                    self._make_tag(
+                        SensitivityLevel.L3,
+                        "BODY_PART",
+                        conf,
+                        "NER_BOD_001",
                     )
                 )
         return tags
@@ -763,6 +775,12 @@ class ClassificationAPI:
         aggregated_tags: List[SecurityTag] = []
         review_entries: List[Any] = []
 
+        # 复合规则只解析一次，避免每行循环重复构造引擎
+        custom_rules = None
+        if cp.composite_rules:
+            custom_rules = [CompositeRule.model_validate(r) for r in cp.composite_rules]
+        engine = CompositeRuleEngine(custom_rules) if custom_rules else self.composite_engine
+
         # 批量计算每列的 Layer-1 标签
         column_tags: Dict[str, List[List[SecurityTag]]] = {}
         if cp.enable_rule_engine:
@@ -810,18 +828,7 @@ class ClassificationAPI:
                 ),
             )
 
-            # 复合/上下文敏感规则后处理
-            cp2, _ = _resolve_classification_params(self.resolver, params)
-            custom_rules = None
-            if cp2.composite_rules:
-                custom_rules = [
-                    CompositeRule.model_validate(r) for r in cp2.composite_rules
-                ]
-            engine = (
-                CompositeRuleEngine(custom_rules)
-                if custom_rules
-                else self.composite_engine
-            )
+            # 复合/上下文敏感规则后处理（引擎已在循环外构造）
             composite_tags = engine.evaluate(row, field_results)
             record_result = apply_composite_tags(record_result, composite_tags)
 

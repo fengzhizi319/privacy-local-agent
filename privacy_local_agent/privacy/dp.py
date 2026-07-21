@@ -598,6 +598,52 @@ class DPApi:
         # Difference of two geometric RVs gives discrete Laplace on Z
         return int(g1 - g2)
 
+    def _sample_isotropic_noise(
+        self, d: int, mechanism: Mechanism, scale: float
+    ) -> np.ndarray:
+        """预分配数组并按维度采样同构噪声，避免列表推导式逐次分配。"""
+        noises = np.empty(d, dtype=np.float64)
+        if mechanism == Mechanism.LAPLACE:
+            for i in range(d):
+                noises[i] = self._sample_laplace(scale)
+        else:
+            for i in range(d):
+                noises[i] = self._sample_gaussian(scale)
+        return noises
+
+    @staticmethod
+    def _mean_delta_method_ci(
+        final_val: float,
+        noisy_sum: float,
+        noisy_count: float,
+        sum_scale: float,
+        count_scale: float,
+        mechanism: Mechanism,
+        confidence_level: float,
+    ) -> tuple[float, tuple[float, float]]:
+        """使用 Delta 方法计算均值估计的等效噪声 scale 与置信区间。"""
+        # Variance of sum noise: Var(Laplace) = 2b^2, Var(Gaussian) = sigma^2
+        var_sum = (2.0 * sum_scale**2) if mechanism == Mechanism.LAPLACE else (sum_scale**2)
+        # Variance of count noise
+        var_count = (2.0 * count_scale**2) if mechanism == Mechanism.LAPLACE else (count_scale**2)
+        # Delta method: Var(S/C) ~ Var(S)/C^2 + (S^2 * Var(C))/C^4
+        var_mean = (var_sum / (noisy_count**2)) + ((noisy_sum**2 * var_count) / (noisy_count**4))
+        # Standard deviation of the mean estimate
+        std_mean = math.sqrt(max(0.0, var_mean))
+        # Effective scale: divide by sqrt(2) for Laplace to match Gaussian equivalent
+        eff_scale = std_mean / math.sqrt(2.0) if mechanism == Mechanism.LAPLACE else std_mean
+        ci = compute_confidence_interval(final_val, eff_scale, mechanism, confidence_level)
+        return eff_scale, ci
+
+    @staticmethod
+    def _compute_noise_scale(
+        sensitivity: float, epsilon: float, delta: float, mechanism: Mechanism
+    ) -> float:
+        """根据机制统一计算噪声 scale（Laplace b 或 Gaussian sigma）。"""
+        if mechanism == Mechanism.LAPLACE and epsilon > 0:
+            return sensitivity / epsilon
+        return calibrate_analytic_gaussian(epsilon, delta, sensitivity)
+
     @staticmethod
     def _clip_values(values: np.ndarray, lower: float, upper: float) -> np.ndarray:
         # 向量化截断输入值到 [lower, upper] 区间，使用 NumPy 加速大规模数据处理
@@ -951,10 +997,7 @@ class DPApi:
             # Default: adding/removing one record changes count by at most 1
             sensitivity = 1.0
 
-        # Step 4: Consume privacy budget from the accountant
-        self.budget.spend(epsilon, delta)
-
-        # Step 5: Compute true (noise-free) count of non-zero / non-empty elements
+        # Step 4: Compute true (noise-free) count of non-zero / non-empty elements
         if _is_sparse_matrix(arr):
             # Sparse matrix: nnz gives the number of stored (non-zero) entries in O(1)
             true_count = float(arr.nnz)
@@ -968,10 +1011,7 @@ class DPApi:
             # Object/string dtype: fall back to Python-level truthiness check
             true_count = float(sum(1 for v in arr if v))
 
-        # Increment Prometheus metrics counter for observability
-        DP_QUERIES_TOTAL.labels(mechanism=mechanism, aggregation="count").inc()
-
-        # Step 6: Sample DP noise calibrated to the sensitivity
+        # Step 5: Sample DP noise calibrated to the sensitivity
         if discrete and mechanism == Mechanism.LAPLACE:
             # Discrete Laplace on integer lattice Z for exact integer output
             scale = sensitivity / epsilon if epsilon > 0 else 0.0
@@ -980,7 +1020,13 @@ class DPApi:
             # Continuous Laplace or Analytic Gaussian noise
             noise = self._sample_sum_noise(sensitivity, epsilon, delta, mechanism)
 
-        # Step 7: Add noise to true count and apply post-processing (clip/round)
+        # Consume privacy budget only after noise sampling succeeds, so failures do not exhaust budget
+        self.budget.spend(epsilon, delta)
+
+        # Increment Prometheus metrics counter for observability
+        DP_QUERIES_TOTAL.labels(mechanism=mechanism, aggregation="count").inc()
+
+        # Step 6: Add noise to true count and apply post-processing (clip/round)
         raw_val = true_count + noise
         final_val = _apply_post_processing(
             raw_val, round_int=round_int, clip_non_negative=clip_non_negative
@@ -1250,20 +1296,8 @@ class DPApi:
 
         # Step 7: Delta method variance estimation for ratio estimator
         if return_details:
-            # Variance of sum noise: Var(Laplace) = 2b^2, Var(Gaussian) = sigma^2
-            var_sum = (2.0 * sum_scale**2) if mechanism == Mechanism.LAPLACE else (sum_scale**2)
-            # Variance of count noise
-            var_count = (2.0 * count_scale**2) if mechanism == Mechanism.LAPLACE else (count_scale**2)
-            # Delta method: Var(S/C) ~ Var(S)/C^2 + (S^2 * Var(C))/C^4
-            var_mean = (var_sum / (noisy_count**2)) + ((noisy_sum**2 * var_count) / (noisy_count**4))
-            # Standard deviation of the mean estimate
-            std_mean = math.sqrt(max(0.0, var_mean))
-            # Effective scale: divide by sqrt(2) for Laplace to match Gaussian equivalent
-            eff_scale = std_mean / math.sqrt(2.0) if mechanism == Mechanism.LAPLACE else std_mean
-
-            # Step 8: Compute confidence interval and package DPResult
-            ci = compute_confidence_interval(
-                final_val, eff_scale, mechanism, confidence_level
+            eff_scale, ci = self._mean_delta_method_ci(
+                final_val, noisy_sum, noisy_count, sum_scale, count_scale, mechanism, confidence_level
             )
             return DPResult(
                 value=final_val,
@@ -1731,20 +1765,8 @@ class DPApi:
 
         # Delta method variance estimation for ratio estimator
         if return_details:
-            # Variance of sum noise: Var(Laplace) = 2b^2, Var(Gaussian) = sigma^2
-            var_sum = (2.0 * sum_scale**2) if mechanism == Mechanism.LAPLACE else (sum_scale**2)
-            # Variance of count noise
-            var_count = (2.0 * count_scale**2) if mechanism == Mechanism.LAPLACE else (count_scale**2)
-            # Delta method: Var(S/C) ~ Var(S)/C^2 + (S^2 * Var(C))/C^4
-            var_mean = (var_sum / (noisy_count**2)) + ((noisy_sum**2 * var_count) / (noisy_count**4))
-            # Standard deviation of the mean estimate
-            std_mean = math.sqrt(max(0.0, var_mean))
-            # Effective scale: divide by sqrt(2) for Laplace to match Gaussian equivalent
-            eff_scale = std_mean / math.sqrt(2.0) if mechanism == Mechanism.LAPLACE else std_mean
-
-            # Compute confidence interval and package DPResult
-            ci = compute_confidence_interval(
-                final_val, eff_scale, mechanism, confidence_level
+            eff_scale, ci = self._mean_delta_method_ci(
+                final_val, noisy_sum, noisy_count, sum_scale, count_scale, mechanism, confidence_level
             )
             return DPResult(
                 value=final_val,
@@ -2053,18 +2075,9 @@ class DPApi:
 
         # Delta method variance estimation for ratio estimator
         if return_details:
-            # Variance of sum noise: Var(Laplace) = 2b^2, Var(Gaussian) = sigma^2
-            var_sum = (2.0 * sum_scale**2) if mechanism == Mechanism.LAPLACE else (sum_scale**2)
-            # Variance of count noise
-            var_count = (2.0 * count_scale**2) if mechanism == Mechanism.LAPLACE else (count_scale**2)
-            # Delta method: Var(S/C) ~ Var(S)/C^2 + (S^2 * Var(C))/C^4
-            var_mean = (var_sum / (noisy_count**2)) + ((noisy_sum**2 * var_count) / (noisy_count**4))
-            # Standard deviation of the mean estimate
-            std_mean = math.sqrt(max(0.0, var_mean))
-            # Effective scale: divide by sqrt(2) for Laplace to match Gaussian equivalent
-            eff_scale = std_mean / math.sqrt(2.0) if mechanism == Mechanism.LAPLACE else std_mean
-            # Compute confidence interval and package DPResult
-            ci = compute_confidence_interval(final_val, eff_scale, mechanism, confidence_level)
+            eff_scale, ci = self._mean_delta_method_ci(
+                final_val, noisy_sum, noisy_count, sum_scale, count_scale, mechanism, confidence_level
+            )
             return DPResult(
                 value=final_val, noise_mechanism=mechanism, noise_scale=eff_scale,
                 epsilon_spent=epsilon, delta_spent=delta, confidence_interval=ci,
@@ -2419,14 +2432,8 @@ class DPApi:
         DP_QUERIES_TOTAL.labels(mechanism=mechanism, aggregation="sum").inc(matrix.shape[1])
 
         # Step 6: Generate isotropic noise vector (each dimension independently noised)
-        if mechanism == Mechanism.LAPLACE:
-            # Laplace noise scale = max_norm / epsilon (sensitivity = max_norm)
-            noise_scale = max_norm / epsilon
-            noises = np.array([self._sample_laplace(noise_scale) for _ in range(matrix.shape[1])])
-        else:
-            # Analytic Gaussian calibrated to max_norm sensitivity
-            noise_scale = calibrate_analytic_gaussian(epsilon, delta, max_norm)
-            noises = np.array([self._sample_gaussian(noise_scale) for _ in range(matrix.shape[1])])
+        noise_scale = self._compute_noise_scale(max_norm, epsilon, delta, mechanism)
+        noises = self._sample_isotropic_noise(matrix.shape[1], mechanism, noise_scale)
 
         # Add noise to the true vector sum
         noisy_vec = true_sum + noises
@@ -2506,14 +2513,8 @@ class DPApi:
             return zero_vec
 
         # Step 4: Compute noisy sum with the other half of the budget
-        if mechanism == Mechanism.LAPLACE:
-            # Laplace noise scale = max_norm / eps_sub
-            noise_scale = max_norm / eps_sub
-            noises = np.array([self._sample_laplace(noise_scale) for _ in range(matrix.shape[1])])
-        else:
-            # Analytic Gaussian calibrated to max_norm sensitivity
-            noise_scale = calibrate_analytic_gaussian(eps_sub, delta_sub, max_norm)
-            noises = np.array([self._sample_gaussian(noise_scale) for _ in range(matrix.shape[1])])
+        noise_scale = self._compute_noise_scale(max_norm, eps_sub, delta_sub, mechanism)
+        noises = self._sample_isotropic_noise(matrix.shape[1], mechanism, noise_scale)
 
         # Consume budget for the sum query
         self.budget.spend(eps_sub, delta_sub)
@@ -2669,8 +2670,8 @@ class LocalDPApi:
         if value not in (0, 1):
             raise ValueError("binary value must be 0 or 1")
 
-        # Compute probability of keeping the true value: p = exp(eps) / (1 + exp(eps))
-        p = math.exp(epsilon) / (1.0 + math.exp(epsilon))
+        # Compute probability of keeping the true value using the logistically stable form
+        p = 1.0 / (1.0 + math.exp(-epsilon))
         # With probability p return original value, otherwise flip it
         return value if self.rng.random() < p else 1 - value
 
@@ -2703,7 +2704,7 @@ class LocalDPApi:
             raise ValueError("categories must contain at least 2 items")
 
         # Probability of keeping the true value: p = exp(eps) / (k-1 + exp(eps))
-        p = math.exp(epsilon) / (k - 1 + math.exp(epsilon))
+        p = 1.0 / (1.0 + (k - 1) * math.exp(-epsilon))
         # With probability p, return the original value
         if self.rng.random() < p:
             return value
@@ -2740,7 +2741,7 @@ class LocalDPApi:
             return 0.0
 
         # Step 1: Compute the probability of keeping true value in randomized response
-        p = math.exp(epsilon) / (1.0 + math.exp(epsilon))
+        p = 1.0 / (1.0 + math.exp(-epsilon))
         # Step 2: Compute the observed fraction of 1s in reported (noisy) data
         f_reported = sum(1 for v in reported_values if v == 1) / n
         # Step 3: Apply unbiased debiasing formula: hat_f = (f_reported - (1-p)) / (2p-1)
@@ -2772,7 +2773,7 @@ class LocalDPApi:
 
         # Step 1: Compute randomized response probabilities
         # p = probability of reporting true category
-        p = math.exp(epsilon) / (k - 1 + math.exp(epsilon))
+        p = 1.0 / (1.0 + (k - 1) * math.exp(-epsilon))
         # q = probability of reporting any specific wrong category
         q = (1.0 - p) / (k - 1)
         # Denominator for debiasing: D = p - q

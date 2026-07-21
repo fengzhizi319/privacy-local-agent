@@ -356,6 +356,9 @@ class ClassificationParams(BaseModel):
     enable_rule_engine: bool = Field(default=True, alias="enableRuleEngine")
     enable_small_ner: bool = Field(default=False, alias="enableSmallNer")
     enable_llm: bool = Field(default=False, alias="enableLlm")
+    llm_confidence_threshold: float = Field(
+        default=0.6, ge=0.0, le=1.0, alias="llmConfidenceThreshold"
+    )
     icd10_l4_intervals: List[Dict[str, str]] = Field(
         default_factory=lambda: [
             {"start": "B20", "end": "B24"},

@@ -19,10 +19,11 @@ from fastapi import Depends, FastAPI, HTTPException, Request
 from pydantic import BaseModel
 
 from .classification_routes import classification_router
-from .observability.logging_config import configure_logging
+from .observability.logging_config import configure_logging, get_logger
 from .observability.middleware import ObservabilityMiddleware
 from .observability.metrics import make_asgi_app
 from .observability.tracing import init_tracing
+from .privacy.budget import PrivacyBudgetExhausted
 from .security.auth import get_current_identity, require_permission
 from .security.ratelimit import rate_limit_dependency
 from .service import PrivacyService
@@ -33,6 +34,12 @@ NAMESPACE = os.environ.get("PRIVACY_NAMESPACE", "default")
 
 # 模块级单例服务，供各路由处理函数复用
 service = PrivacyService(profile_path=PROFILE_PATH, namespace=NAMESPACE)
+
+# Per-namespace PrivacyService cache to avoid re-initializing on every recommend request
+_service_cache: Dict[str, PrivacyService] = {NAMESPACE: service}
+
+# Module-level logger for unexpected server errors
+logger = get_logger(__name__)
 
 
 @asynccontextmanager
@@ -86,6 +93,16 @@ app.include_router(classification_router)
 
 # 通用安全依赖：认证 + 限速。健康检查端点单独声明，不使用本依赖列表。
 SECURITY_DEPS = [Depends(get_current_identity), Depends(rate_limit_dependency)]
+
+
+def _handle_request_exception(exc: Exception) -> None:
+    """将隐私计算异常映射到合适的 HTTP 状态码，避免服务器错误误报为 400。"""
+    if isinstance(exc, PrivacyBudgetExhausted):
+        raise HTTPException(status_code=429, detail=str(exc)) from exc
+    if isinstance(exc, ValueError):
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    logger.exception("unexpected_request_error")
+    raise HTTPException(status_code=500, detail="Internal server error") from exc
 
 
 class MaskRequest(BaseModel):
@@ -352,7 +369,7 @@ def readyz():
             conn = sqlite3.connect(db_path, timeout=2.0)
             conn.execute("SELECT 1")
             conn.close()
-        except Exception as e:
+        except sqlite3.Error as e:
             raise HTTPException(status_code=503, detail=f"Database check failed: {e}")
             
     return {"status": "ready", "llm_ready": service.classification_api.is_llm_ready()}
@@ -403,7 +420,7 @@ def mask_batch(req: MaskBatchRequest):
     try:
         return {"result": service.mask_batch(req.field_names, req.values, req.context)}
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        _handle_request_exception(e)
 
 
 @app.post("/v1/privacy/mask/dataframe", dependencies=[*SECURITY_DEPS, require_permission("privacy:mask")])
@@ -420,7 +437,7 @@ def mask_dataframe(req: MaskDataFrameRequest):
         result = service.mask_dataframe(df, columns=req.columns, context=req.context)
         return {"result": result.to_dict(orient="records")}
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        _handle_request_exception(e)
 
 
 @app.post("/v1/privacy/hash", dependencies=[*SECURITY_DEPS, require_permission("privacy:hash")])
@@ -454,7 +471,7 @@ def dp_count(req: DPRequest):
     try:
         return {"result": service.dp_count(req.values, req.params)}
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        _handle_request_exception(e)
 
 
 @app.post("/v1/privacy/dp/sum", dependencies=[*SECURITY_DEPS, require_permission("privacy:dp")])
@@ -473,7 +490,7 @@ def dp_sum(req: DPRequest):
     try:
         return {"result": service.dp_sum(req.values, req.params)}
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        _handle_request_exception(e)
 
 
 @app.post("/v1/privacy/dp/mean", dependencies=[*SECURITY_DEPS, require_permission("privacy:dp")])
@@ -492,7 +509,7 @@ def dp_mean(req: DPRequest):
     try:
         return {"result": service.dp_mean(req.values, req.params)}
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        _handle_request_exception(e)
 
 
 @app.post("/v1/privacy/dp/histogram", dependencies=[*SECURITY_DEPS, require_permission("privacy:dp")])
@@ -501,7 +518,7 @@ def dp_histogram(req: DPHistogramRequest):
     try:
         return {"result": service.dp_histogram(req.values, req.categories, req.params)}
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        _handle_request_exception(e)
 
 
 @app.post("/v1/privacy/dp/noisy_count", dependencies=[*SECURITY_DEPS, require_permission("privacy:dp")])
@@ -510,7 +527,7 @@ def dp_noisy_count(req: DPNoisyCountRequest):
     try:
         return {"result": service.dp_noisy_count(req.true_count, req.params)}
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        _handle_request_exception(e)
 
 
 @app.post("/v1/privacy/dp/noisy_sum", dependencies=[*SECURITY_DEPS, require_permission("privacy:dp")])
@@ -519,7 +536,7 @@ def dp_noisy_sum(req: DPNoisySumRequest):
     try:
         return {"result": service.dp_noisy_sum(req.true_sum, req.params)}
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        _handle_request_exception(e)
 
 
 @app.post("/v1/privacy/dp/noisy_mean", dependencies=[*SECURITY_DEPS, require_permission("privacy:dp")])
@@ -528,7 +545,7 @@ def dp_noisy_mean(req: DPNoisyMeanRequest):
     try:
         return {"result": service.dp_noisy_mean(req.true_sum, req.true_count, req.params)}
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        _handle_request_exception(e)
 
 
 @app.post("/v1/privacy/dp/noisy_histogram", dependencies=[*SECURITY_DEPS, require_permission("privacy:dp")])
@@ -537,7 +554,7 @@ def dp_noisy_histogram(req: DPNoisyHistogramRequest):
     try:
         return {"result": service.dp_noisy_histogram(req.true_counts, req.params)}
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        _handle_request_exception(e)
 
 
 @app.post("/v1/privacy/dp/aggregate", dependencies=[*SECURITY_DEPS, require_permission("privacy:dp")])
@@ -549,7 +566,7 @@ def dp_aggregate(req: DPAggregateRequest):
         df = pd.DataFrame(req.rows)
         return {"result": service.dp_aggregate(df, req.specs, req.params)}
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        _handle_request_exception(e)
 
 
 @app.post("/v1/privacy/dp/vector_sum", dependencies=[*SECURITY_DEPS, require_permission("privacy:dp")])
@@ -564,7 +581,7 @@ def dp_vector_sum(req: DPVectorSumRequest):
             return {"result": list(res.value), "details": str(res)}
         return {"result": list(res)}
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        _handle_request_exception(e)
 
 
 @app.post("/v1/privacy/dp/vector_mean", dependencies=[*SECURITY_DEPS, require_permission("privacy:dp")])
@@ -579,7 +596,7 @@ def dp_vector_mean(req: DPVectorSumRequest):
             return {"result": list(res.value), "details": str(res)}
         return {"result": list(res)}
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        _handle_request_exception(e)
 
 
 @app.post("/v1/privacy/dp/adaptive_clip", dependencies=[*SECURITY_DEPS, require_permission("privacy:dp")])
@@ -589,7 +606,7 @@ def dp_adaptive_clip(req: DPAdaptiveClipRequest):
         lower, upper = service.dp_adaptive_clip(req.values, req.params)
         return {"clip_lower": lower, "clip_upper": upper}
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        _handle_request_exception(e)
 
 
 @app.post("/v1/privacy/dp/groupby", dependencies=[*SECURITY_DEPS, require_permission("privacy:dp")])
@@ -601,7 +618,7 @@ def dp_groupby(req: DPGroupByRequest):
         df = pd.DataFrame(req.rows)
         return {"result": service.dp_groupby(df, req.group_col, req.target_col, req.agg, req.params)}
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        _handle_request_exception(e)
 
 
 @app.post("/v1/privacy/dp/chunked_count", dependencies=[*SECURITY_DEPS, require_permission("privacy:dp")])
@@ -610,7 +627,7 @@ def dp_chunked_count(req: DPChunkedCountRequest):
     try:
         return {"result": service.dp_chunked_count(req.chunks, req.params)}
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        _handle_request_exception(e)
 
 
 @app.post("/v1/privacy/dp/chunked_sum", dependencies=[*SECURITY_DEPS, require_permission("privacy:dp")])
@@ -619,7 +636,7 @@ def dp_chunked_sum(req: DPChunkedSumRequest):
     try:
         return {"result": service.dp_chunked_sum(req.chunks, req.params)}
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        _handle_request_exception(e)
 
 
 @app.post("/v1/privacy/dp/chunked_mean", dependencies=[*SECURITY_DEPS, require_permission("privacy:dp")])
@@ -628,7 +645,7 @@ def dp_chunked_mean(req: DPChunkedMeanRequest):
     try:
         return {"result": service.dp_chunked_mean(req.chunks, req.params)}
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        _handle_request_exception(e)
 
 
 @app.post("/v1/privacy/dp/chunked_histogram", dependencies=[*SECURITY_DEPS, require_permission("privacy:dp")])
@@ -637,7 +654,7 @@ def dp_chunked_histogram(req: DPChunkedHistogramRequest):
     try:
         return {"result": service.dp_chunked_histogram(req.chunks, req.categories, req.params)}
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        _handle_request_exception(e)
 
 
 
@@ -647,7 +664,7 @@ def ldp_perturb_binary(req: LdpPerturbBinaryRequest):
     try:
         return {"results": service.perturb_binary_batch(req.values, req.epsilon)}
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        _handle_request_exception(e)
 
 
 @app.post("/v1/privacy/ldp/perturb/categorical", dependencies=[*SECURITY_DEPS, require_permission("privacy:dp")])
@@ -656,7 +673,7 @@ def ldp_perturb_categorical(req: LdpPerturbCategoricalRequest):
     try:
         return {"results": service.perturb_categorical_batch(req.values, req.categories, req.epsilon)}
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        _handle_request_exception(e)
 
 
 @app.post("/v1/privacy/ldp/estimate/binary", dependencies=[*SECURITY_DEPS, require_permission("privacy:dp")])
@@ -665,7 +682,7 @@ def ldp_estimate_binary(req: LdpEstimateBinaryRequest):
     try:
         return {"estimated_frequency": service.estimate_binary_frequency(req.reported_values, req.epsilon)}
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        _handle_request_exception(e)
 
 
 @app.post("/v1/privacy/ldp/estimate/categorical", dependencies=[*SECURITY_DEPS, require_permission("privacy:dp")])
@@ -674,7 +691,7 @@ def ldp_estimate_categorical(req: LdpEstimateCategoricalRequest):
     try:
         return {"estimated_histogram": service.estimate_categorical_histogram(req.reported_values, req.categories, req.epsilon)}
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        _handle_request_exception(e)
 
 
 
@@ -704,7 +721,7 @@ def k_anonymize_table(req: KAnonTableRequest):
     try:
         return {"result": service.k_anonymize_table(req.rows, req.qi_cols, req.k, req.max_depth)}
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        _handle_request_exception(e)
 
 
 @app.post("/v1/privacy/k_anonymize/dataframe", dependencies=[*SECURITY_DEPS, require_permission("privacy:kano")])
@@ -717,7 +734,7 @@ def k_anonymize_dataframe(req: KAnonDataFrameRequest):
         result = service.k_anonymize_dataframe(df, req.qi_cols, req.k, req.max_depth)
         return {"result": result.to_dict(orient="records")}
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        _handle_request_exception(e)
 @app.post("/v1/privacy/qol/obfuscate", dependencies=[*SECURITY_DEPS, require_permission("privacy:qol")])
 def qol_obfuscate(req: QolRequest):
     """查询混淆接口。
@@ -751,7 +768,7 @@ def qol_obfuscate_batch(req: QolBatchRequest):
             seed=req.seed,
         )}
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        _handle_request_exception(e)
 
 
 @app.get("/v1/privacy/budget", dependencies=[*SECURITY_DEPS, require_permission("privacy:budget")])
@@ -775,7 +792,10 @@ class RecommendRequest(BaseModel):
 @app.post("/v1/privacy/profile/recommend", dependencies=[*SECURITY_DEPS, require_permission("privacy:profile")])
 def recommend_profile(req: RecommendRequest):
     """根据输入数据自动推荐差分隐私等隐私处理参数并保存。"""
-    rec_service = PrivacyService(profile_path=PROFILE_PATH, namespace=req.namespace)
+    rec_service = _service_cache.get(req.namespace)
+    if rec_service is None:
+        rec_service = PrivacyService(profile_path=PROFILE_PATH, namespace=req.namespace)
+        _service_cache[req.namespace] = rec_service
     recommended = rec_service.recommend_and_save_params(req.values, req.rows, req.qi_cols)
     return {
         "status": "success",
@@ -816,7 +836,7 @@ async def dp_arrow_ipc(
     try:
         from fastapi.responses import Response
         from .privacy.data_adapters import parse_arrow_ipc_bytes, table_to_arrow_ipc_bytes
-        from .privacy.dp import DPResult, AggregationType
+        from .privacy.dp import DPResult, AggregationType, compute_confidence_interval
 
         # Step 1: Read raw Arrow IPC Stream bytes from request body
         body_bytes = await request.body()
@@ -861,27 +881,45 @@ async def dp_arrow_ipc(
                 "Supported: count, sum, mean, vector_sum, vector_mean"
             )
 
+        from .privacy.dp import calibrate_analytic_gaussian
+
         # Step 3: Ensure dp_res is a DPResult (all branches above return DPResult via return_details=True)
         if isinstance(dp_res, (int, float)):
-            # Scalar fallback: should not normally reach here since return_details=True,
-            # but guard against unexpected code paths
+            # Scalar fallback: compute a valid noise scale from the aggregation parameters
+            # rather than reporting a zero-scale (non-DP) CI.
+            if aggregation == AggregationType.COUNT:
+                sensitivity = 1.0
+            elif aggregation in (AggregationType.SUM, AggregationType.MEAN):
+                if clip_lower is None or clip_upper is None:
+                    raise ValueError(f"clip_lower and clip_upper are required for {aggregation}")
+                sensitivity = clip_upper - clip_lower
+            elif aggregation in (AggregationType.VECTOR_SUM, AggregationType.VECTOR_MEAN):
+                sensitivity = resolved_norm
+            else:
+                sensitivity = 1.0
+
+            noise_scale = (
+                sensitivity / epsilon
+                if mechanism == "laplace"
+                else calibrate_analytic_gaussian(epsilon, delta, sensitivity)
+            )
             dp_res = DPResult(
                 value=dp_res,
                 noise_mechanism=mechanism,
-                noise_scale=0.0,
+                noise_scale=noise_scale,
                 epsilon_spent=epsilon,
                 delta_spent=delta,
-                confidence_interval=(float(dp_res), float(dp_res)),
+                confidence_interval=compute_confidence_interval(
+                    float(dp_res), noise_scale, mechanism, 0.95
+                ),
             )
 
         # Step 4: Export DPResult to Arrow Table with embedded DP metadata, then serialize to IPC bytes
         table = dp_res.to_arrow()
         ipc_bytes = table_to_arrow_ipc_bytes(table)
         return Response(content=ipc_bytes, media_type="application/vnd.apache.arrow.stream")
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"{type(e).__name__}: {str(e)}")
+        _handle_request_exception(e)
 
 
 if __name__ == "__main__":

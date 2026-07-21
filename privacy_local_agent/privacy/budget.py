@@ -186,6 +186,8 @@ class BudgetAccountant:
         self._mu = threading.Lock()
         # Thread-local storage for SQLite connection reuse (high-concurrency optimization)
         self._thread_local = threading.local()
+        # Reuse a single BudgetAuditLogger to avoid re-reading env vars and lock creation per spend
+        self._audit_logger = BudgetAuditLogger()
 
         # 解析时间窗口：显式参数 > 环境变量 > 默认 None
         env_window = os.environ.get("PRIVACY_BUDGET_WINDOW_SECONDS")
@@ -317,6 +319,8 @@ class BudgetAccountant:
             with self._mu:
                 conn = self._get_db_conn(db_path)
                 try:
+                    # Ensure a clean transaction state in case a previous error left it rolled back
+                    conn.rollback()
                     # 使用 BEGIN IMMEDIATE 排他性事务锁定数据库
                     conn.execute("BEGIN IMMEDIATE")
                     cursor = conn.execute(
@@ -377,7 +381,7 @@ class BudgetAccountant:
                     self.epsilon_spent = eps_spent
                     self.delta_spent = del_spent
                     self._update_metrics(eps_total, del_total, new_eps, new_delta)
-                    BudgetAuditLogger().log_spend(
+                    self._audit_logger.log_spend(
                         self.namespace, eps_total, del_total, new_eps, new_delta
                     )
                     logger.info(
@@ -415,7 +419,7 @@ class BudgetAccountant:
                 self._update_metrics(
                     self.epsilon_total, self.delta_total, new_eps, new_delta
                 )
-                BudgetAuditLogger().log_spend(
+                self._audit_logger.log_spend(
                     self.namespace, self.epsilon_total, self.delta_total, new_eps, new_delta
                 )
                 logger.info(
