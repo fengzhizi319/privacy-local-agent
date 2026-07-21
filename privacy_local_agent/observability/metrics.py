@@ -133,6 +133,86 @@ CLASSIFICATION_TEMPLATES_TOTAL = Counter(
     ["template"],
 )
 
+# Classification rule engine hit counter (Layer-1).
+CLASSIFICATION_RULE_HITS_TOTAL = Counter(
+    "privacy_classification_rule_hits_total",
+    "Total number of Layer-1 rule engine hits by rule_id.",
+    ["rule_id"],
+)
+
+# Classification NER engine invocations (Layer-2).
+CLASSIFICATION_NER_TOTAL = Counter(
+    "privacy_classification_ner_total",
+    "Total number of Small-NER engine invocations.",
+    ["status"],
+)
+
+# Classification LLM engine invocations (Layer-3).
+CLASSIFICATION_LLM_TOTAL = Counter(
+    "privacy_classification_llm_total",
+    "Total number of LLM classifier invocations.",
+    ["status"],
+)
+
+# Classification field/record/table operation duration histogram.
+CLASSIFICATION_DURATION = Histogram(
+    "privacy_classification_duration_seconds",
+    "Classification operation latency in seconds.",
+    ["operation"],
+    buckets=[0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0],
+)
+
+# Classification composite rule hit counter.
+CLASSIFICATION_COMPOSITE_HITS_TOTAL = Counter(
+    "privacy_classification_composite_hits_total",
+    "Total number of composite rule hits by rule_id.",
+    ["rule_id"],
+)
+
+# NER engine inference duration histogram (Layer-2).
+CLASSIFICATION_NER_DURATION = Histogram(
+    "privacy_classification_ner_duration_seconds",
+    "Small-NER engine inference latency in seconds.",
+    ["engine"],
+    buckets=[0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0],
+)
+
+# LLM engine inference duration histogram (Layer-3).
+CLASSIFICATION_LLM_DURATION = Histogram(
+    "privacy_classification_llm_duration_seconds",
+    "LLM classifier inference latency in seconds.",
+    ["engine"],
+    buckets=[0.1, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0, 120.0],
+)
+
+# Vectorized rule engine batch evaluation counter.
+CLASSIFICATION_VECTORIZED_BATCH_TOTAL = Counter(
+    "privacy_classification_vectorized_batch_total",
+    "Total number of vectorized batch evaluations.",
+    ["field_name"],
+)
+
+# Vectorized rule engine batch size histogram.
+CLASSIFICATION_VECTORIZED_BATCH_SIZE = Histogram(
+    "privacy_classification_vectorized_batch_size",
+    "Number of rows per vectorized batch evaluation.",
+    buckets=[1, 10, 50, 100, 500, 1000, 5000, 10000, 50000],
+)
+
+# Profile parameter resolution counter.
+PROFILE_RESOLVE_TOTAL = Counter(
+    "privacy_profile_resolve_total",
+    "Total number of parameter resolution operations.",
+    ["primitive", "status"],
+)
+
+# Data adapter extraction counter.
+DATA_EXTRACTION_TOTAL = Counter(
+    "privacy_data_extraction_total",
+    "Total number of data extraction operations by source format.",
+    ["format", "status"],
+)
+
 
 def make_asgi_app() -> Any:
     """Return the Prometheus metrics ASGI application to mount on FastAPI."""

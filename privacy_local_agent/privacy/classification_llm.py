@@ -1,34 +1,57 @@
 """基于本地多模态大模型 Qwen2-VL-2B-Instruct 的数据分类分级器。
 
+中文说明：
 支持本地病例图像、手写病例图片以及纯文本数据的智能 OCR 识别与零样本敏感定级推理。
+具备延迟加载、自动降级、多模态输入检测等企业级能力。
+
+English Description:
+Data classification and grading engine based on local multimodal LLM Qwen2-VL-2B-Instruct.
+Supports intelligent OCR recognition and zero-shot sensitivity grading for local medical
+images, handwritten records, and plain text data. Features lazy-loading, graceful
+degradation, and multimodal input detection capabilities.
 """
+
+from __future__ import annotations
 
 import base64
 import json
-import logging
 import os
 import re
+import time
 from io import BytesIO
 from typing import Any, Dict, Optional
 
+from ..observability.logging_config import get_logger
+from ..observability.metrics import (
+    CLASSIFICATION_LLM_DURATION,
+    CLASSIFICATION_LLM_TOTAL,
+)
 from .classification_models import LlmClassifier, SensitivityLevel
 from .classification_utils import redact
 
-logger = logging.getLogger("privacy.classification_llm")
+# Module-level structured logger for LLM classifier events
+logger = get_logger(__name__)
 
 
 
 class Qwen2VLClassifier(LlmClassifier):
-    """基于本地部署 Qwen2-VL-2B-Instruct 的多模态分类器。
+    """基于本地部署 Qwen2-VL-2B-Instruct 的多模态分类器 / Qwen2-VL Multimodal Classifier.
 
+    中文说明：
     支持对图片路径、Base64 图片以及纯文本进行 OCR、理解与敏感等级评估。
+
+    English Description:
+    Supports OCR, understanding, and sensitivity level assessment for image paths,
+    Base64-encoded images, and plain text inputs.
     """
 
     def __init__(self, model_path: Optional[str] = None):
-        """初始化分类器。
+        """初始化分类器 / Initialize Classifier.
 
         Args:
-            model_path: 模型本地路径，如果不指定，默认使用项目根目录下的 .models/Qwen2-VL-2B-Instruct
+            model_path: 模型本地路径 / Local model path.
+                如果不指定，默认使用项目根目录下的 .models/Qwen2-VL-2B-Instruct。
+                (Defaults to .models/Qwen2-VL-2B-Instruct under project root)
         """
         if not model_path:
             current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -42,7 +65,15 @@ class Qwen2VLClassifier(LlmClassifier):
         self._init_error = None
 
     def _lazy_init(self):
-        """延迟初始化模型，避免导入时或非 LLM 运行时占用显存或因缺少依赖报错。"""
+        """延迟初始化模型 / Lazy-Initialize Model.
+
+        中文说明：避免导入时或非 LLM 运行时占用显存或因缺少依赖报错。
+        English Description: Avoids occupying GPU memory at import time or when LLM
+        is not needed, and prevents errors from missing dependencies.
+
+        Raises:
+            FileNotFoundError: 本地模型目录不存在 / Local model directory not found.
+        """
         if self._initialized:
             return
 
@@ -58,7 +89,10 @@ class Qwen2VLClassifier(LlmClassifier):
                     f"本地模型未找到，请先运行下载脚本或下载模型至: {self.model_path}"
                 )
 
-            logger.info(f"正在从本地加载 Qwen2-VL 模型: {self.model_path} ...")
+            logger.info(
+                "qwen2vl_model_loading",
+                extra={"model_path": self.model_path, "device": device},
+            )
 
             # 检测设备，优先使用 GPU CUDA，其次为 macOS ARM 的 MPS 硬件加速，最后为 CPU
             if torch.cuda.is_available():
@@ -80,23 +114,37 @@ class Qwen2VLClassifier(LlmClassifier):
 
             self._processor = AutoProcessor.from_pretrained(self.model_path)
             self._initialized = True
-            logger.info("Qwen2-VL 模型及处理器本地初始化成功。")
+            logger.info(
+                "qwen2vl_model_initialized",
+                extra={"model_path": self.model_path, "device": device, "engine": "qwen2vl"},
+            )
 
         except Exception as e:
             self._init_error = e
-            logger.warning(f"本地大模型初始化失败（自动降级为 NoOp）: {e}")
+            logger.warning(
+                "qwen2vl_model_init_failed",
+                extra={"error": str(e), "model_path": self.model_path},
+            )
             raise e
 
     @property
     def is_ready(self) -> bool:
-        """模型是否已完成初始化且未发生错误。"""
+        """模型是否已完成初始化且未发生错误 / Whether Model Is Ready.
+
+        Returns:
+            模型就绪状态 / Model readiness status.
+        """
         return self._initialized and self._init_error is None
 
     def warmup(self) -> bool:
-        """主动触发模型加载（同步阻塞，建议在后台线程/协程中调用）。
+        """主动触发模型加载 / Proactively Trigger Model Loading.
+
+        中文说明：同步阻塞，建议在后台线程/协程中调用。
+        English Description: Synchronous blocking call; recommended to invoke in a
+        background thread or coroutine.
 
         Returns:
-            是否成功完成初始化。
+            是否成功完成初始化 / Whether initialization succeeded.
         """
         try:
             self._lazy_init()
@@ -105,7 +153,20 @@ class Qwen2VLClassifier(LlmClassifier):
             return False
 
     def _detect_image(self, text: str) -> Optional["Image.Image"]:
-        """检测输入文本是否为本地图片路径或 Base64 编码图片。如果是，加载并返回 PIL.Image 实例。"""
+        """检测输入是否为图片 / Detect if Input is an Image.
+
+        中文说明：检测输入文本是否为本地图片路径或 Base64 编码图片，
+        如果是，加载并返回 PIL.Image 实例。
+
+        English Description: Detects whether input text is a local image path or
+        Base64-encoded image. If so, loads and returns a PIL.Image instance.
+
+        Args:
+            text: 输入文本 / Input text.
+
+        Returns:
+            PIL.Image 实例或 None / PIL.Image instance or None.
+        """
         try:
             from PIL import Image
         except ImportError:
@@ -124,7 +185,10 @@ class Qwen2VLClassifier(LlmClassifier):
                     try:
                         return Image.open(text_stripped)
                     except Exception as e:
-                        logger.warning(f"加载本地图片失败 {redact(text_stripped)}: {e}")
+                        logger.warning(
+                            "llm_image_load_failed",
+                            extra={"path": redact(text_stripped), "error": str(e)},
+                        )
 
         # 2. 检测 Base64 图片 (Data URI)
         # 例如 data:image/png;base64,iVBORw0KGgoAAA...
@@ -135,7 +199,10 @@ class Qwen2VLClassifier(LlmClassifier):
                 image_bytes = base64.b64decode(base64_data)
                 return Image.open(BytesIO(image_bytes))
             except Exception as e:
-                logger.warning(f"解析 Base64 Data URI 图像失败: {e}")
+                logger.warning(
+                    "llm_base64_decode_failed",
+                    extra={"error": str(e)},
+                )
 
 
         # 3. 尝试直接进行 Base64 解码并检测是否为图像 (用于纯 base64 数据)
@@ -151,12 +218,33 @@ class Qwen2VLClassifier(LlmClassifier):
     def classify(
         self, text: str, upstream_level: SensitivityLevel, upstream_confidence: float
     ) -> Optional[Dict[str, Any]]:
-        """使用本地 Qwen2-VL 大模型对输入进行分类。"""
+        """使用本地 Qwen2-VL 大模型对输入进行分类 / Classify Input via Local Qwen2-VL LLM.
+
+        执行步骤 / Execution Steps:
+        1. 延迟初始化模型（若尚未加载）。
+           (Lazy-initialize model if not yet loaded)
+        2. 检测并加载多模态图像输入。
+           (Detect and load multimodal image input)
+        3. 构建 system/user prompt 并调用模型生成。
+           (Build system/user prompt and invoke model generation)
+        4. 解析生成文本中的 JSON 结构。
+           (Parse JSON structure from generated text)
+
+        Args:
+            text: 待分类文本或图片路径 / Text or image path to classify.
+            upstream_level: 上游引擎给出的敏感度等级 / Upstream sensitivity level.
+            upstream_confidence: 上游引擎置信度 / Upstream confidence score.
+
+        Returns:
+            分类结果字典或 None（降级） / Classification result dict or None (degraded).
+        """
         try:
             self._lazy_init()
         except Exception:
+            CLASSIFICATION_LLM_TOTAL.labels(status="init_failed").inc()
             return None  # 初始化失败，直接返回 None，自动触发底层降级逻辑
 
+        start_time = time.monotonic()
         try:
             # 检测并加载多模态图像输入
             image = self._detect_image(text)
@@ -231,16 +319,47 @@ class Qwen2VLClassifier(LlmClassifier):
             )[0]
 
             # 从生成文本中提取 JSON 结构
-            return self._parse_json_result(output_text, upstream_level, upstream_confidence)
+            result = self._parse_json_result(output_text, upstream_level, upstream_confidence)
+
+            duration = time.monotonic() - start_time
+            CLASSIFICATION_LLM_TOTAL.labels(status="success").inc()
+            CLASSIFICATION_LLM_DURATION.labels(engine="qwen2vl").observe(duration)
+            logger.debug(
+                "llm_classify_completed",
+                extra={
+                    "duration_s": round(duration, 4),
+                    "has_result": result is not None,
+                    "is_image": image is not None,
+                },
+            )
+            return result
 
         except Exception as e:
-            logger.error(f"本地大模型推理出错: {e}")
+            duration = time.monotonic() - start_time
+            CLASSIFICATION_LLM_TOTAL.labels(status="error").inc()
+            CLASSIFICATION_LLM_DURATION.labels(engine="qwen2vl").observe(duration)
+            logger.error(
+                "llm_classify_error",
+                extra={"error": str(e), "duration_s": round(duration, 4)},
+            )
             return None
 
     def _parse_json_result(
         self, output_text: str, upstream_level: SensitivityLevel, upstream_confidence: float
     ) -> Optional[Dict[str, Any]]:
-        """使用正则表达式清洗并解析大模型返回的 JSON。"""
+        """解析大模型返回的 JSON / Parse LLM JSON Output.
+
+        中文说明：使用正则表达式清洗并解析大模型返回的 JSON。
+        English Description: Cleans and parses JSON from LLM output using regex.
+
+        Args:
+            output_text: 模型生成的原始文本 / Raw generated text from model.
+            upstream_level: 上游敏感度等级 / Upstream sensitivity level.
+            upstream_confidence: 上游置信度 / Upstream confidence.
+
+        Returns:
+            解析后的结果字典或 None / Parsed result dict or None.
+        """
         # 1. 尝试直接提取 JSON {} 区间内容
         json_match = re.search(r"(\{.*\})", output_text, re.DOTALL)
         if json_match:
@@ -254,7 +373,10 @@ class Qwen2VLClassifier(LlmClassifier):
             if "final_level" in res:
                 return res
         except Exception as e:
-            logger.warning(f"大模型输出 JSON 解析失败，错误: {e}")
+            logger.warning(
+                "llm_json_parse_failed",
+                extra={"error": str(e)},
+            )
 
         # 解析失败则返回 None 触发降级
         return None

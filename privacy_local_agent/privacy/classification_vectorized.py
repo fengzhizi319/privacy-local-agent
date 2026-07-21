@@ -1,14 +1,30 @@
 """基于 pandas 的向量化规则引擎可选插件。
 
+中文说明：
 `VectorizedRuleEngine` 保持与 `DefaultRuleEngine` 相同的规则语义，但针对
 pandas Series/DataFrame 做批量匹配，适合大数据集表分类场景。
-
 未安装 pandas 时，构造本引擎会抛出 ImportError，调用方可据此回退到标量引擎。
+
+English Description:
+Optional pandas-based vectorized rule engine plugin.
+`VectorizedRuleEngine` maintains the same rule semantics as `DefaultRuleEngine` but
+performs batch matching on pandas Series/DataFrame, suitable for large dataset
+table classification scenarios. Raises ImportError when pandas is not installed,
+allowing callers to fall back to the scalar engine.
 """
 
+from __future__ import annotations
+
 import re
+import time
 from typing import Any, Dict, List
 
+from ..observability.logging_config import get_logger
+from ..observability.metrics import (
+    CLASSIFICATION_RULE_HITS_TOTAL,
+    CLASSIFICATION_VECTORIZED_BATCH_SIZE,
+    CLASSIFICATION_VECTORIZED_BATCH_TOTAL,
+)
 from .classification_models import ClassificationParams, SecurityTag, SensitivityLevel
 from .classification_rule_engine import (
     RuleEngine,
@@ -20,35 +36,50 @@ from .classification_rule_engine import (
     _unique_tags,
 )
 
+# Module-level structured logger for vectorized engine events
+logger = get_logger(__name__)
+
 
 class VectorizedRuleEngine(RuleEngine):
-    """向量化规则引擎。
+    """向量化规则引擎 / Vectorized Rule Engine.
 
+    中文说明：
     通过 pandas Series 批量执行 Layer-1 规则，显著降低 Python 行级循环开销。
     同时保留标量 `evaluate` 接口，兼容 `ClassificationAPI.classify_field`。
 
-    Args:
-        无需参数；构造时按需导入 pandas。
+    English Description:
+    Executes Layer-1 rules in batch via pandas Series, significantly reducing
+    Python row-level loop overhead. Also retains the scalar `evaluate` interface
+    for compatibility with `ClassificationAPI.classify_field`.
 
     Raises:
-        ImportError: 当前环境未安装 pandas。
+        ImportError: 当前环境未安装 pandas / pandas is not installed.
     """
 
     def __init__(self) -> None:
+        """初始化向量化引擎 / Initialize Vectorized Engine.
+
+        Raises:
+            ImportError: pandas 未安装 / pandas not installed.
+        """
         import pandas as pd
 
         self._pd = pd
+        logger.info("vectorized_rule_engine_initialized", extra={"backend": "pandas"})
 
     def evaluate(self, field_name: str, value: Any, params: ClassificationParams) -> List[SecurityTag]:
-        """标量兼容接口：单值包装为 Series 后批量评估。
+        """标量兼容接口 / Scalar Compatibility Interface.
+
+        中文说明：单值包装为 Series 后批量评估。
+        English Description: Wraps a single value into a Series for batch evaluation.
 
         Args:
-            field_name: 字段名。
-            value: 单个字段值。
-            params: 分类参数。
+            field_name: 字段名 / Field name.
+            value: 单个字段值 / Single field value.
+            params: 分类参数 / Classification parameters.
 
         Returns:
-            命中的 SecurityTag 列表。
+            命中的 SecurityTag 列表 / List of matched SecurityTags.
         """
         series = self._pd.Series([value], dtype=object).fillna("")
         return self.evaluate_series(field_name, series, params)[0]
@@ -59,19 +90,36 @@ class VectorizedRuleEngine(RuleEngine):
         series: Any,
         params: ClassificationParams,
     ) -> List[List[SecurityTag]]:
-        """对整列批量执行 Layer-1 规则。
+        """对整列批量执行 Layer-1 规则 / Batch Execute Layer-1 Rules on Column.
+
+        执行步骤 / Execution Steps:
+        1. 字段名规则匹配（基因组、金融、PII 等）。
+           (Field-name rule matching: genomic, finance, PII, etc.)
+        2. 值规则匹配（身份证、手机号、ICD-10 等）。
+           (Value-based rule matching: ID card, mobile, ICD-10, etc.)
+        3. 合规模板扩展字段名规则。
+           (Compliance template extended field-name rules)
+        4. 白名单与运营统计字段过滤。
+           (Whitelist and operational statistics field filtering)
+        5. 每行去重并返回。
+           (Deduplicate per row and return)
 
         Args:
-            field_name: 字段名。
-            series: pandas Series，长度 N。
-            params: 分类参数。
+            field_name: 字段名 / Field name.
+            series: pandas Series，长度 N / pandas Series of length N.
+            params: 分类参数 / Classification parameters.
 
         Returns:
             长度为 N 的列表，每个元素对应该行的 SecurityTag 列表。
+            (List of length N, each element is the SecurityTag list for that row)
         """
         pd = self._pd
         n = len(series)
         tags: List[List[SecurityTag]] = [[] for _ in range(n)]
+
+        start_time = time.monotonic()
+        CLASSIFICATION_VECTORIZED_BATCH_TOTAL.labels(field_name=field_name).inc()
+        CLASSIFICATION_VECTORIZED_BATCH_SIZE.observe(n)
 
         norm_name = _normalize_field_name(field_name)
         str_series = series.astype(str).where(series.notna(), "")
@@ -267,7 +315,20 @@ class VectorizedRuleEngine(RuleEngine):
             )
 
         # 每行去重
-        return [_unique_tags(row_tags) for row_tags in tags]
+        result = [_unique_tags(row_tags) for row_tags in tags]
+
+        duration = time.monotonic() - start_time
+        hit_count = sum(1 for row_tags in result if row_tags)
+        logger.debug(
+            "vectorized_batch_evaluated",
+            extra={
+                "field_name": field_name,
+                "batch_size": n,
+                "hit_rows": hit_count,
+                "duration_s": round(duration, 4),
+            },
+        )
+        return result
 
     # ------------------------------------------------------------------
     # 内部工具
@@ -279,7 +340,16 @@ class VectorizedRuleEngine(RuleEngine):
         norm_name: str,
         params: ClassificationParams,
     ) -> None:
-        """根据合规模板扩展字段名规则（应用于所有行）。"""
+        """根据合规模板扩展字段名规则 / Apply Compliance Template Field Rules.
+
+        中文说明：应用于所有行。
+        English Description: Applied to all rows.
+
+        Args:
+            tags: 标签结果矩阵 / Tag result matrix.
+            norm_name: 归一化字段名 / Normalized field name.
+            params: 分类参数 / Classification parameters.
+        """
         template = params.template
         if not template:
             return
@@ -337,7 +407,14 @@ class VectorizedRuleEngine(RuleEngine):
         category: str,
         rule_id: str,
     ) -> None:
-        """为每一行添加同一个规则标签。"""
+        """为每一行添加同一个规则标签 / Add Same Rule Tag to All Rows.
+
+        Args:
+            tags: 标签结果矩阵 / Tag result matrix.
+            level: 敏感度等级 / Sensitivity level.
+            category: 分类类别 / Classification category.
+            rule_id: 规则 ID / Rule ID.
+        """
         tag = SecurityTag(
             level=level,
             category=category,
@@ -346,6 +423,7 @@ class VectorizedRuleEngine(RuleEngine):
         )
         for row_tags in tags:
             row_tags.append(tag)
+        CLASSIFICATION_RULE_HITS_TOTAL.labels(rule_id=rule_id).inc()
 
     def _add_where(
         self,
@@ -355,16 +433,28 @@ class VectorizedRuleEngine(RuleEngine):
         category: str,
         rule_id: str,
     ) -> None:
-        """为 mask 为 True 的行添加规则标签。"""
+        """为 mask 为 True 的行添加规则标签 / Add Rule Tag Where Mask is True.
+
+        Args:
+            tags: 标签结果矩阵 / Tag result matrix.
+            mask: 布尔掩码 / Boolean mask.
+            level: 敏感度等级 / Sensitivity level.
+            category: 分类类别 / Classification category.
+            rule_id: 规则 ID / Rule ID.
+        """
         tag = SecurityTag(
             level=level,
             category=category,
             source_engine="RULE",
             rule_id=rule_id,
         )
+        hit_count = 0
         for i, hit in enumerate(mask):
             if hit:
                 tags[i].append(tag)
+                hit_count += 1
+        if hit_count > 0:
+            CLASSIFICATION_RULE_HITS_TOTAL.labels(rule_id=rule_id).inc(hit_count)
 
 
 __all__ = ["VectorizedRuleEngine"]

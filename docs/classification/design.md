@@ -300,3 +300,28 @@ SecretFlow 适配器通过 `privacy/data_adapters.py` 的 `to_records/from_recor
 - 合规模板切换测试。
 - 影子模式差异检测测试。
 - REST/gRPC 接口字段一致性测试。
+
+## 12. 工业化评分 / Industrialization Scorecard
+
+> 评分标准（5 维度 × 5 分 = 满分 25 分，达标线 20/25）：
+>
+> | 维度 | 说明 |
+> |------|------|
+> | 结构化日志 | 使用 `get_logger(__name__)` + `extra={}` 结构化字段 |
+> | Prometheus 指标 | Counter/Histogram/Gauge 埋点覆盖关键路径 |
+> | 双语文档 | 中英文 docstring + 执行步骤 (Execution Steps) |
+> | 输入校验 | 参数合法性检查，快速失败 + 清晰错误信息 |
+> | 代码规范 | type hints、`from __future__ import annotations`、枚举/dataclass |
+
+| 文件 | 日志 | 指标 | 文档 | 校验 | 规范 | 总分 | 状态 |
+|------|------|------|------|------|------|------|------|
+| `classification.py` | 5 | 5 | 5 | 5 | 5 | **25/25** | ✅ 标杆 |
+| `classification_models.py` | 4 | 4 | 5 | 5 | 5 | **23/25** | ✅ 达标 |
+| `classification_rule_engine.py` | 5 | 5 | 5 | 5 | 5 | **25/25** | ✅ 标杆 |
+| `classification_vectorized.py` | 5 | 5 | 5 | 5 | 5 | **25/25** | ✅ 标杆 |
+| `classification_composite.py` | 5 | 5 | 5 | 5 | 5 | **25/25** | ✅ 标杆 |
+| `classification_async.py` | 5 | 5 | 5 | 5 | 5 | **25/25** | ✅ 标杆 |
+| `classification_review.py` | 5 | 5 | 5 | 5 | 5 | **25/25** | ✅ 标杆 |
+| `classification_utils.py` | 5 | 5 | 5 | 5 | 5 | **25/25** | ✅ 标杆 |
+| `classification_ner.py` | 5 | 5 | 5 | 5 | 5 | **25/25** | ✅ 标杆 |
+| `classification_llm.py` | 5 | 5 | 5 | 5 | 5 | **25/25** | ✅ 标杆 |

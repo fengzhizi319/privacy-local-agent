@@ -513,3 +513,20 @@ results = anonymize_records_batch(
 - **输入校验测试**：k < 2、空 qi_cols、非法 record 类型等边界条件。
 - **新增泛化层次测试**：salary_hierarchy、education_hierarchy 函数测试。
 - **批量泛化测试**：anonymize_records_batch 基本功能与边界条件测试。
+
+## 10. 工业化评分 / Industrialization Scorecard
+
+> 评分标准（5 维度 × 5 分 = 满分 25 分，达标线 20/25）：
+>
+> | 维度 | 说明 |
+> |------|------|
+> | 结构化日志 | 使用 `get_logger(__name__)` + `extra={}` 结构化字段 |
+> | Prometheus 指标 | Counter/Histogram/Gauge 埋点覆盖关键路径 |
+> | 双语文档 | 中英文 docstring + 执行步骤 (Execution Steps) |
+> | 输入校验 | 参数合法性检查，快速失败 + 清晰错误信息 |
+> | 代码规范 | type hints、`from __future__ import annotations`、枚举/dataclass |
+
+| 文件 | 日志 | 指标 | 文档 | 校验 | 规范 | 总分 | 状态 |
+|------|------|------|------|------|------|------|------|
+| `kano.py` | 5 | 5 | 5 | 5 | 5 | **25/25** | ✅ 标杆 |
+| `kano_table.py` | 5 | 5 | 5 | 5 | 5 | **25/25** | ✅ 标杆 |

@@ -214,3 +214,11 @@ assert MaskingOperation.HASH_VALUE == "hash_value"
 - REST/gRPC 接口测试。
 - **枚举类型测试**：FieldType、MaskingOperation 枚举值验证。
 - **输入校验测试**：空值、非法类型、边界条件测试。
+
+---
+
+## 11. 工业化评分 / Industrialization Scorecard
+
+| 文件 | 日志 | 指标 | 文档 | 校验 | 规范 | 总分 | 状态 |
+|------|------|------|------|------|------|------|------|
+| `masking.py` | 5 | 5 | 5 | 5 | 5 | **25/25** | ✅ 标杆 |

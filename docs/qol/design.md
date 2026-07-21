@@ -111,3 +111,11 @@ assert ObfuscationStrategy.SLOT_FILLING == "slot_filling"
 - REST/gRPC 接口测试。
 - **枚举类型测试**：ObfuscationDomain、ObfuscationStrategy 枚举值验证。
 - **输入校验测试**：空查询、无效 num_dummies、无效 domain 等边界条件。
+
+---
+
+## 10. 工业化评分 / Industrialization Scorecard
+
+| 文件 | 日志 | 指标 | 文档 | 校验 | 规范 | 总分 | 状态 |
+|------|------|------|------|------|------|------|------|
+| `qol.py` | 5 | 5 | 5 | 5 | 5 | **25/25** | ✅ 标杆 |

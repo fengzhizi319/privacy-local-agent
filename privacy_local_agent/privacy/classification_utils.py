@@ -1,31 +1,48 @@
-"""分类子系统公共工具与适配器。
+"""分类子系统公共工具与适配器 / Classification Subsystem Utilities and Adapters.
 
+中文说明：
 本模块合并三类能力：
 - Zero-Knowledge 日志/导出安全工具（redact、hash_value、safe_log 等）
 - 合规模板默认参数（JR/T 0197、GB/T 35273、GDPR）
 - SecretFlow 联邦数据结构适配器
+
+English Description:
+This module combines three capabilities:
+- Zero-Knowledge logging/export security utilities (redact, hash_value, safe_log, etc.)
+- Compliance template default parameters (JR/T 0197, GB/T 35273, GDPR)
+- SecretFlow federated data structure adapter
 """
+
+from __future__ import annotations
 
 import hashlib
 import logging
 from typing import Any, Dict, List, Optional
 
+from ..observability.logging_config import get_logger
+
+# Module-level structured logger for classification utils events
+logger = get_logger(__name__)
+
 
 # ---------------------------------------------------------------------------
-# Zero-Knowledge 安全工具
+# Zero-Knowledge 安全工具 / Zero-Knowledge Security Utilities
 # ---------------------------------------------------------------------------
 
 
 def redact(value: Any, max_len: int = 8, placeholder: str = "***") -> str:
-    """对原始值进行脱敏，仅保留前 `max_len` 个字符，其余替换为占位符。
+    """对原始值进行脱敏 / Redact Original Value.
+
+    中文说明：仅保留前 `max_len` 个字符，其余替换为占位符。
+    English Description: Keeps only the first `max_len` characters, replaces the rest with placeholder.
 
     Args:
-        value: 待脱敏的原始值。
-        max_len: 保留的最大明文长度。
-        placeholder: 替换后缀的占位符。
+        value: 待脱敏的原始值 / Original value to redact.
+        max_len: 保留的最大明文长度 / Maximum plaintext length to keep.
+        placeholder: 替换后缀的占位符 / Placeholder for replaced suffix.
 
     Returns:
-        脱敏后的字符串。若 value 为 None 则返回空字符串。
+        脱敏后的字符串 / Redacted string (empty string if value is None).
     """
     if value is None:
         return ""
@@ -36,14 +53,20 @@ def redact(value: Any, max_len: int = 8, placeholder: str = "***") -> str:
 
 
 def hash_value(value: Any, algorithm: str = "sha256") -> str:
-    """对原始值进行哈希，用于复核导出等需要唯一标识但不需要明文的场景。
+    """对原始值进行哈希 / Hash Original Value.
+
+    中文说明：用于复核导出等需要唯一标识但不需要明文的场景。
+    English Description: Used for scenarios requiring unique identification without plaintext.
 
     Args:
-        value: 待哈希的原始值。
-        algorithm: 哈希算法，默认 sha256。
+        value: 待哈希的原始值 / Original value to hash.
+        algorithm: 哈希算法 / Hash algorithm (default: sha256).
 
     Returns:
-        十六进制哈希字符串。
+        十六进制哈希字符串 / Hexadecimal hash string.
+
+    Raises:
+        ValueError: 不支持的哈希算法 / Unsupported hash algorithm.
     """
     if value is None:
         value = ""
@@ -56,16 +79,22 @@ def hash_value(value: Any, algorithm: str = "sha256") -> str:
 
 
 def should_log_value(value: Any) -> bool:
-    """判断一个值是否可以安全地完整打印到日志中。
+    """判断一个值是否可以安全地完整打印到日志中 / Check if Value Can Be Safely Logged.
 
+    中文说明：
     仅允许元数据（字段名、枚举值、数字、短布尔值等）完整打印；
     字符串长度超过 16 或包含疑似敏感内容时不建议完整打印。
 
+    English Description:
+    Only allows metadata (field names, enum values, numbers, short booleans) to be
+    fully logged; strings longer than 16 or containing suspected sensitive content
+    are not recommended for full logging.
+
     Args:
-        value: 待判断的值。
+        value: 待判断的值 / Value to check.
 
     Returns:
-        是否可以安全完整打印。
+        是否可以安全完整打印 / Whether it can be safely fully logged.
     """
     if value is None:
         return True
@@ -84,13 +113,16 @@ def safe_log(
     msg: str,
     **fields: Any,
 ) -> None:
-    """安全地记录日志，自动对所有字符串字段值进行脱敏。
+    """安全地记录日志 / Safely Log with Auto-Redaction.
+
+    中文说明：自动对所有字符串字段值进行脱敏。
+    English Description: Automatically redacts all string field values.
 
     Args:
-        logger: 日志记录器。
-        level: 日志级别，如 logging.INFO。
-        msg: 日志消息模板。
-        **fields: 需要格式化的字段，字符串字段会被自动 redact。
+        logger: 日志记录器 / Logger instance.
+        level: 日志级别 / Log level (e.g. logging.INFO).
+        msg: 日志消息模板 / Log message template.
+        **fields: 需要格式化的字段 / Fields to format (strings auto-redacted).
     """
     safe_fields: Dict[str, Any] = {}
     for key, value in fields.items():
@@ -102,13 +134,16 @@ def safe_log(
 
 
 def mask_record_values(record: Optional[Dict[str, Any]]) -> Dict[str, str]:
-    """将记录中的所有字段值脱敏，用于复核导出等场景。
+    """将记录中的所有字段值脱敏 / Mask All Field Values in Record.
+
+    中文说明：用于复核导出等场景。
+    English Description: Used for review export scenarios.
 
     Args:
-        record: 原始记录。
+        record: 原始记录 / Original record.
 
     Returns:
-        所有值均已脱敏的记录副本。
+        所有值均已脱敏的记录副本 / Record copy with all values redacted.
     """
     if record is None:
         return {}
@@ -116,7 +151,7 @@ def mask_record_values(record: Optional[Dict[str, Any]]) -> Dict[str, str]:
 
 
 # ---------------------------------------------------------------------------
-# 合规模板默认参数
+# 合规模板默认参数 / Compliance Template Default Parameters
 # ---------------------------------------------------------------------------
 
 
@@ -206,13 +241,13 @@ TEMPLATES: Dict[str, Dict[str, Any]] = {
 
 
 def get_template_params(template: Optional[str]) -> Dict[str, Any]:
-    """获取指定合规模板的默认参数。
+    """获取指定合规模板的默认参数 / Get Compliance Template Default Parameters.
 
     Args:
-        template: 模板名称，如 `gbt35273`、`gdpr`、`jrt0197`。
+        template: 模板名称 / Template name (e.g. `gbt35273`, `gdpr`, `jrt0197`).
 
     Returns:
-        模板参数字典；模板不存在时返回空字典。
+        模板参数字典 / Template parameter dictionary (empty dict if template not found).
     """
     if template is None:
         return {}
@@ -220,7 +255,7 @@ def get_template_params(template: Optional[str]) -> Dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# SecretFlow 联邦数据结构适配器
+# SecretFlow 联邦数据结构适配器 / SecretFlow Federated Data Adapter
 # ---------------------------------------------------------------------------
 
 
@@ -233,20 +268,20 @@ def classify_secretflow(
     params: Optional[Dict[str, Any]] = None,
     party: Optional[str] = None,
 ) -> Any:
-    """对 SecretFlow 数据结构进行分类。
+    """对 SecretFlow 数据结构进行分类 / Classify SecretFlow Data Structure.
 
     Args:
-        api: ClassificationAPI 实例。
-        sf_data: SecretFlow DataFrame / HDataFrame / VDataFrame / FedNdarray。
-        params: 请求级分类参数。
-        party: HDataFrame 参与方；单 partition 时可省略。
+        api: ClassificationAPI 实例 / ClassificationAPI instance.
+        sf_data: SecretFlow 数据结构 / SecretFlow data structure.
+        params: 请求级分类参数 / Request-level classification parameters.
+        party: HDataFrame 参与方 / HDataFrame party identifier.
 
     Returns:
-        ClassificationResult，与同步表分类结果结构一致。
+        ClassificationResult / Classification result.
 
     Raises:
-        ImportError: 未安装 secretflow 或 pandas。
-        TypeError: 传入不支持的 SecretFlow 类型。
+        ImportError: 未安装 secretflow 或 pandas / secretflow or pandas not installed.
+        TypeError: 传入不支持的 SecretFlow 类型 / Unsupported SecretFlow type.
     """
     records = to_records(sf_data, party=party)
     return api.classify_table(

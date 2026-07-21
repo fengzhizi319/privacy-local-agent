@@ -1,8 +1,16 @@
-"""Human review store and sample export for classification.
+"""分类复核存储与样本导出 / Classification Review Store and Sample Export.
 
+中文说明：
 提供轻量复核队列：自动收集 `needs_human_review=True` 的字段/记录，
 支持确认/修正等级，并导出 JSONL/CSV 用于模型微调。
+
+English Description:
+Provides a lightweight review queue that automatically collects fields/records with
+`needs_human_review=True`, supports level confirmation/correction, and exports
+JSONL/CSV for model fine-tuning.
 """
+
+from __future__ import annotations
 
 import csv
 import io
@@ -14,24 +22,49 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
+from ..observability.logging_config import get_logger
 from ..observability.metrics import CLASSIFICATION_REVIEW_QUEUE_SIZE
 from .classification_models import ReviewEntry, ReviewStatus, SensitivityLevel
 from .classification_utils import hash_value, redact
 
+# Module-level structured logger for review store events
+logger = get_logger(__name__)
+
 
 class ReviewStore:
-    """复核样本存储。
+    """复核样本存储 / Review Sample Store.
 
+    中文说明：
     支持内存模式与 SQLite 持久化模式（通过 `PRIVACY_REVIEW_DB` 环境变量）。
+
+    English Description:
+    Supports in-memory mode and SQLite persistence mode (via `PRIVACY_REVIEW_DB` env var).
+
+    Attributes:
+        db_path: SQLite 数据库路径 / SQLite database path.
     """
 
     def __init__(self, db_path: Optional[str] = None):
+        """初始化复核存储 / Initialize Review Store.
+
+        Args:
+            db_path: SQLite 数据库路径 / SQLite database path (None for in-memory mode).
+        """
         self.db_path = db_path or os.environ.get("PRIVACY_REVIEW_DB")
         self._mem: Dict[str, ReviewEntry] = {}
         self._lock = threading.Lock()
         if self.db_path:
             self._init_sqlite()
             self._load_sqlite()
+            logger.info(
+                "review_store_initialized",
+                extra={"mode": "sqlite", "db_path": self.db_path},
+            )
+        else:
+            logger.info(
+                "review_store_initialized",
+                extra={"mode": "memory"},
+            )
 
     def _init_sqlite(self) -> None:
         with sqlite3.connect(self.db_path, timeout=10.0) as conn:
@@ -56,14 +89,22 @@ class ReviewStore:
         record_result: Any,
         original_record: Optional[Dict[str, Any]] = None,
     ) -> List[ReviewEntry]:
-        """从记录分类结果中自动提取需要人工复核的字段。
+        """从记录分类结果中自动提取需要人工复核的字段 / Auto-Extract Fields Needing Human Review.
+
+        执行步骤 / Execution Steps:
+        1. 遍历字段分类结果，收集 needs_human_review=True 的字段。
+           (Iterate field results and collect fields with needs_human_review=True)
+        2. 若记录整体需要复核但没有具体字段，创建记录级复核条目。
+           (If record needs review but no specific fields, create record-level review entry)
+        3. 将复核条目存储到内存和 SQLite（若启用）。
+           (Store review entries to memory and SQLite if enabled)
 
         Args:
-            record_result: RecordClassificationResult 实例。
-            original_record: 原始记录字典，用于获取字段值。
+            record_result: RecordClassificationResult 实例 / RecordClassificationResult instance.
+            original_record: 原始记录字典 / Original record dictionary.
 
         Returns:
-            新增复核条目列表。
+            新增复核条目列表 / List of new review entries.
         """
         entries: List[ReviewEntry] = []
         for field_name, field_result in record_result.field_results.items():
@@ -117,19 +158,19 @@ class ReviewStore:
         reviewer: str = "",
         comment: str = "",
     ) -> ReviewEntry:
-        """确认或修正复核条目。
+        """确认或修正复核条目 / Confirm or Correct a Review Entry.
 
         Args:
-            review_id: 复核条目 ID。
-            corrected_level: 修正后的敏感度等级。
-            reviewer: 复核人标识。
-            comment: 复核说明。
+            review_id: 复核条目 ID / Review entry ID.
+            corrected_level: 修正后的敏感度等级 / Corrected sensitivity level.
+            reviewer: 复核人标识 / Reviewer identifier.
+            comment: 复核说明 / Review comment.
 
         Returns:
-            更新后的 ReviewEntry。
+            更新后的 ReviewEntry / Updated ReviewEntry.
 
         Raises:
-            KeyError: 复核条目不存在。
+            KeyError: 复核条目不存在 / Review entry not found.
         """
         with self._lock:
             if review_id not in self._mem:
@@ -148,14 +189,17 @@ class ReviewStore:
             return entry
 
     def export(self, format: str = "jsonl", mask_input: bool = False) -> str:
-        """导出复核样本。
+        """导出复核样本 / Export Review Samples.
 
         Args:
-            format: `jsonl` 或 `csv`。
-            mask_input: 是否对 input 字段脱敏。
+            format: 导出格式 / Export format (`jsonl` or `csv`).
+            mask_input: 是否对 input 字段脱敏 / Whether to mask input field values.
 
         Returns:
-            导出内容字符串。
+            导出内容字符串 / Exported content string.
+
+        Raises:
+            ValueError: 不支持的导出格式 / Unsupported export format.
         """
         with self._lock:
             entries = list(self._mem.values())

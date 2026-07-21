@@ -1,29 +1,57 @@
 """基于 ONNX Runtime 的本地轻量级命名实体识别（Small-NER）引擎。
 
+中文说明：
 提供纯 Python 实现的 BERT Tokenizer 以及高效的 BIO 标记解析器。
+支持 ONNX Runtime 和 ModelScope 两种推理后端，均具备延迟加载与自动降级能力。
+
+English Description:
+Local lightweight Named Entity Recognition (Small-NER) engine based on ONNX Runtime.
+Provides a pure-Python BERT Tokenizer and an efficient BIO tag parser.
+Supports both ONNX Runtime and ModelScope inference backends with lazy-loading
+and graceful degradation capabilities.
 """
 
-import logging
+from __future__ import annotations
+
 import os
+import time
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional, Tuple
 
+from ..observability.logging_config import get_logger
+from ..observability.metrics import (
+    CLASSIFICATION_NER_DURATION,
+    CLASSIFICATION_NER_TOTAL,
+)
 from .classification_models import SmallNerEngine
 
-logger = logging.getLogger("privacy.classification_ner")
+# Module-level structured logger for NER engine events
+logger = get_logger(__name__)
 
 
 class SimpleChineseBertTokenizer:
-    """纯 Python 实现的轻量级中文 BERT 分词器。
+    """纯 Python 实现的轻量级中文 BERT 分词器 / Lightweight Chinese BERT Tokenizer.
 
+    中文说明：
     无任何第三方分词库（如 transformers / tokenizers）依赖，确保毫秒级推理的高效与兼容性。
+
+    English Description:
+    A pure-Python lightweight Chinese BERT tokenizer with no third-party tokenization
+    library dependencies (e.g. transformers / tokenizers), ensuring millisecond-level
+    inference efficiency and compatibility.
     """
 
     def __init__(self, vocab_path: str):
-        """初始化分词器。
+        """初始化分词器 / Initialize Tokenizer.
+
+        执行步骤 / Execution Steps:
+        1. 逐行读取 vocab.txt 构建 token→id 映射。
+           (Read vocab.txt line-by-line to build token→id mapping)
+        2. 缓存特殊 token ID（[UNK], [CLS], [SEP], [PAD]）。
+           (Cache special token IDs)
 
         Args:
-            vocab_path: vocab.txt 词表文件路径。
+            vocab_path: vocab.txt 词表文件路径 / Path to vocab.txt vocabulary file.
         """
         self.vocab: Dict[str, int] = {}
         with open(vocab_path, "r", encoding="utf-8") as f:
@@ -37,10 +65,23 @@ class SimpleChineseBertTokenizer:
         self.pad_id = self.vocab.get("[PAD]", 0)
 
     def tokenize(self, text: str) -> List[str]:
-        """对中文进行单字/字符级切分，对英文字符做大小写折叠后切分。
+        """对中文进行单字/字符级切分 / Tokenize Chinese Text at Character Level.
 
-        中文 BERT 词表通常只包含小写英文字母。为提升对医学缩写（如 HIV、AIDS）
-        的识别稳定性，当大写字母不在词表中时，尝试使用其小写形式。
+        中文说明：
+        对英文字符做大小写折叠后切分。中文 BERT 词表通常只包含小写英文字母，
+        为提升对医学缩写（如 HIV、AIDS）的识别稳定性，当大写字母不在词表中时，
+        尝试使用其小写形式。
+
+        English Description:
+        Performs character-level tokenization for Chinese text with case-folding for
+        English characters. When an uppercase letter is not in the vocabulary, its
+        lowercase form is used to improve recognition of medical abbreviations.
+
+        Args:
+            text: 待分词的文本 / Text to tokenize.
+
+        Returns:
+            token 列表 / List of tokens.
         """
         tokens: List[str] = []
         for char in text:
@@ -55,10 +96,24 @@ class SimpleChineseBertTokenizer:
         return tokens
 
     def encode(self, text: str, max_len: int = 128) -> Tuple[List[int], List[int], List[int]]:
-        """将文本编码为 BERT 输入张量数据结构。
+        """将文本编码为 BERT 输入张量数据结构 / Encode Text to BERT Input Tensors.
+
+        执行步骤 / Execution Steps:
+        1. 添加 [CLS] 和 [SEP] 特殊标记。
+           (Add [CLS] and [SEP] special tokens)
+        2. 将 token 映射为 vocab ID。
+           (Map tokens to vocabulary IDs)
+        3. 生成 attention_mask 和 token_type_ids。
+           (Generate attention_mask and token_type_ids)
+        4. 按 max_len 进行 padding 对齐。
+           (Pad to max_len alignment)
+
+        Args:
+            text: 待编码文本 / Text to encode.
+            max_len: 最大序列长度 / Maximum sequence length.
 
         Returns:
-            (input_ids, attention_mask, token_type_ids) 元组。
+            (input_ids, attention_mask, token_type_ids) 元组 / Tuple of input tensors.
         """
         tokens = ["[CLS]"] + self.tokenize(text)[: max_len - 2] + ["[SEP]"]
         input_ids = [self.vocab.get(t, self.unk_id) for t in tokens]
@@ -76,14 +131,22 @@ class SimpleChineseBertTokenizer:
 
 
 class ONNXSmallNerEngine(SmallNerEngine):
-    """基于 ONNX Runtime 的本地医疗 NER 模型推理引擎。"""
+    """基于 ONNX Runtime 的本地医疗 NER 模型推理引擎 / ONNX Runtime Medical NER Engine.
+
+    中文说明：
+    使用 ONNX Runtime 加载本地 CMeEE 医疗实体识别模型，支持延迟加载与自动降级。
+
+    English Description:
+    Loads a local CMeEE medical entity recognition model via ONNX Runtime,
+    with lazy-loading and graceful degradation support.
+    """
 
     def __init__(self, model_path: Optional[str] = None, vocab_path: Optional[str] = None):
-        """初始化引擎。
+        """初始化 ONNX NER 引擎 / Initialize ONNX NER Engine.
 
         Args:
-            model_path: ONNX 模型文件路径。
-            vocab_path: vocab.txt 词表文件路径。
+            model_path: ONNX 模型文件路径 / Path to ONNX model file.
+            vocab_path: vocab.txt 词表文件路径 / Path to vocab.txt file.
         """
         current_dir = os.path.dirname(os.path.abspath(__file__))
         project_root = os.path.dirname(os.path.dirname(current_dir))
@@ -96,7 +159,15 @@ class ONNXSmallNerEngine(SmallNerEngine):
         self._init_error = None
 
     def _lazy_init(self):
-        """延迟加载模型，保障在未安装 onnxruntime 或文件未就绪时的向下兼容性。"""
+        """延迟加载模型 / Lazy-Load ONNX Model.
+
+        中文说明：保障在未安装 onnxruntime 或文件未就绪时的向下兼容性。
+        English Description: Ensures backward compatibility when onnxruntime is not
+        installed or model files are not yet available.
+
+        Raises:
+            FileNotFoundError: 模型或词表文件不存在 / Model or vocab file not found.
+        """
         if self._initialized:
             return
 
@@ -114,14 +185,32 @@ class ONNXSmallNerEngine(SmallNerEngine):
             self.session = ort.InferenceSession(self.model_path)
             self.tokenizer = SimpleChineseBertTokenizer(self.vocab_path)
             self._initialized = True
-            logger.info("ONNX Small-NER 引擎加载初始化成功。")
+            logger.info(
+                "onnx_ner_engine_initialized",
+                extra={"model_path": self.model_path, "engine": "onnx"},
+            )
         except Exception as e:
             self._init_error = e
-            logger.warning(f"ONNX Small-NER 初始化失败（自动降级为 NoOp 模式）: {e}")
+            logger.warning(
+                "onnx_ner_engine_init_failed",
+                extra={"error": str(e), "model_path": self.model_path},
+            )
             raise e
 
     def _parse_bio_tags(self, tokens: List[str], label_indices: List[int], probs: List[float]) -> List[Dict[str, Any]]:
-        """解析 BIO 序列标注模式，并将相邻的 B- 和 I- 标记合并为完整的命名实体。"""
+        """解析 BIO 序列标注 / Parse BIO Sequence Labels.
+
+        中文说明：将相邻的 B- 和 I- 标记合并为完整的命名实体。
+        English Description: Merges adjacent B- and I- tags into complete named entities.
+
+        Args:
+            tokens: token 序列 / Token sequence.
+            label_indices: 每个 token 的预测标签索引 / Predicted label index per token.
+            probs: 每个 token 的预测概率 / Prediction probability per token.
+
+        Returns:
+            命名实体字典列表 / List of named entity dictionaries.
+        """
         # CMeEE 典型标签的映射
         label_map = {
             1: "B-dis", 2: "I-dis",
@@ -174,19 +263,31 @@ class ONNXSmallNerEngine(SmallNerEngine):
         return entities
 
     def extract(self, text: str) -> List[Dict[str, Any]]:
-        """提取输入文本中的医疗实体。
+        """提取输入文本中的医疗实体 / Extract Medical Entities from Text.
+
+        执行步骤 / Execution Steps:
+        1. 延迟初始化 ONNX 会话（若尚未加载）。
+           (Lazy-initialize ONNX session if not yet loaded)
+        2. 使用 BERT Tokenizer 对文本进行分词编码。
+           (Tokenize and encode text using BERT Tokenizer)
+        3. 执行 ONNX 推理并计算 Softmax 概率。
+           (Run ONNX inference and compute Softmax probabilities)
+        4. 解析 BIO 标签并映射为统一标准规范。
+           (Parse BIO tags and map to unified standard labels)
 
         Args:
-            text: 目标文本片段。
+            text: 目标文本片段 / Target text segment.
 
         Returns:
-            表示命名实体的字典列表。
+            表示命名实体的字典列表 / List of named entity dictionaries.
         """
         try:
             self._lazy_init()
         except Exception:
+            CLASSIFICATION_NER_TOTAL.labels(status="init_failed").inc()
             return []
 
+        start_time = time.monotonic()
         try:
             # 分词编码
             max_len = 128
@@ -229,21 +330,44 @@ class ONNXSmallNerEngine(SmallNerEngine):
                 elif raw_label == "bod":
                     ent["label"] = "BODY_PART"
 
+            duration = time.monotonic() - start_time
+            CLASSIFICATION_NER_TOTAL.labels(status="success").inc()
+            CLASSIFICATION_NER_DURATION.labels(engine="onnx").observe(duration)
+            logger.debug(
+                "onnx_ner_extract_completed",
+                extra={"entity_count": len(entities), "duration_s": round(duration, 4)},
+            )
             return entities
 
         except Exception as e:
-            logger.warning(f"ONNX Small-NER 提取实体过程出错: {e}")
+            duration = time.monotonic() - start_time
+            CLASSIFICATION_NER_TOTAL.labels(status="error").inc()
+            CLASSIFICATION_NER_DURATION.labels(engine="onnx").observe(duration)
+            logger.warning(
+                "onnx_ner_extract_error",
+                extra={"error": str(e), "duration_s": round(duration, 4)},
+            )
             return []
 
 
 class ModelScopeSmallNerEngine(SmallNerEngine):
-    """基于 ModelScope 官方推理管道的本地医疗 NER 引擎。"""
+    """基于 ModelScope 官方推理管道的本地医疗 NER 引擎 / ModelScope Medical NER Engine.
+
+    中文说明：
+    使用达摩院 RaNER 医疗实体识别微调模型，支持延迟加载与自动降级。
+
+    English Description:
+    Uses DAMO Academy RaNER medical entity recognition fine-tuned model via ModelScope
+    pipeline, with lazy-loading and graceful degradation support.
+    """
 
     def __init__(self, model_id: str = "damo/nlp_raner_named-entity-recognition_chinese-base-cmeee"):
-        """初始化引擎。
+        """初始化 ModelScope NER 引擎 / Initialize ModelScope NER Engine.
 
         Args:
-            model_id: ModelScope 上的模型 ID，默认使用达摩院 RaNER 医疗实体识别微调模型。
+            model_id: ModelScope 上的模型 ID / Model ID on ModelScope,
+                默认使用达摩院 RaNER 医疗实体识别微调模型。
+                (Defaults to DAMO Academy RaNER medical NER fine-tuned model)
         """
         self.model_id = model_id
         self.pipeline = None
@@ -251,7 +375,15 @@ class ModelScopeSmallNerEngine(SmallNerEngine):
         self._init_error = None
 
     def _lazy_init(self):
-        """延迟加载，保障未安装 modelscope 或无 PyTorch 时的向下兼容性。"""
+        """延迟加载 ModelScope 管道 / Lazy-Load ModelScope Pipeline.
+
+        中文说明：保障未安装 modelscope 或无 PyTorch 时的向下兼容性。
+        English Description: Ensures backward compatibility when modelscope or
+        PyTorch is not installed.
+
+        Raises:
+            Exception: 初始化失败时抛出 / Raised when initialization fails.
+        """
         if self._initialized:
             return
 
@@ -312,22 +444,48 @@ class ModelScopeSmallNerEngine(SmallNerEngine):
             from modelscope.pipelines import pipeline
             from modelscope.utils.constant import Tasks
 
-            logger.info(f"正在从 ModelScope 初始化 NER 管道: {self.model_id} ...")
+            logger.info(
+                "modelscope_ner_pipeline_loading",
+                extra={"model_id": self.model_id},
+            )
             self.pipeline = pipeline(Tasks.named_entity_recognition, model=self.model_id)
             self._initialized = True
-            logger.info("ModelScope NER 管道加载成功。")
+            logger.info(
+                "modelscope_ner_engine_initialized",
+                extra={"model_id": self.model_id, "engine": "modelscope"},
+            )
         except Exception as e:
             self._init_error = e
-            logger.warning(f"ModelScope NER 管道加载失败（自动降级）: {e}")
+            logger.warning(
+                "modelscope_ner_engine_init_failed",
+                extra={"error": str(e), "model_id": self.model_id},
+            )
             raise e
 
     def extract(self, text: str) -> List[Dict[str, Any]]:
-        """调用 ModelScope pipeline 提取文本中的命名实体。"""
+        """调用 ModelScope pipeline 提取命名实体 / Extract Entities via ModelScope Pipeline.
+
+        执行步骤 / Execution Steps:
+        1. 延迟初始化 ModelScope 管道（若尚未加载）。
+           (Lazy-initialize ModelScope pipeline if not yet loaded)
+        2. 调用 pipeline 获取 NER 输出。
+           (Invoke pipeline to get NER output)
+        3. 映射原始标签至统一标准规范。
+           (Map raw labels to unified standard categories)
+
+        Args:
+            text: 目标文本 / Target text.
+
+        Returns:
+            命名实体字典列表 / List of named entity dictionaries.
+        """
         try:
             self._lazy_init()
         except Exception:
+            CLASSIFICATION_NER_TOTAL.labels(status="init_failed").inc()
             return []
 
+        start_time = time.monotonic()
         try:
             # ModelScope 命名实体识别管道输出示例：
             # {'output': [{'type': 'dis', 'start': 11, 'end': 17, 'span': '急性心肌梗死'}]}
@@ -359,8 +517,21 @@ class ModelScopeSmallNerEngine(SmallNerEngine):
                         "confidence": 1.0,  # 默认置信度归一化为 1.0
                     }
                 )
+
+            duration = time.monotonic() - start_time
+            CLASSIFICATION_NER_TOTAL.labels(status="success").inc()
+            CLASSIFICATION_NER_DURATION.labels(engine="modelscope").observe(duration)
+            logger.debug(
+                "modelscope_ner_extract_completed",
+                extra={"entity_count": len(entities), "duration_s": round(duration, 4)},
+            )
             return entities
         except Exception as e:
-            logger.warning(f"ModelScope NER 提取实体出错: {e}")
+            duration = time.monotonic() - start_time
+            CLASSIFICATION_NER_TOTAL.labels(status="error").inc()
+            CLASSIFICATION_NER_DURATION.labels(engine="modelscope").observe(duration)
+            logger.warning(
+                "modelscope_ner_extract_error",
+                extra={"error": str(e), "duration_s": round(duration, 4)},
+            )
             return []
-
