@@ -1,0 +1,111 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  PYTHON_VERSION: "3.10"
+
+jobs:
+  lint:
+    name: Lint & Type Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements-core.txt
+          pip install ruff mypy
+
+      - name: Ruff lint
+        run: ruff check privacy_local_agent/ tests/
+
+      - name: Ruff format check
+        run: ruff format --check privacy_local_agent/ tests/
+
+      - name: Mypy type check
+        run: mypy privacy_local_agent/ --ignore-missing-imports
+
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.10", "3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements-core.txt
+          pip install pytest pytest-cov hypothesis scipy numpy pandas pyarrow
+
+      - name: Run tests with coverage
+        run: |
+          pytest tests/ -q --tb=short \
+            --cov=privacy_local_agent \
+            --cov-report=xml \
+            --cov-report=term-missing \
+            -m "not integration and not slow"
+
+      - name: Upload coverage
+        if: matrix.python-version == '3.11'
+        uses: codecov/codecov-action@v4
+        with:
+          files: coverage.xml
+          flags: unittests
+          fail_ci_if_error: false
+
+  security:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install pip-audit
+        run: pip install pip-audit
+
+      - name: Run pip-audit
+        run: pip-audit -r requirements-core.txt --ignore-vuln PYSEC-2022-43012 || true
+
+      - name: Ruff security rules
+        run: |
+          pip install ruff
+          ruff check privacy_local_agent/ --select S --ignore S101,S104,S311,S324
+
+  docker:
+    name: Docker Build
+    runs-on: ubuntu-latest
+    needs: [lint, test]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build core image
+        run: docker build --target core -t privacy-local-agent:ci .
+
+      - name: Verify image starts
+        run: |
+          docker run --rm privacy-local-agent:ci python -c \
+            "from privacy_local_agent.service import PrivacyService; print('OK')"
