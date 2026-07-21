@@ -75,11 +75,12 @@ class PrivacyBudgetExhausted(Exception):
 
 
 class BudgetAccountant:
-    """隐私预算会计师（单例/持久化）。
+    """隐私预算会计师。
 
-    每个 namespace 对应一个单例实例，记录该命名空间的总预算与已消耗预算。
-    通过类级锁 _lock 控制实例创建，实例级锁 _mu 控制 spend/remaining 操作，
-    确保多线程环境下的预算扣减是原子的。
+    记录指定 namespace 的总预算与已消耗预算。
+    通过 BudgetRegistry 统一管理实例的生命周期与共享。直接调用构造函数将自动
+    关联至默认全局注册表，保证平滑向后兼容。
+    实例级锁 _mu 控制 spend/remaining 操作，确保多线程环境下的预算扣减是原子的。
     若配置了环境变量 PRIVACY_BUDGET_DB，则将预算存储至 SQLite 中以支持多进程/多节点共享。
 
     可选的时间窗口重置机制：
@@ -88,8 +89,6 @@ class BudgetAccountant:
     - 在 SQLite 模式下，窗口信息也会持久化，以便多实例共享一致的时间边界。
 
     Attributes:
-        _instances: 类级字典，保存各 namespace 对应的 BudgetAccountant 实例。
-        _lock: 类级锁，用于保护 _instances 的并发读写。
         namespace: 当前实例所属的命名空间。
         epsilon_total: epsilon 总预算。
         delta_total: delta 总预算。
@@ -101,7 +100,6 @@ class BudgetAccountant:
     """
 
     _instances: Dict[str, "BudgetAccountant"] = {}
-    _lock = threading.Lock()
 
     def __new__(
         cls,
@@ -110,96 +108,97 @@ class BudgetAccountant:
         delta_total: float = 1e-4,
         window_seconds: Optional[float] = None,
     ):
-        """获取或创建指定命名空间的 BudgetAccountant 单例。
+        """获取或创建指定命名空间的 BudgetAccountant 实例。
 
-        Args:
-            namespace: 命名空间标识，用于隔离不同租户/数据集的预算。
-            epsilon_total: epsilon 总预算，默认 10.0。
-            delta_total: delta 总预算，默认 1e-4。
-            window_seconds: 预算重置窗口（秒）。若未提供，尝试读取环境变量
-                PRIVACY_BUDGET_WINDOW_SECONDS；仍未设置则默认 None（不重置）。
-
-        Returns:
-            该 namespace 对应的 BudgetAccountant 实例。
-
-        Note:
-            首次创建实例时才会使用传入的 epsilon_total/delta_total/window_seconds；
-            若实例已存在，则直接返回已有实例，忽略后续参数。
+        为保证向后兼容，默认委托给全局注册表 default_registry.get_or_create()。
+        若针对相同 namespace 传入了冲突的预算参数，将发出 UserWarning 警告。
         """
-        with cls._lock:
-            if namespace not in cls._instances:
-                instance = super().__new__(cls)
-                instance.namespace = namespace
-                instance.epsilon_total = epsilon_total
-                instance.delta_total = delta_total
-                instance.epsilon_spent = 0.0
-                instance.delta_spent = 0.0
-                instance._mu = threading.Lock()
+        return default_registry.get_or_create(
+            namespace=namespace,
+            epsilon_total=epsilon_total,
+            delta_total=delta_total,
+            window_seconds=window_seconds,
+        )
 
-                # 解析时间窗口：显式参数 > 环境变量 > 默认 None
-                env_window = os.environ.get("PRIVACY_BUDGET_WINDOW_SECONDS")
-                if window_seconds is None and env_window is not None:
-                    try:
-                        window_seconds = float(env_window)
-                    except ValueError:
-                        window_seconds = None
-                instance.window_seconds = window_seconds
-                instance._window_start = time.time()
+    def _init_instance(
+        self,
+        namespace: str,
+        epsilon_total: float = 10.0,
+        delta_total: float = 1e-4,
+        window_seconds: Optional[float] = None,
+    ) -> None:
+        """内部初始化方法（由 BudgetRegistry 创建实例时调用）。"""
+        self.namespace = namespace
+        self.epsilon_total = epsilon_total
+        self.delta_total = delta_total
+        self.epsilon_spent = 0.0
+        self.delta_spent = 0.0
+        self._mu = threading.Lock()
 
-                # 初始化共享数据库，如果设置了持久化路径
-                db_path = os.environ.get("PRIVACY_BUDGET_DB")
-                if db_path:
-                    conn = sqlite3.connect(db_path, timeout=10.0)
-                    try:
-                        with conn:
-                            conn.execute(
-                                "CREATE TABLE IF NOT EXISTS privacy_budgets ("
-                                "namespace TEXT PRIMARY KEY, "
-                                "epsilon_total REAL, "
-                                "delta_total REAL, "
-                                "epsilon_spent REAL, "
-                                "delta_spent REAL, "
-                                "window_seconds REAL, "
-                                "window_start REAL"
-                                ")"
-                            )
-                            # 兼容旧表：若无 window_seconds/window_start 列则添加
-                            cursor = conn.execute(
-                                "PRAGMA table_info(privacy_budgets)"
-                            )
-                            columns = {row[1] for row in cursor.fetchall()}
-                            if "window_seconds" not in columns:
-                                conn.execute(
-                                    "ALTER TABLE privacy_budgets ADD COLUMN window_seconds REAL"
-                                )
-                            if "window_start" not in columns:
-                                conn.execute(
-                                    "ALTER TABLE privacy_budgets ADD COLUMN window_start REAL"
-                                )
-                            # 预插入/更新当前的 budget 信息（如果尚未存在）
-                            conn.execute(
-                                "INSERT OR IGNORE INTO privacy_budgets "
-                                "(namespace, epsilon_total, delta_total, epsilon_spent, delta_spent, window_seconds, window_start) "
-                                "VALUES (?, ?, ?, 0.0, 0.0, ?, ?)",
-                                (
-                                    namespace,
-                                    epsilon_total,
-                                    delta_total,
-                                    instance.window_seconds,
-                                    instance._window_start,
-                                ),
-                            )
-                            # 若记录已存在但缺少窗口信息，补充更新
-                            conn.execute(
-                                "UPDATE privacy_budgets SET window_seconds = COALESCE(window_seconds, ?), "
-                                "window_start = COALESCE(window_start, ?) WHERE namespace = ?",
-                                (instance.window_seconds, instance._window_start, namespace),
-                            )
-                    finally:
-                        conn.close()
+        # 解析时间窗口：显式参数 > 环境变量 > 默认 None
+        env_window = os.environ.get("PRIVACY_BUDGET_WINDOW_SECONDS")
+        if window_seconds is None and env_window is not None:
+            try:
+                window_seconds = float(env_window)
+            except ValueError:
+                window_seconds = None
+        self.window_seconds = window_seconds
+        self._window_start = time.time()
 
-                cls._instances[namespace] = instance
-            return cls._instances[namespace]
+        self._init_db()
+
+    def _init_db(self) -> None:
+        """初始化共享数据库，如果设置了 PRIVACY_BUDGET_DB 持久化路径。"""
+        db_path = os.environ.get("PRIVACY_BUDGET_DB")
+        if db_path:
+            conn = sqlite3.connect(db_path, timeout=10.0)
+            try:
+                with conn:
+                    conn.execute(
+                        "CREATE TABLE IF NOT EXISTS privacy_budgets ("
+                        "namespace TEXT PRIMARY KEY, "
+                        "epsilon_total REAL, "
+                        "delta_total REAL, "
+                        "epsilon_spent REAL, "
+                        "delta_spent REAL, "
+                        "window_seconds REAL, "
+                        "window_start REAL"
+                        ")"
+                    )
+                    # 兼容旧表：若无 window_seconds/window_start 列则添加
+                    cursor = conn.execute(
+                        "PRAGMA table_info(privacy_budgets)"
+                    )
+                    columns = {row[1] for row in cursor.fetchall()}
+                    if "window_seconds" not in columns:
+                        conn.execute(
+                            "ALTER TABLE privacy_budgets ADD COLUMN window_seconds REAL"
+                        )
+                    if "window_start" not in columns:
+                        conn.execute(
+                            "ALTER TABLE privacy_budgets ADD COLUMN window_start REAL"
+                        )
+                    # 预插入/更新当前的 budget 信息（如果尚未存在）
+                    conn.execute(
+                        "INSERT OR IGNORE INTO privacy_budgets "
+                        "(namespace, epsilon_total, delta_total, epsilon_spent, delta_spent, window_seconds, window_start) "
+                        "VALUES (?, ?, ?, 0.0, 0.0, ?, ?)",
+                        (
+                            self.namespace,
+                            self.epsilon_total,
+                            self.delta_total,
+                            self.window_seconds,
+                            self._window_start,
+                        ),
+                    )
+                    # 若记录已存在但缺少窗口信息，补充更新
+                    conn.execute(
+                        "UPDATE privacy_budgets SET window_seconds = COALESCE(window_seconds, ?), "
+                        "window_start = COALESCE(window_start, ?) WHERE namespace = ?",
+                        (self.window_seconds, self._window_start, self.namespace),
+                    )
+            finally:
+                conn.close()
 
     def _now(self) -> float:
         """返回当前 UNIX 时间戳（便于测试时 mock）。"""
@@ -414,6 +413,77 @@ class BudgetAccountant:
                     "epsilon": self.epsilon_total - self.epsilon_spent,
                     "delta": self.delta_total - self.delta_spent,
                 }
+
+
+class BudgetRegistry:
+    """BudgetAccountant 的 namespace 级注册表工厂。
+
+    集中管理预算会计师实例的创建、获取、检查、销毁与测试重置，
+    替代原有的魔术方法单例机制。
+    """
+
+    def __init__(self) -> None:
+        self._instances: Dict[str, BudgetAccountant] = {}
+        self._lock = threading.Lock()
+
+    def get_or_create(
+        self,
+        namespace: str,
+        epsilon_total: float = 10.0,
+        delta_total: float = 1e-4,
+        window_seconds: Optional[float] = None,
+    ) -> BudgetAccountant:
+        """获取已有实例，或在不存在时创建新实例。
+
+        若实例已存在但传入的预算配置与已有配置不一致，会发出警告提示参数忽略。
+        """
+        with self._lock:
+            if namespace in self._instances:
+                existing = self._instances[namespace]
+                if (
+                    existing.epsilon_total != epsilon_total
+                    or existing.delta_total != delta_total
+                ):
+                    import warnings
+
+                    warnings.warn(
+                        f"BudgetAccountant for namespace '{namespace}' already exists with "
+                        f"epsilon_total={existing.epsilon_total}, delta_total={existing.delta_total}. "
+                        f"Passed parameters (epsilon_total={epsilon_total}, delta_total={delta_total}) are ignored!",
+                        stacklevel=2,
+                    )
+                return existing
+
+            accountant = object.__new__(BudgetAccountant)
+            accountant._init_instance(
+                namespace=namespace,
+                epsilon_total=epsilon_total,
+                delta_total=delta_total,
+                window_seconds=window_seconds,
+            )
+            self._instances[namespace] = accountant
+            return accountant
+
+    def get(self, namespace: str) -> Optional[BudgetAccountant]:
+        """获取已有实例，不存在则返回 None。"""
+        with self._lock:
+            return self._instances.get(namespace)
+
+    def remove(self, namespace: str) -> Optional[BudgetAccountant]:
+        """销毁指定 namespace 的实例。"""
+        with self._lock:
+            return self._instances.pop(namespace, None)
+
+    def reset(self) -> None:
+        """清空所有注册的实例（测试隔离与全局重置用）。"""
+        with self._lock:
+            self._instances.clear()
+
+
+# 全局默认注册表单例
+default_registry = BudgetRegistry()
+# 保持向后兼容：将 BudgetAccountant._instances 链接至默认注册表内部字典
+BudgetAccountant._instances = default_registry._instances
 
 
 class RDPAccountant:

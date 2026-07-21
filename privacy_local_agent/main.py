@@ -816,31 +816,31 @@ async def dp_arrow_ipc(
     try:
         from fastapi.responses import Response
         from .privacy.data_adapters import parse_arrow_ipc_bytes, table_to_arrow_ipc_bytes
-        from .privacy.dp import DPResult
+        from .privacy.dp import DPResult, AggregationType
 
         # Step 1: Read raw Arrow IPC Stream bytes from request body
         body_bytes = await request.body()
         arr = parse_arrow_ipc_bytes(body_bytes, column=column)
 
         # Step 2: Dispatch to the corresponding DPApi method based on aggregation type
-        if aggregation == "count":
+        if aggregation == AggregationType.COUNT:
             dp_res = service.dp_api.count(
                 arr, epsilon=epsilon, delta=delta, mechanism=mechanism,
                 return_details=True,
             )
-        elif aggregation == "sum":
+        elif aggregation == AggregationType.SUM:
             dp_res = service.dp_api.sum(
                 arr, epsilon=epsilon, delta=delta, mechanism=mechanism,
                 clip_lower=clip_lower, clip_upper=clip_upper,
                 return_details=True,
             )
-        elif aggregation == "mean":
+        elif aggregation == AggregationType.MEAN:
             dp_res = service.dp_api.mean(
                 arr, epsilon=epsilon, delta=delta, mechanism=mechanism,
                 clip_lower=clip_lower, clip_upper=clip_upper,
                 return_details=True,
             )
-        elif aggregation == "vector_sum":
+        elif aggregation == AggregationType.VECTOR_SUM:
             # max_norm explicitly provided takes priority; fall back to clip_upper for backward compatibility
             resolved_norm = max_norm if max_norm is not None else (clip_upper or 1.0)
             dp_res = service.dp_api.vector_sum(
@@ -848,7 +848,7 @@ async def dp_arrow_ipc(
                 epsilon=epsilon, delta=delta, mechanism=mechanism,
                 return_details=True,
             )
-        elif aggregation == "vector_mean":
+        elif aggregation == AggregationType.VECTOR_MEAN:
             resolved_norm = max_norm if max_norm is not None else (clip_upper or 1.0)
             dp_res = service.dp_api.vector_mean(
                 arr, max_norm=resolved_norm,

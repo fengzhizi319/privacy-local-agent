@@ -26,15 +26,43 @@ import secrets
 import statistics
 import warnings
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Union
 import numpy as np
 
 from ..observability.metrics import DP_QUERIES_TOTAL
-from .budget import BudgetAccountant, PrivacyBudgetExhausted
+from .budget import BudgetAccountant, BudgetRegistry, PrivacyBudgetExhausted, default_registry
 from .data_adapters import _is_sparse_matrix, _to_2d_numpy_array, extract_chunks, extract_values
 
 
+class Mechanism(str, Enum):
+    """差分隐私噪声机制枚举 / DP Noise Mechanism Enum.
+
+    继承 str 保证与字符串的向后兼容性：Mechanism.LAPLACE == "laplace" 为 True。
+    IDE 自动补全 + 静态类型检查，避免裸字符串拼写错误。
+    """
+
+    LAPLACE = "laplace"
+    GAUSSIAN = "gaussian"
+
+
+class AggregationType(str, Enum):
+    """差分隐私聚合类型枚举 / DP Aggregation Type Enum.
+
+    继承 str 保证与字符串的向后兼容性：AggregationType.COUNT == "count" 为 True。
+    IDE 自动补全 + 静态类型检查，避免裸字符串拼写错误。
+    """
+
+    COUNT = "count"
+    SUM = "sum"
+    MEAN = "mean"
+    HISTOGRAM = "histogram"
+    VECTOR_SUM = "vector_sum"
+    VECTOR_MEAN = "vector_mean"
+
+
 @dataclass
+# 分布式无噪流式累加器，用于 MapReduce 场景下各 Worker 节点局部聚合后在 Master 节点合并并统一注入 DP 噪声
 class Accumulator:
     """分布式无噪流式累加器 / Distributed Noise-Free Streaming Accumulator.
 
@@ -65,6 +93,7 @@ class Accumulator:
     sensitivity: float = 1.0
 
     def __add__(self, other: "Accumulator") -> "Accumulator":
+        # 合并两个 Accumulator 的局部统计量（count/sum 相加，histogram 合并，sensitivity 取最大值）
         """合并两个 Accumulator 对象的局部统计量（加法结合律）/ Combine two Accumulators (Additive Law)."""
         # Reject non-Accumulator operands to preserve type safety
         if not isinstance(other, Accumulator):
@@ -82,6 +111,7 @@ class Accumulator:
         )
 
     def serialize(self) -> bytes:
+        # 将无噪累加器状态序列化为 JSON 编码的 UTF-8 字节串，用于跨网络传输
         """将无噪累加器序列化为 JSON 编码的 UTF-8 字节串 / Serialize noise-free accumulator to JSON bytes."""
         import json
 
@@ -97,6 +127,7 @@ class Accumulator:
 
     @classmethod
     def deserialize(cls, b: bytes) -> "Accumulator":
+        # 从 UTF-8 字节串反序列化重建 Accumulator 实例，用于 Master 节点接收 Worker 数据
         """从 UTF-8 字节串反序列化重建 Accumulator 实例 / Deserialize bytes back to Accumulator."""
         import json
 
@@ -114,6 +145,7 @@ class Accumulator:
 
 
 @dataclass
+# 差分隐私计算结果的结构化包装，包含带噪值、噪声机制、预算消耗和置信区间等元数据
 class DPResult:
     """差分隐私计算结果及结构化元数据包装 / Differential Privacy Result Dataclass.
 
@@ -134,6 +166,7 @@ class DPResult:
     confidence_interval: Union[tuple[float, float], list[tuple[float, float]], Dict[Any, tuple[float, float]]]
 
     def to_arrow(self):
+        # 将 DPResult 转换为附带 DP 隐私 Metadata 的 PyArrow Table，支持零拷贝列式传输
         """将 DPResult 包装转换为附带 DP 隐私 Metadata 的 PyArrow Table / Export to PyArrow Table with Embedded DP Metadata.
 
         执行步骤 / Execution Steps:
@@ -201,6 +234,7 @@ class DPResult:
         return table.replace_schema_metadata(merged_meta)
 
 
+# User-Level DP 贡献限定：按 user_id 下采样，每个用户最多保留 max_contributions 条记录以控制敏感度
 def _bound_contributions(arr: np.ndarray, user_ids: Sequence[Any], max_contributions: int) -> np.ndarray:
     """User-Level DP 贡献限定：按 user_id 对数据进行下采样限制 / User-Level DP Contribution Bounding.
 
@@ -237,6 +271,7 @@ def _bound_contributions(arr: np.ndarray, user_ids: Sequence[Any], max_contribut
     return arr[indices]
 
 
+# 根据噪声机制（Laplace/Gaussian）和置信水平计算双边置信区间
 def compute_confidence_interval(
     val: float, noise_scale: float, mechanism: str, confidence_level: float = 0.95
 ) -> tuple[float, float]:
@@ -259,7 +294,7 @@ def compute_confidence_interval(
         return (val, val)
     # Clamp alpha to avoid log(0); alpha = 1 - confidence_level (e.g. 0.05 for 95% CI)
     alpha = max(1e-12, 1.0 - confidence_level)
-    if mechanism == "laplace":
+    if mechanism == Mechanism.LAPLACE:
         # Laplace tail bound: Margin = -b * ln(alpha), where b is the noise scale parameter
         margin = -noise_scale * math.log(alpha)
     else:
@@ -271,6 +306,7 @@ def compute_confidence_interval(
     return (val - margin, val + margin)
 
 
+# 对带噪 DP 结果应用后处理（非负截断和/或整数取整），不消耗额外隐私预算
 def _apply_post_processing(
     val: Any, round_int: bool = False, clip_non_negative: bool = False
 ) -> Any:
@@ -311,6 +347,7 @@ def _apply_post_processing(
     return val
 
 
+# 使用 Balle & Wang (ICML'18) 解析高斯机制，通过二分查找校准满足 (eps,delta)-DP 的高斯噪声标准差 sigma
 def calibrate_analytic_gaussian(epsilon: float, delta: float, sensitivity: float, tol: float = 1e-12) -> float:
     """使用 Balle & Wang (ICML'18) 提出的解析高斯机制计算噪声的标准差 sigma。
 
@@ -389,6 +426,7 @@ def calibrate_analytic_gaussian(epsilon: float, delta: float, sensitivity: float
     return alpha * sensitivity / math.sqrt(2.0 * epsilon)
 
 
+# 安全随机数生成器：生产环境使用密码学安全 RNG（不可预测），测试时支持确定性 PRNG 模式
 class SecureRandom(random.Random):
     """一个安全的随机数生成器。
 
@@ -398,12 +436,13 @@ class SecureRandom(random.Random):
     """
 
     def __init__(self):
+        # 初始化 SecureRandom：默认使用 OS 熵源的密码学安全 RNG
         super().__init__()
-        # Cryptographically secure RNG backed by OS entropy source (e.g. /dev/urandom)
         self._system_rng = secrets.SystemRandom()
         # Flag: False → use system RNG (production); True → use deterministic PRNG (testing)
         self._seeded = False
 
+    # 设置随机种子：提供种子时切换到确定性 PRNG 模式，否则恢复密码学安全模式
     def seed(self, a=None, version=2):
         # If a seed is provided, switch to deterministic mode for reproducible tests
         if a is not None:
@@ -413,6 +452,7 @@ class SecureRandom(random.Random):
             # Reset to cryptographically secure mode
             self._seeded = False
 
+    # 生成 [0,1) 随机浮点：确定性模式用 Mersenne Twister，生产模式用 OS 安全 RNG
     def random(self) -> float:
         # In deterministic mode, use the base class Mersenne Twister PRNG
         if self._seeded:
@@ -420,6 +460,7 @@ class SecureRandom(random.Random):
         # In production mode, delegate to OS-backed secure RNG
         return self._system_rng.random()
 
+    # 生成高斯分布随机值：确定性模式用基类实现，生产模式用密码学安全实现
     def gauss(self, mu: float, sigma: float) -> float:
         # Deterministic Gaussian sampling for reproducible unit tests
         if self._seeded:
@@ -428,6 +469,7 @@ class SecureRandom(random.Random):
         return self._system_rng.gauss(mu, sigma)
 
 
+# 差分隐私计算核心接口：封装 Laplace/Gaussian 噪声采样与预算扣减，提供 count/sum/mean/histogram 等聚合方法
 class DPApi:
     """差分隐私计算接口。
 
@@ -438,15 +480,23 @@ class DPApi:
         rng: 私有随机数生成器，用于噪声采样。
     """
 
-    def __init__(self, namespace: str = "default", random_state: Optional[int] = None):
+    def __init__(
+        self,
+        namespace: str = "default",
+        random_state: Optional[int] = None,
+        registry: Optional[BudgetRegistry] = None,
+    ):
+        # 初始化 DPApi：创建关联 namespace 的预算账户和安全随机数生成器
         """初始化 DPApi。
 
         Args:
             namespace: 命名空间，用于关联隐私预算账户。
             random_state: 可选随机种子，用于可复现测试。与旧参数 ``seed`` 等价。
+            registry: 可选的 BudgetRegistry 注册表，未提供时使用全局 default_registry。
         """
+        self.registry = registry or default_registry
         # Create a BudgetAccountant tied to the given namespace for (epsilon, delta) tracking
-        self.budget = BudgetAccountant(namespace)
+        self.budget = self.registry.get_or_create(namespace)
         # Create a SecureRandom instance (cryptographic RNG by default)
         self.rng = SecureRandom()
         # If a seed is provided, switch to deterministic PRNG mode for reproducibility
@@ -455,11 +505,13 @@ class DPApi:
 
     @classmethod
     def from_seed(cls, namespace: str = "default", seed: Optional[int] = None):
+        # 兼容旧接口的工厂方法：通过 seed 创建 DPApi 实例
         """兼容旧构造方式：通过 seed 创建 DPApi 实例。"""
         # Delegate to __init__ with random_state parameter
         return cls(namespace=namespace, random_state=seed)
 
     def _sample_laplace(self, scale: float) -> float:
+        # 使用逆变换采样从 Laplace(0, scale) 分布中采样一个随机值
         """从拉普拉斯分布 Laplace(0, scale) 中采样一个随机值。
 
         使用逆变换采样（inverse transform sampling）。
@@ -472,11 +524,13 @@ class DPApi:
         return -scale * sign * math.log(1 - 2 * abs(u))
 
     def _sample_gaussian(self, sigma: float) -> float:
+        # 从 N(0, sigma^2) 高斯分布中采样一个随机值
         """从高斯分布 N(0, sigma^2) 中采样一个随机值。"""
         # Use the underlying RNG's Gaussian sampler (Box-Muller or system RNG)
         return self.rng.gauss(0.0, sigma)
 
     def _sample_discrete_laplace(self, scale: float) -> int:
+        # 在整数格 Z 上采样 Discrete Laplace（Two-sided Geometric）随机数
         """采样 Discrete Laplace (Two-sided Geometric) 随机数在整数格 ℤ 上。"""
         # Zero or negative scale => degenerate distribution at 0
         if scale <= 0:
@@ -494,6 +548,7 @@ class DPApi:
 
     @staticmethod
     def _clip_values(values: np.ndarray, lower: float, upper: float) -> np.ndarray:
+        # 向量化截断输入值到 [lower, upper] 区间，使用 NumPy 加速大规模数据处理
         """对输入值做截断，将其限制在 [lower, upper] 区间内。
 
         使用 NumPy 向量化 ``np.clip`` 以提升大规模数据处理效率。
@@ -513,6 +568,7 @@ class DPApi:
         clip_upper: Optional[float],
         mechanism: str,
     ) -> tuple[float, float]:
+        # 解析 clip 上下界：Gaussian 必须显式提供，Laplace 允许数据推断（带警告）
         """解析并返回 clip 上下界。
 
         Gaussian 机制必须提供显式 clip 区间；Laplace 在未提供时允许使用数据推断
@@ -525,7 +581,7 @@ class DPApi:
             return float(clip_lower), float(clip_upper)
 
         # Gaussian mechanism requires explicit clip bounds (no data-dependent inference)
-        if mechanism == "gaussian":
+        if mechanism == Mechanism.GAUSSIAN:
             raise ValueError(
                 "clip_lower and clip_upper are required for Gaussian mechanism"
             )
@@ -545,22 +601,30 @@ class DPApi:
         return lower, upper
 
     def _validate_mechanism(self, mechanism: str, delta: float) -> str:
-        """校验 mechanism 与 delta 参数，返回规范化后的 mechanism 名称。"""
+        # 校验 mechanism 名称和 delta 兼容性，返回规范化的 mechanism 字符串（.value）
+        """校验 mechanism 与 delta 参数，返回规范化后的 mechanism 字符串。
+
+        内部使用 Mechanism 枚举做校验，返回 .value 保证下游兼容性（Prometheus 标签、序列化等）。
+        """
         # Normalize mechanism string to lowercase for case-insensitive comparison
         mechanism = mechanism.lower()
-        if mechanism not in ("laplace", "gaussian"):
-            raise ValueError("mechanism must be 'laplace' or 'gaussian'")
-        # Gaussian mechanism requires strictly positive delta for finite sigma calibration
-        if mechanism == "gaussian" and delta <= 0:
-            raise ValueError("delta must be positive for Gaussian mechanism")
-        return mechanism
+        # Map to Mechanism enum for validation; return .value (plain str) for downstream compatibility
+        if mechanism == Mechanism.LAPLACE:
+            return Mechanism.LAPLACE.value
+        if mechanism == Mechanism.GAUSSIAN:
+            # Gaussian mechanism requires strictly positive delta for finite sigma calibration
+            if delta <= 0:
+                raise ValueError("delta must be positive for Gaussian mechanism")
+            return Mechanism.GAUSSIAN.value
+        raise ValueError(f"mechanism must be 'laplace' or 'gaussian', got '{mechanism}'")
 
     def _sample_count_noise(self, epsilon: float, delta: float, mechanism: str) -> float:
+        # 采样 count/histogram 所需的 DP 噪声（L1/L2 敏感度均为 1）
         """采样 count / histogram bin 所需的 DP 噪声。
 
         count 与直方图分桶的 L1 敏感度为 1（Laplace）或 L2 敏感度为 1（Gaussian）。
         """
-        if mechanism == "laplace":
+        if mechanism == Mechanism.LAPLACE:
             # Laplace scale b = sensitivity/epsilon = 1/epsilon for count (L1 sens=1)
             return self._sample_laplace(1.0 / epsilon)
         # Analytic Gaussian calibration: sigma = alpha(eps,delta) * sens / sqrt(2*eps), sens=1
@@ -570,11 +634,12 @@ class DPApi:
     def _sample_sum_noise(
         self, sensitivity: float, epsilon: float, delta: float, mechanism: str
     ) -> float:
+        # 采样 sum 所需的 DP 噪声，敏感度由调用方提供的 sensitivity 参数决定
         """采样 sum 所需的 DP 噪声。
 
         sum 的敏感度由调用方提供的 sensitivity 决定。
         """
-        if mechanism == "laplace":
+        if mechanism == Mechanism.LAPLACE:
             # Laplace scale b = sensitivity / epsilon for bounded sum
             scale = sensitivity / epsilon if epsilon > 0 else 0.0
             return self._sample_laplace(scale)
@@ -601,6 +666,7 @@ class DPApi:
         max_contributions: int = 1,
         discrete: bool = False,
     ) -> Union[float, DPResult]:
+        # 执行差分隐私计数查询：提取数据 → 扣减预算 → 计算真实计数 → 注入 DP 噪声 → 后处理
         """差分隐私计数查询 / Differentially Private Count Query.
 
         执行步骤 / Execution Steps:
@@ -674,7 +740,7 @@ class DPApi:
         DP_QUERIES_TOTAL.labels(mechanism=mechanism, aggregation="count").inc()
 
         # Step 6: Sample DP noise calibrated to the sensitivity
-        if discrete and mechanism == "laplace":
+        if discrete and mechanism == Mechanism.LAPLACE:
             # Discrete Laplace on integer lattice Z for exact integer output
             scale = sensitivity / epsilon if epsilon > 0 else 0.0
             noise = float(self._sample_discrete_laplace(scale))
@@ -691,7 +757,7 @@ class DPApi:
         # Compute the noise distribution scale parameter for confidence interval reporting
         noise_scale = (
             (sensitivity / epsilon)
-            if mechanism == "laplace"
+            if mechanism == Mechanism.LAPLACE
             else calibrate_analytic_gaussian(epsilon, delta, sensitivity)
         )
         # Step 8: If return_details, compute confidence interval and wrap in DPResult
@@ -727,6 +793,7 @@ class DPApi:
         user_ids: Optional[Sequence[Any]] = None,
         max_contributions: int = 1,
     ) -> Union[float, DPResult]:
+        # 执行差分隐私求和查询：提取数据 → clip 截断 → 扣减预算 → 注入 calibrated 噪声
         """差分隐私求和查询 / Differentially Private Sum Query.
 
         执行步骤 / Execution Steps:
@@ -815,7 +882,7 @@ class DPApi:
         # Compute noise scale parameter for confidence interval reporting
         noise_scale = (
             (sensitivity / epsilon)
-            if (mechanism == "laplace" and epsilon > 0)
+            if (mechanism == Mechanism.LAPLACE and epsilon > 0)
             else calibrate_analytic_gaussian(epsilon, delta, sensitivity)
         )
         # Step 6: If return_details, compute CI and wrap in DPResult
@@ -849,6 +916,7 @@ class DPApi:
         return_details: bool = False,
         confidence_level: float = 0.95,
     ) -> Union[float, DPResult]:
+        # 执行差分隐私均值查询：组合定理拆分预算，分别计算 noisy_count 和 noisy_sum 后求比值
         """差分隐私均值查询。
 
         执行步骤：
@@ -943,15 +1011,15 @@ class DPApi:
         # Step 7: Delta method variance estimation for ratio estimator
         if return_details:
             # Variance of sum noise: Var(Laplace) = 2b^2, Var(Gaussian) = sigma^2
-            var_sum = (2.0 * sum_scale**2) if mechanism == "laplace" else (sum_scale**2)
+            var_sum = (2.0 * sum_scale**2) if mechanism == Mechanism.LAPLACE else (sum_scale**2)
             # Variance of count noise
-            var_count = (2.0 * count_scale**2) if mechanism == "laplace" else (count_scale**2)
+            var_count = (2.0 * count_scale**2) if mechanism == Mechanism.LAPLACE else (count_scale**2)
             # Delta method: Var(S/C) ~ Var(S)/C^2 + (S^2 * Var(C))/C^4
             var_mean = (var_sum / (noisy_count**2)) + ((noisy_sum**2 * var_count) / (noisy_count**4))
             # Standard deviation of the mean estimate
             std_mean = math.sqrt(max(0.0, var_mean))
             # Effective scale: divide by sqrt(2) for Laplace to match Gaussian equivalent
-            eff_scale = std_mean / math.sqrt(2.0) if mechanism == "laplace" else std_mean
+            eff_scale = std_mean / math.sqrt(2.0) if mechanism == Mechanism.LAPLACE else std_mean
 
             # Step 8: Compute confidence interval and package DPResult
             ci = compute_confidence_interval(
@@ -978,6 +1046,7 @@ class DPApi:
         return_details: bool = False,
         confidence_level: float = 0.95,
     ) -> Union[np.ndarray, DPResult]:
+        # 多列/2D 矩阵批量 DP 计数：按列独立加噪，预算按组合定理乘以列数
         """多列 / 2D 矩阵批量差分隐私计数 (按列 axis=0 计算)。
 
         执行步骤：
@@ -1017,7 +1086,7 @@ class DPApi:
         # Compute noise scale for confidence interval reporting
         noise_scale = (
             1.0 / epsilon
-            if mechanism == "laplace"
+            if mechanism == Mechanism.LAPLACE
             else calibrate_analytic_gaussian(epsilon, delta, 1.0)
         )
         # Step 3: Sample independent noise for each column
@@ -1062,6 +1131,7 @@ class DPApi:
         return_details: bool = False,
         confidence_level: float = 0.95,
     ) -> Union[np.ndarray, DPResult]:
+        # 多列/2D 矩阵批量 DP 求和：每列独立 clip 并以各自敏感度加噪
         """多列 / 2D 矩阵批量差分隐私求和 (按列 axis=0 计算)。
 
         执行步骤：
@@ -1140,7 +1210,7 @@ class DPApi:
         # Compute per-column noise scale for confidence interval reporting
         noise_scales = [
             (sensitivities[i] / epsilon)
-            if (mechanism == "laplace" and epsilon > 0)
+            if (mechanism == Mechanism.LAPLACE and epsilon > 0)
             else calibrate_analytic_gaussian(epsilon, delta, sensitivities[i])
             for i in range(num_cols)
         ]
@@ -1177,6 +1247,7 @@ class DPApi:
         return_details: bool = False,
         confidence_level: float = 0.95,
     ) -> Union[Dict[Any, float], DPResult]:
+        # DP 直方图计数：利用互斥分类的联合敏感度为 1，所有 Bin 共享一次预算
         """差分隐私直方图计数（基于联合敏感度为 1）。
 
         执行步骤：
@@ -1224,7 +1295,7 @@ class DPApi:
         # Compute noise scale for confidence interval reporting
         noise_scale = (
             1.0 / epsilon
-            if mechanism == "laplace"
+            if mechanism == Mechanism.LAPLACE
             else calibrate_analytic_gaussian(epsilon, delta, 1.0)
         )
         # Step 4: Inject independent DP noise into each bin
@@ -1268,6 +1339,7 @@ class DPApi:
         return_details: bool = False,
         confidence_level: float = 0.95,
     ) -> Union[float, DPResult]:
+        # 对已聚合好的预计算计数直接注入 DP 噪声（用于分布式/流式场景）
         """对已经聚合好的计数结果直接注入 DP 噪声。"""
         # Validate mechanism and delta compatibility
         mechanism = self._validate_mechanism(mechanism, delta)
@@ -1286,7 +1358,7 @@ class DPApi:
         # Compute noise scale for confidence interval reporting
         noise_scale = (
             1.0 / epsilon
-            if mechanism == "laplace"
+            if mechanism == Mechanism.LAPLACE
             else calibrate_analytic_gaussian(epsilon, delta, 1.0)
         )
         # If return_details, compute CI and wrap in DPResult
@@ -1316,6 +1388,7 @@ class DPApi:
         return_details: bool = False,
         confidence_level: float = 0.95,
     ) -> Union[float, DPResult]:
+        # 对已聚合好的预计算求和直接注入 DP 噪声（用于分布式/流式场景）
         """对已经聚合好的求和结果直接注入 DP 噪声。"""
         # Validate mechanism and delta compatibility
         mechanism = self._validate_mechanism(mechanism, delta)
@@ -1337,7 +1410,7 @@ class DPApi:
         # Compute noise scale for confidence interval reporting
         noise_scale = (
             (sensitivity / epsilon)
-            if (mechanism == "laplace" and epsilon > 0)
+            if (mechanism == Mechanism.LAPLACE and epsilon > 0)
             else calibrate_analytic_gaussian(epsilon, delta, sensitivity)
         )
         # If return_details, compute CI and wrap in DPResult
@@ -1369,6 +1442,7 @@ class DPApi:
         return_details: bool = False,
         confidence_level: float = 0.95,
     ) -> Union[float, DPResult]:
+        # 对已聚合好的 sum/count 分别加噪后计算比值均值（Delta 方法估计方差）
         """对已经聚合好的 sum/count 分别注入 DP 噪声后得到均值。"""
         # Validate mechanism and delta compatibility
         mechanism = self._validate_mechanism(mechanism, delta)
@@ -1428,15 +1502,15 @@ class DPApi:
         # Delta method variance estimation for ratio estimator
         if return_details:
             # Variance of sum noise: Var(Laplace) = 2b^2, Var(Gaussian) = sigma^2
-            var_sum = (2.0 * sum_scale**2) if mechanism == "laplace" else (sum_scale**2)
+            var_sum = (2.0 * sum_scale**2) if mechanism == Mechanism.LAPLACE else (sum_scale**2)
             # Variance of count noise
-            var_count = (2.0 * count_scale**2) if mechanism == "laplace" else (count_scale**2)
+            var_count = (2.0 * count_scale**2) if mechanism == Mechanism.LAPLACE else (count_scale**2)
             # Delta method: Var(S/C) ~ Var(S)/C^2 + (S^2 * Var(C))/C^4
             var_mean = (var_sum / (noisy_count**2)) + ((noisy_sum**2 * var_count) / (noisy_count**4))
             # Standard deviation of the mean estimate
             std_mean = math.sqrt(max(0.0, var_mean))
             # Effective scale: divide by sqrt(2) for Laplace to match Gaussian equivalent
-            eff_scale = std_mean / math.sqrt(2.0) if mechanism == "laplace" else std_mean
+            eff_scale = std_mean / math.sqrt(2.0) if mechanism == Mechanism.LAPLACE else std_mean
 
             # Compute confidence interval and package DPResult
             ci = compute_confidence_interval(
@@ -1463,6 +1537,7 @@ class DPApi:
         return_details: bool = False,
         confidence_level: float = 0.95,
     ) -> Union[Dict[Any, float], DPResult]:
+        # 对已聚合好的直方图各 Bin 计数直接注入 DP 噪声
         """对已经聚合好的直方图计数直接注入 DP 噪声。"""
         # Validate mechanism and delta compatibility
         mechanism = self._validate_mechanism(mechanism, delta)
@@ -1474,7 +1549,7 @@ class DPApi:
         # Compute noise scale for confidence interval reporting
         noise_scale = (
             1.0 / epsilon
-            if mechanism == "laplace"
+            if mechanism == Mechanism.LAPLACE
             else calibrate_analytic_gaussian(epsilon, delta, 1.0)
         )
         # Inject independent DP noise into each pre-aggregated bin
@@ -1520,6 +1595,7 @@ class DPApi:
         return_details: bool = False,
         confidence_level: float = 0.95,
     ) -> Union[float, DPResult]:
+        # 分块流式 DP 计数：增量聚合多个 chunk 的真实计数，最后只加一次噪声
         """分块流式差分隐私计数。
 
         允许调用方以多个 chunk（生成器/迭代器）分批传入数据，
@@ -1574,7 +1650,7 @@ class DPApi:
         # Compute noise scale for confidence interval reporting
         noise_scale = (
             1.0 / epsilon
-            if mechanism == "laplace"
+            if mechanism == Mechanism.LAPLACE
             else calibrate_analytic_gaussian(epsilon, delta, 1.0)
         )
         # Step 5: If return_details, compute CI and wrap in DPResult
@@ -1607,6 +1683,7 @@ class DPApi:
         return_details: bool = False,
         confidence_level: float = 0.95,
     ) -> Union[float, DPResult]:
+        # 分块流式 DP 求和：按块 clip 并累加局部和，最终只消耗一次预算
         """分块流式差分隐私求和。
 
         调用方必须显式提供 clip 边界；本方法按块 clip 并累加局部和，
@@ -1672,7 +1749,7 @@ class DPApi:
         # Compute noise scale for confidence interval reporting
         noise_scale = (
             (sensitivity / epsilon)
-            if (mechanism == "laplace" and epsilon > 0)
+            if (mechanism == Mechanism.LAPLACE and epsilon > 0)
             else calibrate_analytic_gaussian(epsilon, delta, sensitivity)
         )
         # Step 5: If return_details, compute CI and wrap in DPResult
@@ -1706,6 +1783,7 @@ class DPApi:
         return_details: bool = False,
         confidence_level: float = 0.95,
     ) -> Union[float, DPResult]:
+        # 分块流式 DP 均值：组合定理拆分预算，内存占用与总数据量解耦
         """分块流式差分隐私均值。
 
         使用组合定理：将 (epsilon, delta) 拆分为两份，分别用于 count 与 sum。
@@ -1782,15 +1860,15 @@ class DPApi:
         # Delta method variance estimation for ratio estimator
         if return_details:
             # Variance of sum noise: Var(Laplace) = 2b^2, Var(Gaussian) = sigma^2
-            var_sum = (2.0 * sum_scale**2) if mechanism == "laplace" else (sum_scale**2)
+            var_sum = (2.0 * sum_scale**2) if mechanism == Mechanism.LAPLACE else (sum_scale**2)
             # Variance of count noise
-            var_count = (2.0 * count_scale**2) if mechanism == "laplace" else (count_scale**2)
+            var_count = (2.0 * count_scale**2) if mechanism == Mechanism.LAPLACE else (count_scale**2)
             # Delta method: Var(S/C) ~ Var(S)/C^2 + (S^2 * Var(C))/C^4
             var_mean = (var_sum / (noisy_count**2)) + ((noisy_sum**2 * var_count) / (noisy_count**4))
             # Standard deviation of the mean estimate
             std_mean = math.sqrt(max(0.0, var_mean))
             # Effective scale: divide by sqrt(2) for Laplace to match Gaussian equivalent
-            eff_scale = std_mean / math.sqrt(2.0) if mechanism == "laplace" else std_mean
+            eff_scale = std_mean / math.sqrt(2.0) if mechanism == Mechanism.LAPLACE else std_mean
             # Compute confidence interval and package DPResult
             ci = compute_confidence_interval(final_val, eff_scale, mechanism, confidence_level)
             return DPResult(
@@ -1813,6 +1891,7 @@ class DPApi:
         return_details: bool = False,
         confidence_level: float = 0.95,
     ) -> Union[Dict[Any, float], DPResult]:
+        # 分块流式 DP 直方图：按块统计各分类计数并合并，只消耗一次预算
         """分块流式差分隐私直方图计数。
 
         按块统计各分类计数并合并，最终对所有分桶加噪，只消耗一次预算。
@@ -1851,7 +1930,7 @@ class DPApi:
         # Compute noise scale for confidence interval reporting
         noise_scale = (
             1.0 / epsilon
-            if mechanism == "laplace"
+            if mechanism == Mechanism.LAPLACE
             else calibrate_analytic_gaussian(epsilon, delta, 1.0)
         )
         # Step 4: Inject independent DP noise into each bin
@@ -1889,6 +1968,7 @@ class DPApi:
         mechanism: str = "laplace",
         return_details: bool = False,
     ) -> Dict[str, Any]:
+        # Table-Level 原位表格 DP 聚合：按组合定理均分预算到各列，分发调用对应聚合方法
         """Table-Level 原位表格差分隐私聚合。
 
         执行步骤：
@@ -1927,13 +2007,13 @@ class DPApi:
             kwargs["return_details"] = return_details
 
             # Step 4: Dispatch to the appropriate aggregation method
-            if agg_type == "count":
+            if agg_type == AggregationType.COUNT:
                 results[col_name] = self.count(df, **kwargs)
-            elif agg_type == "sum":
+            elif agg_type == AggregationType.SUM:
                 results[col_name] = self.sum(df, **kwargs)
-            elif agg_type == "mean":
+            elif agg_type == AggregationType.MEAN:
                 results[col_name] = self.mean(df, **kwargs)
-            elif agg_type == "histogram":
+            elif agg_type == AggregationType.HISTOGRAM:
                 results[col_name] = self.histogram(df, **kwargs)
             else:
                 raise ValueError(f"Unsupported aggregation type: {agg_type}")
@@ -1950,6 +2030,7 @@ class DPApi:
         column: Optional[str] = None,
         party: Optional[str] = None,
     ) -> tuple[float, float]:
+        # DP 自适应二分搜索估计 clip 上界：通过 DP 分位数估计确定安全截断范围
         """差分隐私自适应二分搜索估计 [0.0, clip_upper] 上下界。
 
         执行步骤：
@@ -2010,6 +2091,7 @@ class DPApi:
         clip_upper: Optional[float] = None,
         categories: Optional[Sequence[Any]] = None,
     ) -> Accumulator:
+        # 构建分布式 Worker 节点的无噪 Accumulator，供 Master 合并后统一注入 DP 噪声
         """构建分布式 Worker 节点的无噪流式 Accumulator。
 
         执行步骤：
@@ -2069,6 +2151,7 @@ class DPApi:
         mechanism: str = "laplace",
         return_details: bool = False,
     ) -> Union[float, Dict[Any, float], DPResult]:
+        # Master 节点对合并后的 Accumulator 统一注入一次 DP 噪声并导出结果
         """Master/Combine 节点对合并后的 Accumulator 统一注入一次 DP 噪声。
 
         执行步骤：
@@ -2077,22 +2160,22 @@ class DPApi:
         3. 仅在此处消耗一次 (epsilon, delta) 隐私预算，为总聚合统计量注入 DP 噪声并导出。
         """
         # Step 1: Dispatch to the appropriate noisy_* method based on aggregation type
-        if aggregation == "count":
+        if aggregation == AggregationType.COUNT:
             # Inject noise into the accumulated count
             return self.noisy_count(
                 accumulator.count, epsilon, delta, mechanism, return_details=return_details
             )
-        elif aggregation == "sum":
+        elif aggregation == AggregationType.SUM:
             # Inject noise into the accumulated sum with its sensitivity
             return self.noisy_sum(
                 accumulator.sum, accumulator.sensitivity, epsilon, delta, mechanism, return_details=return_details
             )
-        elif aggregation == "mean":
+        elif aggregation == AggregationType.MEAN:
             # Compute noisy mean from accumulated sum/count with budget splitting
             return self.noisy_mean(
                 accumulator.sum, accumulator.count, accumulator.sensitivity, epsilon, delta, mechanism, return_details=return_details
             )
-        elif aggregation == "histogram":
+        elif aggregation == AggregationType.HISTOGRAM:
             # Inject noise into each histogram bin
             return self.noisy_histogram(
                 accumulator.histogram, epsilon, delta, mechanism, return_details=return_details
@@ -2110,6 +2193,7 @@ class DPApi:
         return_details: bool = False,
         confidence_level: float = 0.95,
     ) -> Union[np.ndarray, DPResult]:
+        # 高维向量 L2 范数截断与各向同性加噪（DP-SGD 基础逻辑），敏感度为 max_norm
         """高维向量 / 梯度 L2 范数截断与各向同性加噪 (DP-SGD 基础逻辑)。
 
         执行步骤：
@@ -2141,7 +2225,7 @@ class DPApi:
         DP_QUERIES_TOTAL.labels(mechanism=mechanism, aggregation="sum").inc(matrix.shape[1])
 
         # Step 6: Generate isotropic noise vector (each dimension independently noised)
-        if mechanism == "laplace":
+        if mechanism == Mechanism.LAPLACE:
             # Laplace noise scale = max_norm / epsilon (sensitivity = max_norm)
             noise_scale = max_norm / epsilon
             noises = np.array([self._sample_laplace(noise_scale) for _ in range(matrix.shape[1])])
@@ -2182,6 +2266,7 @@ class DPApi:
         return_details: bool = False,
         confidence_level: float = 0.95,
     ) -> Union[np.ndarray, DPResult]:
+        # DP 向量均值：L2 clip + 各向同性加噪 + noisy_count 归一化，用于 DP-SGD 平均梯度
         """高维向量 / 梯度 DP 均值：L2 范数截断 + 各向同性加噪 + noisy_count 归一化。
 
         用于 DP-SGD 平均梯度计算：先对每行做 L2 clip，再对 sum 和 count 分别加噪，
@@ -2225,7 +2310,7 @@ class DPApi:
             return zero_vec
 
         # Step 4: Compute noisy sum with the other half of the budget
-        if mechanism == "laplace":
+        if mechanism == Mechanism.LAPLACE:
             # Laplace noise scale = max_norm / eps_sub
             noise_scale = max_norm / eps_sub
             noises = np.array([self._sample_laplace(noise_scale) for _ in range(matrix.shape[1])])
@@ -2274,6 +2359,7 @@ class DPApi:
         mechanism: str = "laplace",
         return_details: bool = False,
     ) -> Dict[Any, Any]:
+        # Tau-Thresholding DP GroupBy：按噪声计数阈值过滤罕见分组，防范存在性泄露
         """Tau-Thresholding 差分隐私 SQL Group-By 过滤。
 
         执行步骤：
@@ -2314,10 +2400,10 @@ class DPApi:
             )
             # Tau-thresholding: drop groups with noisy count below tau (prevents group leakage)
             if cnt >= tau:
-                if agg == "count":
+                if agg == AggregationType.COUNT:
                     # Reuse the noisy count as the result
                     result[key] = cnt
-                elif agg == "sum":
+                elif agg == AggregationType.SUM:
                     # Compute noisy sum for this group
                     result[key] = self.sum(
                         group,
@@ -2329,7 +2415,7 @@ class DPApi:
                         clip_upper=clip_upper,
                         return_details=return_details,
                     )
-                elif agg == "mean":
+                elif agg == AggregationType.MEAN:
                     # Compute noisy mean for this group
                     result[key] = self.mean(
                         group,
@@ -2346,6 +2432,7 @@ class DPApi:
         return result
 
 
+# 本地差分隐私（Local DP）接口：基于随机响应在客户端采集端植入扰动，服务端无偏估计还原分布
 class LocalDPApi:
     """本地差分隐私（Local DP）计算接口。
 
@@ -2356,18 +2443,21 @@ class LocalDPApi:
     """
 
     def __init__(self, seed: Optional[int] = None):
+        # 初始化 LocalDPApi，绑定随机数种子以保证可复现性
         """初始化 LocalDPApi，绑定随机数种子。"""
         # Create a seeded PRNG for reproducible randomized response
         self.rng = random.Random(seed)
 
     @staticmethod
     def _validate_epsilon(epsilon: float) -> None:
+        # 校验 epsilon 预算必须为正值，否则抛出 ValueError
         """校验 epsilon 预算正值。"""
         # Epsilon must be strictly positive for valid DP guarantee
         if epsilon <= 0:
             raise ValueError("epsilon must be positive")
 
     def perturb_binary(self, value: int, epsilon: float) -> int:
+        # 对单个二值数据进行 epsilon-LDP 随机响应扰动（Warner 模型）
         """对单个二值数据进行 ε-本地差分隐私扰动。
 
         执行步骤：
@@ -2387,6 +2477,7 @@ class LocalDPApi:
         return value if self.rng.random() < p else 1 - value
 
     def perturb_binary_batch(self, values: Sequence[int], epsilon: float) -> np.ndarray:
+        # 批量对二值序列进行 LDP 扰动，返回 int64 数组
         """批量对二值数据进行本地 DP 扰动。"""
         # Apply perturb_binary to each element and return as int64 array
         return np.array([self.perturb_binary(int(v), epsilon) for v in values], dtype=np.int64)
@@ -2394,6 +2485,7 @@ class LocalDPApi:
     def perturb_categorical(
         self, value: Any, categories: Sequence[Any], epsilon: float
     ) -> Any:
+        # 对单个类别型数据进行 k-ary Randomized Response 本地 DP 扰动
         """对单个类别型数据进行 ε-本地差分隐私扰动（k-ary Randomized Response）。
 
         执行步骤：
@@ -2425,6 +2517,7 @@ class LocalDPApi:
     def perturb_categorical_batch(
         self, values: Sequence[Any], categories: Sequence[Any], epsilon: float
     ) -> np.ndarray:
+        # 批量对类别型序列进行 k-ary Randomized Response LDP 扰动
         """批量对类别型数据进行本地 DP 扰动。"""
         # Apply perturb_categorical to each element and return as object array
         return np.array([self.perturb_categorical(v, categories, epsilon) for v in values], dtype=object)
@@ -2432,6 +2525,7 @@ class LocalDPApi:
     def estimate_binary_frequency(
         self, reported_values: Sequence[int], epsilon: float
     ) -> float:
+        # 根据扰动后的二值样本，使用无偏纠偏公式估计真实比例为 1 的频率
         """根据扰动后的二值样本估计真实比例为 1 的无偏频率。
 
         执行步骤：
@@ -2462,6 +2556,7 @@ class LocalDPApi:
         categories: Sequence[Any],
         epsilon: float,
     ) -> Dict[Any, float]:
+        # 根据扰动后的类别样本，使用无偏纠偏公式估计各类别的真实直方图分布
         """根据扰动后的类别样本估计各类别的真实无偏直方图分布。
 
         执行步骤：

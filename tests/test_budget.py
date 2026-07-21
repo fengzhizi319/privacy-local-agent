@@ -148,3 +148,37 @@ def test_env_budget_window_seconds():
 
     finally:
         os.environ.pop("PRIVACY_BUDGET_WINDOW_SECONDS", None)
+
+
+def test_budget_registry_crud_and_warning():
+    """测试 BudgetRegistry 的完整生命周期方法及参数冲突警告。"""
+    from privacy_local_agent.privacy.budget import BudgetRegistry, default_registry
+
+    registry = BudgetRegistry()
+    assert registry.get("hr") is None
+
+    # 1. get_or_create 首次创建
+    acct1 = registry.get_or_create("hr", epsilon_total=10.0, delta_total=1e-4)
+    assert acct1.epsilon_total == 10.0
+    assert registry.get("hr") is acct1
+
+    # 2. 传入重复冲突参数时抛出 UserWarning 提示参数被忽略
+    with pytest.warns(UserWarning, match="already exists"):
+        acct2 = registry.get_or_create("hr", epsilon_total=999.0, delta_total=1e-4)
+
+    assert acct2 is acct1
+    assert acct2.epsilon_total == 10.0
+
+    # 3. remove 指定 namespace 实例
+    removed = registry.remove("hr")
+    assert removed is acct1
+    assert registry.get("hr") is None
+
+    # 4. reset 清空所有实例
+    registry.get_or_create("sales", epsilon_total=5.0)
+    registry.get_or_create("marketing", epsilon_total=5.0)
+    assert len(registry._instances) == 2
+
+    registry.reset()
+    assert len(registry._instances) == 0
+

@@ -11,7 +11,7 @@ resolving parameters from profile/config.
 
 from typing import Any, Dict, List, Optional
 
-from .privacy.budget import BudgetAccountant
+from .privacy.budget import BudgetAccountant, BudgetRegistry, default_registry
 from .privacy.classification import ClassificationAPI
 from .privacy.dp import DPApi, LocalDPApi
 from .privacy.kano import BUILTIN_HIERARCHIES, anonymize_record
@@ -41,16 +41,23 @@ class PrivacyService:
         classification_api: 数据分类 API 实例。
     """
 
-    def __init__(self, profile_path: str = None, namespace: str = "default"):
+    def __init__(
+        self,
+        profile_path: str = None,
+        namespace: str = "default",
+        registry: Optional[BudgetRegistry] = None,
+    ):
         """初始化 PrivacyService。
 
         Args:
             profile_path: YAML 配置文件路径，可覆盖默认参数。
             namespace: 隐私命名空间，用于隔离隐私预算。
+            registry: 可选的 BudgetRegistry 注册表，未提供时使用全局 default_registry。
         """
         self.resolver = get_resolver(profile_path)
         self.namespace = namespace
-        self.dp_api = DPApi(namespace)
+        self.registry = registry or default_registry
+        self.dp_api = DPApi(namespace, registry=self.registry)
         self.classification_api = ClassificationAPI(resolver=self.resolver)
         self.local_dp_api = LocalDPApi()
 
@@ -721,7 +728,7 @@ class PrivacyService:
         Returns:
             当前命名空间下 epsilon 与 delta 的剩余量字典。
         """
-        return BudgetAccountant(self.namespace).remaining()
+        return self.registry.get_or_create(self.namespace).remaining()
 
     def classify_field(
         self, field_name: str, value: Any, params: Dict[str, Any] = None
