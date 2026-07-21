@@ -24,7 +24,6 @@ import math
 import random
 import secrets
 import statistics
-import warnings
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Union
@@ -32,7 +31,7 @@ import numpy as np
 
 from ..observability.logging_config import get_logger
 from ..observability.metrics import DP_QUERIES_TOTAL
-from .budget import BudgetRegistry, PrivacyBudgetExhausted, default_registry
+from .budget import BudgetRegistry, PrivacyBudgetExhausted, RDPAccountant, default_registry
 from .data_adapters import _is_sparse_matrix, _to_2d_numpy_array, extract_chunks, extract_values
 
 # Module-level structured logger for DP query and budget events
@@ -446,7 +445,7 @@ class SecureRandom(random.Random):
     """
 
     def __init__(self):
-        # 初始化 SecureRandom：默认使用 OS 熵源的密码学安全 RNG
+        """初始化 SecureRandom：默认使用 OS 熵源的密码学安全 RNG。"""
         super().__init__()
         self._system_rng = secrets.SystemRandom()
         # Flag: False → use system RNG (production); True → use deterministic PRNG (testing)
@@ -454,6 +453,12 @@ class SecureRandom(random.Random):
 
     # 设置随机种子：提供种子时切换到确定性 PRNG 模式，否则恢复密码学安全模式
     def seed(self, a=None, version=2) -> None:
+        """设置随机种子或恢复密码学安全模式。
+
+        Args:
+            a: 随机种子；为 None 时恢复 OS 熵源安全 RNG。
+            version: 种子格式版本（兼容 random.Random 接口）。
+        """
         # If a seed is provided, switch to deterministic mode for reproducible tests
         if a is not None:
             super().seed(a, version=version)
@@ -464,6 +469,10 @@ class SecureRandom(random.Random):
 
     # 生成 [0,1) 随机浮点：确定性模式用 Mersenne Twister，生产模式用 OS 安全 RNG
     def random(self) -> float:
+        """生成 [0, 1) 均匀分布随机浮点数。
+
+        确定性模式使用 Mersenne Twister PRNG；生产模式使用 OS 安全 RNG。
+        """
         # In deterministic mode, use the base class Mersenne Twister PRNG
         if self._seeded:
             return super().random()
@@ -472,6 +481,10 @@ class SecureRandom(random.Random):
 
     # 生成高斯分布随机值：确定性模式用基类实现，生产模式用密码学安全实现
     def gauss(self, mu: float, sigma: float) -> float:
+        """生成高斯分布 N(mu, sigma^2) 随机浮点数。
+
+        确定性模式使用基类 Box-Muller 实现；生产模式使用 OS 安全 RNG。
+        """
         # Deterministic Gaussian sampling for reproducible unit tests
         if self._seeded:
             return super().gauss(mu, sigma)
@@ -483,11 +496,14 @@ class SecureRandom(random.Random):
 class DPApi:
     """差分隐私计算接口。
 
-    封装了 Laplace/Gaussian 采样与预算扣减逻辑，提供 count/sum/mean 三种聚合方法。
+    封装了 Laplace/Gaussian 采样与预算扣减逻辑，提供 count/sum/mean/histogram 等聚合方法。
+    支持可选的 RDPAccountant 集成，在使用 Gaussian 机制时自动记录 Rényi DP 消耗，
+    通过 ``rdp_accountant.get_epsilon()`` 可获得比 Basic Composition 更紧致的预算上界。
 
     Attributes:
         budget: 当前命名空间对应的 BudgetAccountant 实例。
         rng: 私有随机数生成器，用于噪声采样。
+        rdp_accountant: 可选的 RDPAccountant 实例，Gaussian 机制下自动跟踪 RDP 消耗。
     """
 
     def __init__(
@@ -498,6 +514,7 @@ class DPApi:
         epsilon_total: Optional[float] = None,
         delta_total: Optional[float] = None,
         window_seconds: Optional[float] = None,
+        rdp_accountant: Optional[RDPAccountant] = None,
     ):
         # 初始化 DPApi：创建关联 namespace 的预算账户和安全随机数生成器
         """初始化 DPApi。
@@ -509,6 +526,8 @@ class DPApi:
             epsilon_total: 可选 epsilon 总预算；仅在对应 BudgetAccountant 尚未创建时生效。
             delta_total: 可选 delta 总预算；仅在对应 BudgetAccountant 尚未创建时生效。
             window_seconds: 可选预算重置窗口（秒）；仅在对应 BudgetAccountant 尚未创建时生效。
+            rdp_accountant: 可选的 RDPAccountant 实例；使用 Gaussian 机制时自动记录
+                Rényi DP 消耗，提供更紧致的组合预算上界。
         """
         self.registry = registry or default_registry
         # Create a BudgetAccountant tied to the given namespace for (epsilon, delta) tracking
@@ -518,6 +537,8 @@ class DPApi:
             delta_total=delta_total,
             window_seconds=window_seconds,
         )
+        # Optional RDPAccountant for tighter Rényi DP composition tracking (Gaussian only)
+        self.rdp_accountant = rdp_accountant
         logger.info(
             "dp_api_initialized",
             extra={
@@ -525,6 +546,7 @@ class DPApi:
                 "epsilon_total": self.budget.epsilon_total,
                 "delta_total": self.budget.delta_total,
                 "seeded": random_state is not None,
+                "rdp_enabled": rdp_accountant is not None,
             },
         )
         # Create a SecureRandom instance (cryptographic RNG by default)
@@ -623,10 +645,13 @@ class DPApi:
             upper = float(values.max())
         else:
             lower, upper = 0.0, 0.0
-        warnings.warn(
-            "clip_lower/clip_upper not provided; inferring bounds from data. "
-            "This is not recommended for production.",
-            stacklevel=3,
+        logger.warning(
+            "clip_bounds_inferred_from_data",
+            extra={
+                "lower": lower,
+                "upper": upper,
+                "recommendation": "Set clip_lower/clip_upper explicitly for production DP guarantees.",
+            },
         )
         return lower, upper
 
@@ -669,6 +694,20 @@ class DPApi:
                 raise ValueError("delta must be positive for Gaussian mechanism")
             return Mechanism.GAUSSIAN.value
         raise ValueError(f"mechanism must be 'laplace' or 'gaussian', got '{mechanism}'")
+
+    def _notify_rdp(self, mechanism: str, sigma: float, sensitivity: float) -> None:
+        """Gaussian 机制下自动通知 RDPAccountant 记录 Rényi DP 消耗。
+
+        仅在 rdp_accountant 已注入且机制为 Gaussian 时生效；Laplace 机制无 RDP 语义，静默跳过。
+        通过回调钩子模式解耦 DPApi 与 RDPAccountant，避免在每个查询方法中硬编码 if 分支。
+
+        Args:
+            mechanism: 当前查询使用的噪声机制（已规范化为小写字符串）。
+            sigma: 高斯噪声标准差（Analytic Gaussian calibration 输出）。
+            sensitivity: 查询的全局敏感度。
+        """
+        if self.rdp_accountant is not None and mechanism == Mechanism.GAUSSIAN and sigma > 0:
+            self.rdp_accountant.record_gaussian(sigma=sigma, sensitivity=sensitivity)
 
     def _sample_count_noise(self, epsilon: float, delta: float, mechanism: str) -> float:
         # 采样 count/histogram 所需的 DP 噪声（L1/L2 敏感度均为 1）
@@ -715,6 +754,7 @@ class DPApi:
         confidence_level: float,
         round_int: bool = False,
         clip_non_negative: bool = False,
+        sensitivity: float = 1.0,
     ) -> Union[float, DPResult]:
         """执行标量 DP 查询的公共模板：预算扣减、噪声采样、后处理、置信区间。
 
@@ -752,6 +792,9 @@ class DPApi:
                 "noise_scale": noise_scale,
             },
         )
+
+        # Auto-track RDP consumption for Gaussian mechanism via callback hook
+        self._notify_rdp(mechanism, noise_scale, sensitivity)
 
         if return_details:
             ci = compute_confidence_interval(
@@ -822,6 +865,9 @@ class DPApi:
                 "num_bins": len(true_counts),
             },
         )
+
+        # Auto-track RDP consumption for Gaussian mechanism (histogram joint sensitivity = 1)
+        self._notify_rdp(mechanism, noise_scale, sensitivity=1.0)
 
         if return_details:
             return DPResult(
@@ -946,6 +992,8 @@ class DPApi:
             if mechanism == Mechanism.LAPLACE
             else calibrate_analytic_gaussian(epsilon, delta, sensitivity)
         )
+        # Auto-track RDP consumption for Gaussian mechanism via callback hook
+        self._notify_rdp(mechanism, noise_scale, sensitivity)
         # Step 8: If return_details, compute confidence interval and wrap in DPResult
         if return_details:
             ci = compute_confidence_interval(
@@ -1073,6 +1121,8 @@ class DPApi:
             if (mechanism == Mechanism.LAPLACE and epsilon > 0)
             else calibrate_analytic_gaussian(epsilon, delta, sensitivity)
         )
+        # Auto-track RDP consumption for Gaussian mechanism via callback hook
+        self._notify_rdp(mechanism, noise_scale, sensitivity)
         # Step 6: If return_details, compute CI and wrap in DPResult
         if return_details:
             ci = compute_confidence_interval(

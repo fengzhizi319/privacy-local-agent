@@ -139,8 +139,10 @@ def test_env_budget_window_seconds():
         os.environ.pop("PRIVACY_BUDGET_WINDOW_SECONDS", None)
 
 
-def test_budget_registry_crud_and_warning():
+def test_budget_registry_crud_and_warning(caplog):
     """测试 BudgetRegistry 的完整生命周期方法及参数冲突警告。"""
+    import logging
+
     registry = BudgetRegistry()
     assert registry.get("hr") is None
 
@@ -148,15 +150,18 @@ def test_budget_registry_crud_and_warning():
     assert acct1.epsilon_total == 10.0
     assert registry.get("hr") is acct1
 
-    with pytest.warns(UserWarning, match="already exists"):
+    with caplog.at_level(logging.WARNING, logger="privacy_local_agent.privacy.budget"):
         acct2 = registry.get_or_create("hr", epsilon_total=999.0, delta_total=1e-4)
+    assert any("budget_registry_params_ignored" in r.message for r in caplog.records)
 
     assert acct2 is acct1
     assert acct2.epsilon_total == 10.0
 
+    caplog.clear()
     acct3 = registry.get_or_create("window-ns", epsilon_total=5.0, window_seconds=60.0)
-    with pytest.warns(UserWarning, match="window_seconds"):
+    with caplog.at_level(logging.WARNING, logger="privacy_local_agent.privacy.budget"):
         acct4 = registry.get_or_create("window-ns", window_seconds=120.0)
+    assert any("budget_registry_params_ignored" in r.message for r in caplog.records)
     assert acct4 is acct3
     assert acct3.window_seconds == 60.0
 
@@ -176,13 +181,15 @@ def test_budget_registry_crud_and_warning():
     assert registry.get("marketing") is None
 
 
-def test_get_or_create_no_warning_when_params_omitted(recwarn):
+def test_get_or_create_no_warning_when_params_omitted(caplog):
     """未显式传入预算参数时，即使现有实例配置不同也不应告警。"""
+    import logging
+
     registry = BudgetRegistry()
     registry.get_or_create("ns-no-warn", epsilon_total=100.0, delta_total=1e-3)
-    registry.get_or_create("ns-no-warn")
-    user_warnings = [w for w in recwarn.list if issubclass(w.category, UserWarning)]
-    assert not user_warnings
+    with caplog.at_level(logging.WARNING, logger="privacy_local_agent.privacy.budget"):
+        registry.get_or_create("ns-no-warn")
+    assert not any("budget_registry_params_ignored" in r.message for r in caplog.records)
 
 
 def test_direct_construction_raises_typeerror():

@@ -2,6 +2,35 @@ import pytest
 
 from privacy_local_agent.privacy.budget import default_registry
 
+# ---------------------------------------------------------------------------
+# Patch scipy's is_torch_array to tolerate MagicMock-based torch stubs.
+# test_classification_llm.py sets sys.modules["torch"] = MagicMock(), which
+# causes scipy._external.array_api_compat's issubclass() check to raise
+# TypeError.  We patch is_torch_array once at import time so that both
+# collection and execution are safe.
+# ---------------------------------------------------------------------------
+try:
+    from scipy._external.array_api_compat.common import _helpers as _scipy_helpers
+
+    _orig_is_torch_array = _scipy_helpers.is_torch_array
+
+    def _safe_is_torch_array(x):
+        try:
+            return _orig_is_torch_array(x)
+        except TypeError:
+            return False
+
+    _scipy_helpers.is_torch_array = _safe_is_torch_array
+
+    # Also patch in the _array_api module which imports is_torch_array at top level
+    try:
+        import scipy._lib._array_api as _scipy_array_api
+        _scipy_array_api.is_torch_array = _safe_is_torch_array
+    except Exception:
+        pass
+except Exception:
+    pass  # scipy not installed or internal API changed — nothing to patch
+
 
 @pytest.fixture(autouse=True)
 def reset_all_budgets():

@@ -19,10 +19,13 @@ import os
 import sqlite3
 import threading
 import time
-import warnings
 from typing import Dict, Optional
 
+from ..observability.logging_config import get_logger
 from ..observability.metrics import BUDGET_REMAINING
+
+# Module-level structured logger for budget events
+logger = get_logger(__name__)
 
 
 class BudgetAuditLogger:
@@ -32,18 +35,24 @@ class BudgetAuditLogger:
     生产环境务必通过环境变量设置高强度随机密钥。
     """
 
-    def __init__(self, secret_key: Optional[bytes] = None, log_file: Optional[str] = None):
+    def __init__(self, secret_key: Optional[bytes] = None, log_file: Optional[str] = None) -> None:
+        """初始化审计日志器。
+
+        Args:
+            secret_key: HMAC 签名密钥；为 None 时从环境变量 PRIVACY_AUDIT_KEY 读取。
+            log_file: 审计日志文件路径；为 None 时从环境变量 PRIVACY_BUDGET_AUDIT_LOG 读取。
+        """
         env_key = os.environ.get("PRIVACY_AUDIT_KEY")
         if secret_key is not None:
             self.secret_key = secret_key
         elif env_key is not None:
             self.secret_key = env_key.encode("utf-8")
         else:
-            import warnings
-            warnings.warn(
-                "BudgetAuditLogger: no audit key configured (set PRIVACY_AUDIT_KEY env var). "
-                "Using insecure default key — NOT suitable for production.",
-                stacklevel=2,
+            logger.warning(
+                "audit_logger_insecure_key",
+                extra={
+                    "recommendation": "Set PRIVACY_AUDIT_KEY env var for production.",
+                },
             )
             self.secret_key = b"privacy-local-agent-default-audit-key"
         self.log_file = log_file or os.environ.get("PRIVACY_BUDGET_AUDIT_LOG", "/tmp/budget_audit.log")
@@ -52,6 +61,18 @@ class BudgetAuditLogger:
     def log_spend(
         self, namespace: str, epsilon: float, delta: float, eps_spent: float, del_spent: float
     ) -> str:
+        """记录一次预算消耗并返回 HMAC-SHA256 签名。
+
+        Args:
+            namespace: 预算命名空间。
+            epsilon: 总 epsilon 预算。
+            delta: 总 delta 预算。
+            eps_spent: 已消耗 epsilon。
+            del_spent: 已消耗 delta。
+
+        Returns:
+            HMAC 签名的十六进制字符串。
+        """
         with self._lock:
             ts = time.time()
             msg = f"{ts:.4f}|{namespace}|{epsilon:.6f}|{delta:.8f}|{eps_spent:.6f}|{del_spent:.8f}"
@@ -60,8 +81,11 @@ class BudgetAuditLogger:
             try:
                 with open(self.log_file, "a", encoding="utf-8") as f:
                     f.write(log_line)
-            except Exception:
-                pass
+            except Exception as e:
+                import logging
+                logging.getLogger("privacy_local_agent.privacy.budget").warning(
+                    f"BudgetAuditLogger: failed to write audit log to '{self.log_file}': {e}"
+                )
             return signature
 
 
@@ -114,7 +138,7 @@ class BudgetAccountant:
         epsilon_total: Optional[float] = None,
         delta_total: Optional[float] = None,
         window_seconds: Optional[float] = None,
-    ):
+    ) -> "BudgetAccountant":
         """禁止直接构造。
 
         BudgetAccountant 不支持直接实例化。请使用 Registry API 获取或创建实例：
@@ -160,6 +184,8 @@ class BudgetAccountant:
         self.epsilon_spent = 0.0
         self.delta_spent = 0.0
         self._mu = threading.Lock()
+        # Thread-local storage for SQLite connection reuse (high-concurrency optimization)
+        self._thread_local = threading.local()
 
         # 解析时间窗口：显式参数 > 环境变量 > 默认 None
         env_window = os.environ.get("PRIVACY_BUDGET_WINDOW_SECONDS")
@@ -172,6 +198,34 @@ class BudgetAccountant:
         self._window_start = time.time()
 
         self._init_db()
+
+    def _get_db_conn(self, db_path: str) -> sqlite3.Connection:
+        """获取线程级复用的 SQLite 连接。
+
+        使用 ``threading.local()`` 缓存每线程的数据库连接，避免高并发 QPS
+        场景下频繁打开/关闭 SQLite 文件句柄的 CPU/IO 损耗。
+
+        Args:
+            db_path: SQLite 数据库文件路径。
+
+        Returns:
+            当前线程绑定的 sqlite3.Connection 实例。
+        """
+        conn = getattr(self._thread_local, "conn", None)
+        if conn is None:
+            conn = sqlite3.connect(db_path, timeout=10.0)
+            self._thread_local.conn = conn
+        return conn
+
+    def _close_db_conn(self) -> None:
+        """关闭当前线程的 SQLite 连接（线程退出或重置时调用）。"""
+        conn = getattr(self._thread_local, "conn", None)
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+            self._thread_local.conn = None
 
     def _init_db(self) -> None:
         """初始化共享数据库，如果设置了 PRIVACY_BUDGET_DB 持久化路径。"""
@@ -244,7 +298,7 @@ class BudgetAccountant:
         self.delta_spent = 0.0
         self._window_start = self._now()
 
-    def spend(self, epsilon: float, delta: float = 0.0):
+    def spend(self, epsilon: float, delta: float = 0.0) -> None:
         """消耗隐私预算。
 
         在加锁环境下计算新的累计消耗量；若超过总预算则抛出异常，
@@ -261,7 +315,7 @@ class BudgetAccountant:
         db_path = os.environ.get("PRIVACY_BUDGET_DB")
         if db_path:
             with self._mu:
-                conn = sqlite3.connect(db_path, timeout=10.0)
+                conn = self._get_db_conn(db_path)
                 try:
                     # 使用 BEGIN IMMEDIATE 排他性事务锁定数据库
                     conn.execute("BEGIN IMMEDIATE")
@@ -308,6 +362,7 @@ class BudgetAccountant:
                     new_delta = del_spent + delta
 
                     if new_eps > eps_total or new_delta > del_total:
+                        conn.rollback()
                         raise PrivacyBudgetExhausted(
                             f"Privacy budget exhausted in namespace {self.namespace}: "
                             f"epsilon={new_eps}/{eps_total}, delta={new_delta}/{del_total}"
@@ -325,11 +380,23 @@ class BudgetAccountant:
                     BudgetAuditLogger().log_spend(
                         self.namespace, eps_total, del_total, new_eps, new_delta
                     )
-                except Exception as e:
+                    logger.info(
+                        "budget_spend_completed",
+                        extra={
+                            "namespace": self.namespace,
+                            "epsilon": epsilon,
+                            "delta": delta,
+                            "eps_spent": new_eps,
+                            "del_spent": new_delta,
+                            "backend": "sqlite",
+                        },
+                    )
+                except PrivacyBudgetExhausted:
+                    raise
+                except Exception:
                     conn.rollback()
-                    raise e
-                finally:
-                    conn.close()
+                    self._close_db_conn()
+                    raise
         else:
             with self._mu:
                 # 窗口到期则重置
@@ -350,6 +417,17 @@ class BudgetAccountant:
                 )
                 BudgetAuditLogger().log_spend(
                     self.namespace, self.epsilon_total, self.delta_total, new_eps, new_delta
+                )
+                logger.info(
+                    "budget_spend_completed",
+                    extra={
+                        "namespace": self.namespace,
+                        "epsilon": epsilon,
+                        "delta": delta,
+                        "eps_spent": new_eps,
+                        "del_spent": new_delta,
+                        "backend": "memory",
+                    },
                 )
 
     def _update_metrics(
@@ -379,7 +457,7 @@ class BudgetAccountant:
         db_path = os.environ.get("PRIVACY_BUDGET_DB")
         if db_path:
             with self._mu:
-                conn = sqlite3.connect(db_path, timeout=10.0)
+                conn = self._get_db_conn(db_path)
                 try:
                     cursor = conn.execute(
                         "SELECT epsilon_total, delta_total, epsilon_spent, delta_spent, window_seconds, window_start "
@@ -423,8 +501,9 @@ class BudgetAccountant:
                             "epsilon": self.epsilon_total,
                             "delta": self.delta_total,
                         }
-                finally:
-                    conn.close()
+                except Exception:
+                    self._close_db_conn()
+                    raise
         else:
             with self._mu:
                 if self._window_expired(self._window_start):
@@ -491,14 +570,14 @@ class BudgetRegistry:
                 if window_seconds is not None and existing.window_seconds != window_seconds:
                     ignored.append(f"window_seconds={window_seconds}")
                 if ignored:
-                    import warnings
-
-                    warnings.warn(
-                        f"BudgetAccountant for namespace '{namespace}' already exists with "
-                        f"epsilon_total={existing.epsilon_total}, delta_total={existing.delta_total}, "
-                        f"window_seconds={existing.window_seconds}. "
-                        f"Passed parameters ({', '.join(ignored)}) are ignored!",
-                        stacklevel=2,
+                    logger.warning(
+                        "budget_registry_params_ignored",
+                        extra={
+                            "namespace": namespace,
+                            "ignored_params": ", ".join(ignored),
+                            "existing_epsilon_total": existing.epsilon_total,
+                            "existing_delta_total": existing.delta_total,
+                        },
                     )
                 return existing
 
@@ -569,7 +648,12 @@ class RDPAccountant:
     在多轮高斯加噪场景下相比传统 Basic Composition 可以节省大量隐私预算。
     """
 
-    def __init__(self, target_delta: float = 1e-5):
+    def __init__(self, target_delta: float = 1e-5) -> None:
+        """初始化 RDPAccountant。
+
+        Args:
+            target_delta: 目标 delta 值，用于 RDP → (epsilon, delta)-DP 转换。
+        """
         self.target_delta = target_delta
         # 记录各 order alpha 下累积的 RDP epsilon
         self.rdp_orders = [1.5, 2.0, 3.0, 5.0, 8.0, 12.0, 16.0, 24.0, 32.0, 64.0, 128.0]

@@ -296,6 +296,110 @@ def test_budget_window_reset():
     assert accountant.remaining()["epsilon"] == 1.0
 ```
 
+## 3.12 并发压力测试 (`test_budget_concurrency.py`)
+
+使用 `concurrent.futures.ThreadPoolExecutor` 模拟多线程并发 `spend()` 调用，验证 `BudgetAccountant` 在内存模式和 SQLite 模式下的线程安全性。
+
+```python
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from privacy_local_agent.privacy.budget import default_registry, PrivacyBudgetExhausted
+
+
+def test_concurrent_spend_serializable():
+    """50 个线程各消耗 epsilon=0.1，总消耗应精确等于 5.0。"""
+    acct = default_registry.get_or_create("concurrent-mem", epsilon_total=100.0, delta_total=1.0)
+
+    def _spend():
+        acct.spend(0.1, 0.0)
+
+    with ThreadPoolExecutor(max_workers=50) as pool:
+        futures = [pool.submit(_spend) for _ in range(50)]
+        for f in as_completed(futures):
+            f.result()
+
+    assert abs(acct.epsilon_spent - 5.0) < 1e-9
+
+
+def test_sqlite_thread_local_conn_reuse(tmp_path, monkeypatch):
+    """验证同一线程多次 spend 复用同一个 SQLite 连接。"""
+    monkeypatch.setenv("PRIVACY_BUDGET_DB", str(tmp_path / "budget.db"))
+    acct = default_registry.get_or_create("conn-reuse", epsilon_total=100.0, delta_total=1.0)
+
+    acct.spend(1.0, 0.0)
+    conn1 = acct._thread_local.conn
+    acct.spend(1.0, 0.0)
+    conn2 = acct._thread_local.conn
+    assert conn1 is conn2  # 连接复用
+```
+
+测试覆盖场景：
+
+| 测试 | 场景 | 验证点 |
+|---|---|---|
+| `test_concurrent_spend_serializable` | 50 线程并发 spend | 总消耗精确等于 5.0 |
+| `test_concurrent_spend_budget_exhaustion` | 20 线程超预算竞争 | 部分线程收到 `PrivacyBudgetExhausted`，已消耗不超总预算 |
+| `test_concurrent_spend_and_remaining` | spend + remaining 交错 | 读写并发无异常 |
+| `test_sqlite_concurrent_spend` | SQLite 30 线程并发 | 不崩溃、不死锁、DB 可读回 |
+| `test_sqlite_thread_local_conn_reuse` | SQLite 连接复用 | 同线程复用连接，关闭后重建 |
+
+执行命令：
+
+```bash
+PYTHONPATH=. pytest tests/test_budget_concurrency.py -v
+```
+
+## 3.13 KS 统计分布检验 (`test_dp_distributions.py`)
+
+使用 `scipy.stats.kstest` 对 `_sample_laplace` 和 `_sample_gaussian` 采样的大量随机数进行 **Kolmogorov-Smirnov 检验**，确保噪声分布在统计意义上符合理论 CDF。
+
+```python
+import numpy as np
+from scipy import stats
+from privacy_local_agent.privacy.dp import DPApi
+
+
+def test_sample_laplace_ks_test():
+    """KS 检验：_sample_laplace(scale=1.0) 采样符合 Laplace(0, 1) 分布。"""
+    api = DPApi(namespace="ks-laplace-1", random_state=12345)
+    samples = np.array([api._sample_laplace(1.0) for _ in range(50_000)])
+
+    # 使用 .cdf 函数而非字符串名称，避免 scipy/torch MagicMock 冲突
+    ks_stat, p_value = stats.kstest(samples, stats.laplace.cdf, args=(0, 1.0))
+    assert p_value > 0.01  # KS_ALPHA = 0.01
+
+
+def test_sample_gaussian_ks_test():
+    """KS 检验：_sample_gaussian(sigma=1.0) 采样符合 N(0, 1) 分布。"""
+    api = DPApi(namespace="ks-gauss-1", random_state=12345)
+    samples = np.array([api._sample_gaussian(1.0) for _ in range(50_000)])
+
+    ks_stat, p_value = stats.kstest(samples, stats.norm.cdf, args=(0, 1.0))
+    assert p_value > 0.01
+```
+
+测试覆盖场景：
+
+| 测试 | 场景 | 验证点 |
+|---|---|---|
+| `test_sample_laplace_ks_test` | Laplace(0, 1) KS 检验 | p > 0.01，分布符合理论 CDF |
+| `test_sample_laplace_different_scale` | Laplace(0, 2.5) KS 检验 | 不同尺度参数下分布正确 |
+| `test_laplace_zero_mean` | Laplace 大数定律 | 50000 样本均值接近 0 |
+| `test_sample_gaussian_ks_test` | N(0, 1) KS 检验 | p > 0.01 |
+| `test_sample_gaussian_different_sigma` | N(0, 9) KS 检验 | sigma=3.0 分布正确 |
+| `test_gaussian_zero_mean` | Gaussian 大数定律 | 均值接近 0 |
+| `test_discrete_laplace_integer_output` | Discrete Laplace 整数输出 | 所有采样均为 int |
+| `test_discrete_laplace_zero_mean` | Discrete Laplace 对称性 | 均值接近 0 |
+| `test_discrete_laplace_symmetry` | Discrete Laplace 正负对称 | pos/neg 比例接近 0.5 |
+| `test_count_noise_scale_laplace` | 端到端噪声方差 | 10000 次 count 查询的经验方差与理论 2*b^2 偏差 < 10% |
+
+> **注意**：`kstest` 使用 `.cdf` 函数而非字符串分布名（如 `"laplace"`），以避免 `test_classification_llm.py` 中 `sys.modules["torch"] = MagicMock()` 与 scipy 内部 `is_torch_array` 的 `issubclass()` 冲突。该兼容性补丁已在 `conftest.py` 中全局处理。
+
+执行命令：
+
+```bash
+PYTHONPATH=. pytest tests/test_dp_distributions.py -v
+```
+
 ## 4. 集成测试策略
 
 ### 4.1 REST 接口测试
@@ -351,6 +455,12 @@ PYTHONPATH=. pytest tests/test_budget.py tests/test_rest.py -v -k dp
 # 本地 DP 测试
 PYTHONPATH=. pytest tests/test_dp.py -v -k "LocalDP or Randomized"
 
+# 并发压力测试
+PYTHONPATH=. pytest tests/test_budget_concurrency.py -v
+
+# KS 统计分布检验
+PYTHONPATH=. pytest tests/test_dp_distributions.py -v
+
 # 统计特性测试可能需要更多样本
 PYTHONPATH=. pytest tests/test_dp.py -v --slow
 ```
@@ -383,3 +493,6 @@ PYTHONPATH=. pytest tests/test_dp.py -v --slow
 - [x] `dp_groupby` Tau-Thresholding 稀有分组过滤测试覆盖。
 - [x] `Accumulator` 分布式累加器序列化、合并、finalize 测试覆盖。
 - [x] `RDPAccountant` Rényi DP 多阶会计与最优 α 搜索测试覆盖。
+- [x] 并发压力测试：内存/SQLite 多线程 spend 线程安全性验证。
+- [x] KS 统计分布检验：Laplace/Gaussian/Discrete Laplace 采样符合理论 CDF。
+- [x] 结构化日志：`warnings.warn` → `logger.warning` 迁移，`caplog` 测试覆盖。

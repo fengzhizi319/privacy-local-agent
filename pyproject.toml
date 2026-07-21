@@ -25,6 +25,7 @@ dev = [
     "grpcio-tools>=1.62.0",
     "pytest>=8.0.0",
     "hypothesis>=6.0.0",
+    "scipy>=1.12.0",
 ]
 observability = [
     "opentelemetry-api>=1.24.0",

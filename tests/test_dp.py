@@ -117,13 +117,16 @@ class TestDPSum:
         # True clipped sum = 6; with large epsilon, result should be nearby
         assert 0 <= result <= 20
 
-    def test_sum_backward_compat_without_clip(self) -> None:
+    def test_sum_backward_compat_without_clip(self, caplog) -> None:
         # Laplace mechanism can infer clip bounds from data (with warning)
         # for backward compatibility, but this is NOT recommended for production
+        import logging
+
         api = DPApi(namespace="test-sum-compat")
         api.rng.seed(42)
-        with pytest.warns(UserWarning, match="clip_lower/clip_upper not provided"):
+        with caplog.at_level(logging.WARNING, logger="privacy_local_agent.privacy.dp"):
             result = api.sum([1.0, 2.0, 3.0], epsilon=10.0, mechanism="laplace")
+        assert any("clip_bounds_inferred_from_data" in r.message for r in caplog.records)
         # Data-dependent clipping: sensitivity inferred from data range
         assert 0 <= result <= 10
 

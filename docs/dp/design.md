@@ -2105,3 +2105,85 @@ $$P[X = k] = \frac{1 - e^{-1/b}}{1 + e^{-1/b}} \cdot e^{-|k|/b}, \quad k \in \ma
 - `Accumulator` 分布式累加器序列化、合并、finalize 测试。
 - `RDPAccountant` Rényi DP 多阶会计与最优 α 搜索测试。
 - REST (`/v1/privacy/dp/*`) 与 gRPC Protobuf `packed = true` 接入测试。
+- KS 统计分布检验（Kolmogorov-Smirnov test）验证噪声采样符合理论 CDF。
+- 多线程并发冲刷测试验证 `BudgetAccountant` 线程安全性。
+
+## 11. 生产级增强
+
+### 11.1 RDPAccountant 回调钩子集成
+
+当使用 Gaussian 机制时，`DPApi` 支持通过可选注入的 `RDPAccountant` 自动追踪 Rényi DP 消耗：
+
+```python
+from privacy_local_agent.privacy.budget import RDPAccountant
+from privacy_local_agent.privacy.dp import DPApi
+
+rdp = RDPAccountant()
+api = DPApi(namespace="prod", rdp_accountant=rdp)
+
+# Gaussian 查询后 RDP 消耗自动记录
+api.sum(values, epsilon=1.0, delta=1e-5, mechanism="gaussian",
+        clip_lower=0.0, clip_upper=100.0)
+
+# 查询当前最优 α 下的 Rényi DP 消耗
+eps_rdp = rdp.get_epsilon(delta=1e-6)
+```
+
+**设计要点**：
+
+- `DPApi._notify_rdp()` 作为内部回调钩子，在 Gaussian 机制的噪声校准完成后自动调用 `rdp_accountant.record_gaussian()`。
+- 回调仅在 `rdp_accountant is not None` 且 `mechanism == "gaussian"` 时触发，零开销抽象。
+- Laplace 机制下 RDPAccountant 不记录（纯 ε-DP 已由 BudgetAccountant 追踪）。
+- `_execute_scalar_query` / `_execute_histogram_query` / `count` / `sum` 四类查询路径均统一接入回调。
+
+### 11.2 SQLite `threading.local()` 连接复用
+
+`BudgetAccountant` 在 SQLite 模式下使用 `threading.local()` 缓存数据库连接，避免高并发 QPS 下频繁创建/关闭 SQLite 连接：
+
+```python
+def _get_db_conn(self, db_path: str) -> sqlite3.Connection:
+    conn = getattr(self._thread_local, "conn", None)
+    if conn is None:
+        conn = sqlite3.connect(db_path, timeout=10.0)
+        self._thread_local.conn = conn
+    return conn
+
+def _close_db_conn(self) -> None:
+    conn = getattr(self._thread_local, "conn", None)
+    if conn is not None:
+        try: conn.close()
+        except Exception: pass
+        self._thread_local.conn = None
+```
+
+**设计要点**：
+
+- 每个线程首次调用 `spend()` / `remaining()` 时创建连接，后续调用复用同一连接。
+- 异常时自动 rollback 并关闭连接，下次调用重建。
+- `spend()` 方法在 `finally` 中不再 `conn.close()`，改为 `_close_db_conn()` 仅在异常时触发。
+- 线程安全：不同线程各自持有独立连接，互不干扰。
+
+### 11.3 结构化审计日志统一
+
+所有原先使用 `warnings.warn()` 的告警点已统一迁移为 `logger.warning()`，并通过 `extra` 字典传递结构化字段：
+
+| 模块 | 事件名 | 触发条件 | 结构化字段 |
+|---|---|---|---|
+| `dp.py` | `clip_bounds_inferred_from_data` | sum/mean 未提供 clip 边界 | `lower`, `upper`, `recommendation` |
+| `budget.py` | `audit_logger_insecure_key` | 未提供 `secret_key` 使用随机密钥 | `recommendation` |
+| `budget.py` | `budget_registry_params_ignored` | `get_or_create` 已有实例时传入不同参数 | `namespace`, `ignored_params` |
+
+**优势**：
+
+- 与 `observability/logging_config.py` 的 JSON 格式化器兼容，支持 ELK / Loki 日志聚合。
+- 结构化字段可被日志系统直接索引和告警。
+- 测试使用 `caplog` 替代 `pytest.warns`，更贴合生产日志行为。
+
+### 11.4 入参 Guardrails 增强
+
+`DPApi._validate_inputs()` 方法增强了对 clip bounds 的校验：
+
+- `clip_lower >= clip_upper` 时抛出 `ValueError`。
+- Gaussian 机制下 `delta` 必须显式提供且 `delta > 0`。
+- `epsilon <= 0` 时统一拒绝。
+- 对 `values` 为空序列的场景提前返回或报错，避免除零。
