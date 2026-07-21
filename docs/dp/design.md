@@ -1671,16 +1671,16 @@ Tau-Thresholding 保证：即使某个分组只包含一条记录，攻击者也
 
 ## 5. BudgetAccountant 设计
 
-### 5.1 单例模式设计考虑
+### 5.1 Registry 工厂设计考虑
 
-`BudgetAccountant` 采用 **namespace 级单例模式**：每个 `namespace` 字符串对应且仅对应一个 `BudgetAccountant` 实例。这一设计并非出于常见的"全局配置中心"需求，而是由**隐私预算的语义本质**决定的。
+`BudgetAccountant` 采用 **BudgetRegistry 工厂模式** 保证每个 `namespace` 字符串对应且仅对应一个 `BudgetAccountant` 实例。这一设计并非出于常见的"全局配置中心"需求，而是由**隐私预算的语义本质**决定的：同一命名空间下的所有 DP 查询必须共享同一个预算池，否则会出现预算超支。
 
-#### 5.1.1 为什么必须使用单例
+#### 5.1.1 为什么必须保证 namespace 唯一
 
 隐私预算是一个**全局累积量**：同一命名空间下的所有 DP 查询共享同一个预算池，每次查询消耗一部分，累计消耗不可超过上限。如果允许同一 namespace 存在多个 `BudgetAccountant` 实例，每个实例各自维护独立的 `epsilon_spent` / `delta_spent`，则预算扣减将失去全局一致性：
 
 ```python
-# 假设不是单例——预算会被悄悄超支
+# 假设没有 Registry 协调——预算会被悄悄超支
 acct1 = BudgetAccountant("hr_data", epsilon_total=10.0)
 acct2 = BudgetAccountant("hr_data", epsilon_total=10.0)  # 另一个实例！
 
@@ -1690,39 +1690,67 @@ acct2.spend(8.0)  # acct2 也花了 8.0，以为还剩 2.0
 # → 隐私预算被悄悄超支 → 隐私保证被破坏
 ```
 
-单例保证同一 namespace **只有一个预算账本**，所有查询都从同一个池子扣减，从根本上杜绝预算超支。
+`BudgetRegistry` 保证同一 namespace **只有一个预算账本**，所有查询都从同一个池子扣减，从根本上杜绝预算超支。
 
-#### 5.1.2 实现方式：`__new__` + 类级字典
+#### 5.1.2 实现方式：`BudgetRegistry` 工厂
 
-Python 中实现单例有多种方式（模块级变量、装饰器、元类等），`BudgetAccountant` 选择重写 `__new__` 方法，原因是：
+早期实现使用重写 `__new__` 的类级单例，但这会导致三个问题：
 
-1. **参数化单例**：不同 namespace 需要不同的实例，`__new__` 接受 `namespace` 参数，按参数值分派实例，比模块级单例更灵活。
-2. **透明调用**：调用方使用 `BudgetAccountant("ns")` 就像普通构造一样，无需感知单例逻辑。
-3. **惰性初始化**：首次创建时才初始化预算状态和 SQLite 连接，避免模块加载时的副作用。
+1. **参数静默丢弃**：同一 namespace 已存在时，后续传入的 `epsilon_total` / `delta_total` 被悄悄忽略；
+2. **职责过重**：`__new__` 同时负责实例创建、环境变量解析、时间窗口计算、SQLite 建表；
+3. **测试隔离差**：测试必须直接操作 `BudgetAccountant._instances` 内部字典。
 
-核心实现结构：
+当前实现将实例生命周期管理从 `BudgetAccountant` 中剥离出来，交给独立的 `BudgetRegistry`：
 
 ```python
-class BudgetAccountant:
-    _instances: Dict[str, "BudgetAccountant"] = {}  # namespace → 实例
-    _lock = threading.Lock()                         # 类级锁，保护 _instances
+class BudgetRegistry:
+    def __init__(self):
+        self._instances: Dict[str, BudgetAccountant] = {}
+        self._lock = threading.Lock()
 
-    def __new__(cls, namespace, epsilon_total=10.0, delta_total=1e-4, window_seconds=None):
-        with cls._lock:
-            if namespace not in cls._instances:
-                instance = super().__new__(cls)
-                instance.namespace = namespace
-                instance.epsilon_total = epsilon_total
-                instance.delta_total = delta_total
-                instance.epsilon_spent = 0.0
-                instance.delta_spent = 0.0
-                instance._mu = threading.Lock()      # 实例级锁，保护 spend/remaining
-                # ... 时间窗口解析、SQLite 初始化 ...
-                cls._instances[namespace] = instance
-            return cls._instances[namespace]
+    def get_or_create(
+        self,
+        namespace: str,
+        epsilon_total: Optional[float] = None,
+        delta_total: Optional[float] = None,
+        window_seconds: Optional[float] = None,
+    ) -> BudgetAccountant:
+        with self._lock:
+            if namespace in self._instances:
+                existing = self._instances[namespace]
+                # 仅对显式传入且与现有配置不一致的参数发出警告
+                if epsilon_total is not None and existing.epsilon_total != epsilon_total:
+                    ...  # 发出 UserWarning
+                return existing
+
+            accountant = object.__new__(BudgetAccountant)
+            accountant._init_instance(
+                namespace=namespace,
+                epsilon_total=10.0 if epsilon_total is None else epsilon_total,
+                delta_total=1e-4 if delta_total is None else delta_total,
+                window_seconds=window_seconds,
+            )
+            self._instances[namespace] = accountant
+            return accountant
 ```
 
-##### `_instances` 字典的数据结构
+`BudgetAccountant` 类本身不再持有 `_instances` 或 `_lock` 类属性，只负责：
+
+- 在 `_init_instance` 中解析参数、初始化状态；
+- 在 `_init_db` 中初始化 SQLite（如果配置了 `PRIVACY_BUDGET_DB`）；
+- 在 `spend()` / `remaining()` 中执行预算扣减与查询。
+
+为了保持向后兼容，`BudgetAccountant("ns")` 仍被保留，但它会委托给全局默认注册表：
+
+```python
+# 向后兼容（推荐仅用于旧代码）
+accountant = BudgetAccountant("hr_data", epsilon_total=10.0)
+
+# 新代码推荐显式使用注册表
+accountant = default_registry.get_or_create("hr_data", epsilon_total=10.0)
+```
+
+##### `BudgetRegistry._instances` 字典的数据结构
 
 | 字段 | 类型 | 说明 |
 |---|---|---|
@@ -1754,28 +1782,46 @@ class BudgetAccountant:
 
 #### 5.1.3 两级锁设计
 
-单例模式引入了两级锁，分别解决不同层面的并发问题：
+Registry 工厂引入了两级锁，分别解决不同层面的并发问题：
 
 | 锁 | 粒度 | 保护对象 | 竞争场景 |
 |---|---|---|---|
-| `_lock`（类级） | 全局 | `_instances` 字典的读写 | 多线程同时创建新 namespace 的实例 |
+| `_lock`（Registry 级） | 每个注册表 | `_instances` 字典的读写 | 多线程同时创建新 namespace 的实例 |
 | `_mu`（实例级） | 每个 namespace | `spend()` / `remaining()` 的预算扣减 | 多线程同时对同一 namespace 消耗预算 |
 
-两级锁的设计使得不同 namespace 之间的预算操作互不阻塞：线程 A 对 `"hr_data"` 执行 `spend()` 时，线程 B 可以同时对 `"user_logs"` 执行 `spend()`，两者不会互相等待。
+两级锁的设计使得不同 namespace 之间的预算操作互不阻塞：线程 A 对 `"hr_data"` 执行 `spend()` 时，线程 B 可以同时对 `"user_logs"` 执行 `spend()`，两者不会互相等待。多个 `BudgetRegistry` 实例之间互不干扰，因此也更适合测试隔离和依赖注入。
 
 #### 5.1.4 与 `DPApi` / `LocalDPApi` 的关系
 
-`DPApi` 内部会自动获取与自身 `namespace` 相同的 `BudgetAccountant` 单例：
+`DPApi` 接收可选的 `BudgetRegistry` 参数，默认使用全局注册表 `default_registry`：
 
 ```python
 class DPApi:
-    def __init__(self, namespace: str = "default"):
-        self.accountant = BudgetAccountant(namespace)  # 获取单例
+    def __init__(
+        self,
+        namespace: str = "default",
+        random_state: Optional[int] = None,
+        registry: Optional[BudgetRegistry] = None,
+        epsilon_total: Optional[float] = None,
+        delta_total: Optional[float] = None,
+        window_seconds: Optional[float] = None,
+    ):
+        self.registry = registry or default_registry
+        self.budget = self.registry.get_or_create(
+            namespace,
+            epsilon_total=epsilon_total,
+            delta_total=delta_total,
+            window_seconds=window_seconds,
+        )
 ```
 
-这意味着同一个 namespace 下的所有 `DPApi` 实例共享同一个预算账本，无论 `DPApi` 被创建多少次。
+这意味着：
 
-**对比：`LocalDPApi` 不需要单例**
+- 同一个 namespace 下的所有 `DPApi` 实例共享同一个预算账本；
+- 测试时可以注入独立的 `BudgetRegistry`，避免污染全局状态；
+- 可以在创建时指定 `epsilon_total` / `delta_total` / `window_seconds`（仅在对应 `BudgetAccountant` 尚未创建时生效）。
+
+**对比：`LocalDPApi` 不需要 Registry 共享**
 
 | | `BudgetAccountant` | `LocalDPApi` |
 |---|---|---|
@@ -1783,17 +1829,19 @@ class DPApi:
 | 状态是否需要共享 | 必须全局唯一，所有查询共享同一预算池 | 无需共享，各实例独立运行 |
 | 状态是否有并发风险 | 多线程同时 spend 必须原子化 | 无跨实例的并发竞争 |
 | 隔离需求 | 按 namespace 隔离，同 namespace 必须唯一 | 无隔离需求，每次创建都是独立工具 |
-| 是否需要单例 | **是** | **否** |
+| 是否需要 Registry | **是** | **否** |
 
-`LocalDPApi` 的本质是一个无状态的纯计算工具包装器：Local DP 的隐私开销由每次调用的 ε 参数单独控制，不需要累积跟踪；随机数生成器是每个实例的私有状态，多实例不会导致隐私泄露。因此 `LocalDPApi` 无需单例，每次创建都是独立的工具实例。
+`LocalDPApi` 的本质是一个无状态的纯计算工具包装器：Local DP 的隐私开销由每次调用的 ε 参数单独控制，不需要累积跟踪；随机数生成器是每个实例的私有状态，多实例不会导致隐私泄露。因此 `LocalDPApi` 无需 Registry，每次创建都是独立的工具实例。
 
-> **单例的必要性 = 存在必须全局唯一的共享可变状态。** `BudgetAccountant` 有（预算池），`LocalDPApi` 没有。
+> **Registry 的必要性 = 存在必须全局唯一的共享可变状态。** `BudgetAccountant` 有（预算池），`LocalDPApi` 没有。
 
-#### 5.1.5 单例模式的注意事项
+#### 5.1.5 Registry 工厂模式的注意事项
 
-- **首次创建生效**：`__new__` 中只有首次创建时使用传入的 `epsilon_total` / `delta_total` / `window_seconds`；若实例已存在，直接返回已有实例，**忽略后续参数**。这意味着同一 namespace 的预算上限以首次配置为准。
-- **测试隔离**：单元测试中若需要重置状态，必须手动清理 `_instances` 字典：`BudgetAccountant._instances.pop(ns, None)`，否则前一个测试的预算消耗会影响后续测试。
-- **多进程限制**：内存模式的单例只在单进程内有效。多进程/多节点部署必须使用 SQLite 模式（`PRIVACY_BUDGET_DB` 环境变量），通过数据库事务实现跨进程的预算一致性。
+- **参数冲突告警**：`get_or_create` 在实例已存在且**显式传入**的参数与现有配置不一致时，会发出 `UserWarning`；未提供的参数视为"不关心"，不会触发告警。这避免了旧实现中"静默丢弃参数"的隐蔽 Bug。
+- **首次创建生效**：`epsilon_total` / `delta_total` / `window_seconds` 仅在对应 namespace 首次创建时生效；后续调用若配置冲突会被警告并忽略。
+- **测试隔离**：单元测试中应使用注册表提供的公共接口：`default_registry.reset()` 清空所有实例，`default_registry.remove(ns)` 移除指定 namespace。不要直接操作 `BudgetRegistry._instances` 内部字典。
+- **向后兼容**：`BudgetAccountant("ns")` 仍委托给 `default_registry`，但新代码推荐直接使用 `default_registry.get_or_create("ns")`。未来可能对该直接构造方式增加 `DeprecationWarning`。
+- **多进程限制**：内存模式的 Registry 只在单进程内有效。多进程/多节点部署必须使用 SQLite 模式（`PRIVACY_BUDGET_DB` 环境变量），通过数据库事务实现跨进程的预算一致性。
 
 ### 5.2 预算消耗规则
 
@@ -1817,7 +1865,7 @@ class DPApi:
 
 | 模式 | 实现 | 适用场景 |
 |---|---|---|
-| 内存模式 | 单例 + 线程锁 | 单进程、高吞吐 |
+| 内存模式 | Registry + 线程锁 | 单进程、高吞吐 |
 | SQLite 模式 | `BEGIN IMMEDIATE` 独占事务 | 多实例共享预算 |
 
 ### 5.4 超支处理

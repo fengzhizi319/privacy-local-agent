@@ -31,7 +31,7 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Union
 import numpy as np
 
 from ..observability.metrics import DP_QUERIES_TOTAL
-from .budget import BudgetAccountant, BudgetRegistry, PrivacyBudgetExhausted, default_registry
+from .budget import BudgetRegistry, PrivacyBudgetExhausted, default_registry
 from .data_adapters import _is_sparse_matrix, _to_2d_numpy_array, extract_chunks, extract_values
 
 
@@ -485,6 +485,9 @@ class DPApi:
         namespace: str = "default",
         random_state: Optional[int] = None,
         registry: Optional[BudgetRegistry] = None,
+        epsilon_total: Optional[float] = None,
+        delta_total: Optional[float] = None,
+        window_seconds: Optional[float] = None,
     ):
         # 初始化 DPApi：创建关联 namespace 的预算账户和安全随机数生成器
         """初始化 DPApi。
@@ -493,10 +496,18 @@ class DPApi:
             namespace: 命名空间，用于关联隐私预算账户。
             random_state: 可选随机种子，用于可复现测试。与旧参数 ``seed`` 等价。
             registry: 可选的 BudgetRegistry 注册表，未提供时使用全局 default_registry。
+            epsilon_total: 可选 epsilon 总预算；仅在对应 BudgetAccountant 尚未创建时生效。
+            delta_total: 可选 delta 总预算；仅在对应 BudgetAccountant 尚未创建时生效。
+            window_seconds: 可选预算重置窗口（秒）；仅在对应 BudgetAccountant 尚未创建时生效。
         """
         self.registry = registry or default_registry
         # Create a BudgetAccountant tied to the given namespace for (epsilon, delta) tracking
-        self.budget = self.registry.get_or_create(namespace)
+        self.budget = self.registry.get_or_create(
+            namespace,
+            epsilon_total=epsilon_total,
+            delta_total=delta_total,
+            window_seconds=window_seconds,
+        )
         # Create a SecureRandom instance (cryptographic RNG by default)
         self.rng = SecureRandom()
         # If a seed is provided, switch to deterministic PRNG mode for reproducibility

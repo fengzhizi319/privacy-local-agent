@@ -180,10 +180,10 @@ print(f"分块带噪声求和: {result}")
 ### 2.8 预算管理示例
 
 ```python
-from privacy_local_agent.privacy.budget import BudgetAccountant
+from privacy_local_agent.privacy.budget import default_registry
 
-# 初始化预算账户
-accountant = BudgetAccountant(
+# 通过注册表初始化预算账户（推荐方式）
+accountant = default_registry.get_or_create(
     namespace="monthly_report", epsilon_total=4.0, delta_total=1e-5
 )
 

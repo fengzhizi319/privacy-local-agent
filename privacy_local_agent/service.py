@@ -11,7 +11,7 @@ resolving parameters from profile/config.
 
 from typing import Any, Dict, List, Optional
 
-from .privacy.budget import BudgetAccountant, BudgetRegistry, default_registry
+from .privacy.budget import BudgetRegistry, default_registry
 from .privacy.classification import ClassificationAPI
 from .privacy.dp import DPApi, LocalDPApi
 from .privacy.kano import BUILTIN_HIERARCHIES, anonymize_record
@@ -46,6 +46,9 @@ class PrivacyService:
         profile_path: str = None,
         namespace: str = "default",
         registry: Optional[BudgetRegistry] = None,
+        epsilon_total: Optional[float] = None,
+        delta_total: Optional[float] = None,
+        window_seconds: Optional[float] = None,
     ):
         """初始化 PrivacyService。
 
@@ -53,11 +56,20 @@ class PrivacyService:
             profile_path: YAML 配置文件路径，可覆盖默认参数。
             namespace: 隐私命名空间，用于隔离隐私预算。
             registry: 可选的 BudgetRegistry 注册表，未提供时使用全局 default_registry。
+            epsilon_total: 可选 epsilon 总预算；仅在对应 BudgetAccountant 尚未创建时生效。
+            delta_total: 可选 delta 总预算；仅在对应 BudgetAccountant 尚未创建时生效。
+            window_seconds: 可选预算重置窗口（秒）；仅在对应 BudgetAccountant 尚未创建时生效。
         """
         self.resolver = get_resolver(profile_path)
         self.namespace = namespace
         self.registry = registry or default_registry
-        self.dp_api = DPApi(namespace, registry=self.registry)
+        self.dp_api = DPApi(
+            namespace,
+            registry=self.registry,
+            epsilon_total=epsilon_total,
+            delta_total=delta_total,
+            window_seconds=window_seconds,
+        )
         self.classification_api = ClassificationAPI(resolver=self.resolver)
         self.local_dp_api = LocalDPApi()
 

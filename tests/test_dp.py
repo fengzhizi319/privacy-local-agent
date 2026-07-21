@@ -20,7 +20,11 @@ import pytest
 
 # Import central DP API (DPApi) for aggregate queries and local DP API (LocalDPApi)
 # for per-record randomized response mechanisms.
-from privacy_local_agent.privacy.budget import BudgetAccountant, PrivacyBudgetExhausted
+from privacy_local_agent.privacy.budget import (
+    BudgetAccountant,
+    PrivacyBudgetExhausted,
+    default_registry,
+)
 from privacy_local_agent.privacy.dp import DPApi, LocalDPApi
 
 
@@ -177,9 +181,6 @@ class TestDPBudget:
 
     def test_laplace_consumes_epsilon_only(self) -> None:
         ns = "test-budget-laplace"
-        # Clear any cached singleton to ensure clean state
-        # 清理单例缓存：_instances是类级字典，如果之前的测试已经创建过同namespace的实例，其预算可能已被消耗。先弹出确保从干净状态开始
-        BudgetAccountant._instances.pop(ns, None)
         api = DPApi(namespace=ns)
         accountant = BudgetAccountant(ns, epsilon_total=10.0, delta_total=1e-4)
         # Laplace sum consumes epsilon=1.0, delta=0.0
@@ -191,7 +192,6 @@ class TestDPBudget:
 
     def test_gaussian_consumes_delta(self) -> None:
         ns = "test-budget-gaussian"
-        BudgetAccountant._instances.pop(ns, None)
         api = DPApi(namespace=ns)
         accountant = BudgetAccountant(ns, epsilon_total=10.0, delta_total=1e-4)
         # Gaussian sum consumes both epsilon=1.0 and delta=1e-5
@@ -210,7 +210,6 @@ class TestDPBudget:
 
     def test_mean_composition_consumes_full_budget(self, monkeypatch) -> None:
         ns = "test-budget-mean"
-        BudgetAccountant._instances.pop(ns, None)
         api = DPApi(namespace=ns)
         accountant = BudgetAccountant(ns, epsilon_total=10.0, delta_total=1e-4)
         # Fix Gaussian noise to a constant (0.1) to prevent noisy_count from
@@ -236,7 +235,6 @@ class TestDPBudget:
 
     def test_exhausted_budget_raises(self) -> None:
         ns = "test-budget-exhaust"
-        BudgetAccountant._instances.pop(ns, None)
         # Create BudgetAccountant with tight total budget (0.5);
         # DPApi reuses the singleton, so subsequent queries share this limit.
         BudgetAccountant(ns, epsilon_total=0.5, delta_total=1e-4)
@@ -1061,3 +1059,22 @@ class TestAdvancedDPFeatures:
 
 
 
+
+
+def test_dpapi_passes_budget_params():
+    """DPApi 应能将预算参数透传给注册表。"""
+    ns = "test-dpapi-budget-params"
+    api = DPApi(
+        namespace=ns,
+        epsilon_total=3.0,
+        delta_total=1e-3,
+        window_seconds=120.0,
+    )
+    assert api.budget.epsilon_total == 3.0
+    assert api.budget.delta_total == 1e-3
+    assert api.budget.window_seconds == 120.0
+
+    # 当 DPApi 未指定参数时，应复用已有实例且不触发告警
+    existing = api.budget
+    api2 = DPApi(namespace=ns)
+    assert api2.budget is existing

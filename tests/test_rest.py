@@ -13,7 +13,6 @@ import pytest
 from fastapi.testclient import TestClient
 
 from privacy_local_agent.main import app
-from privacy_local_agent.privacy.budget import BudgetAccountant
 
 # 复用同一个 TestClient 实例，避免重复创建应用
 client = TestClient(app)

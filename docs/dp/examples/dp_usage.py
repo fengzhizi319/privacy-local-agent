@@ -5,7 +5,7 @@
     PYTHONPATH=. python docs/dp/examples/dp_usage.py
 """
 
-from privacy_local_agent.privacy.budget import BudgetAccountant
+from privacy_local_agent.privacy.budget import default_registry
 from privacy_local_agent.privacy.dp import DPApi
 
 
@@ -51,8 +51,8 @@ def main():
     print(f"真实均值: {true_mean:.2f}")
     print(f"带噪声均值 (Gaussian): {noisy_mean:.2f}\n")
 
-    # 5. 预算管理示例
-    accountant = BudgetAccountant(
+    # 5. 预算管理示例（推荐通过注册表显式获取/创建）
+    accountant = default_registry.get_or_create(
         namespace="monthly_report", epsilon_total=4.0, delta_total=1e-5
     )
 

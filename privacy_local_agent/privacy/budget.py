@@ -1,14 +1,14 @@
 """隐私预算记账模块。
 
-提供单命名空间（namespace）下的隐私预算跟踪，基于单例模式保证同一命名空间
-只存在一份预算状态，并通过锁保证并发安全。当累计消耗超过总预算时抛出
-PrivacyBudgetExhausted 异常。
+提供单命名空间（namespace）下的隐私预算跟踪，通过 BudgetRegistry 注册表工厂
+保证同一命名空间只存在一份预算状态，并通过锁保证并发安全。当累计消耗超过总预算
+时抛出 PrivacyBudgetExhausted 异常。
 
 支持基于时间窗口的预算重置：可通过构造函数参数或环境变量
 PRIVACY_BUDGET_WINDOW_SECONDS 配置窗口长度，窗口到期后已消耗预算自动清零。
 
 Privacy budget accounting module. Tracks per-namespace epsilon/delta consumption
-using a thread-safe singleton pattern and raises PrivacyBudgetExhausted when
+using a thread-safe registry factory (BudgetRegistry) and raises PrivacyBudgetExhausted when
 budget is exhausted. Supports optional time-window based reset to prevent
 long-running sidecars from permanently exhausting their budget.
 """
@@ -78,10 +78,19 @@ class BudgetAccountant:
     """隐私预算会计师。
 
     记录指定 namespace 的总预算与已消耗预算。
-    通过 BudgetRegistry 统一管理实例的生命周期与共享。直接调用构造函数将自动
-    关联至默认全局注册表，保证平滑向后兼容。
-    实例级锁 _mu 控制 spend/remaining 操作，确保多线程环境下的预算扣减是原子的。
-    若配置了环境变量 PRIVACY_BUDGET_DB，则将预算存储至 SQLite 中以支持多进程/多节点共享。
+    实例的创建与共享由 BudgetRegistry 统一管理（参见 default_registry）。
+    直接调用构造函数 ``BudgetAccountant("ns")`` 会委托给全局 default_registry，
+    仅为向后兼容保留；新代码推荐显式使用 ``default_registry.get_or_create("ns")``。
+
+    注意：
+    - 直接构造不支持继承：``__new__`` 始终返回 default_registry 中的
+      BudgetAccountant 实例，子类调用不会得到子类实例。
+    - ``__init__`` 是空操作保护：真实的初始化逻辑在 ``_init_instance`` 中，
+      由 BudgetRegistry 在创建新实例时调用一次。Python 在 ``__new__`` 返回
+      已有实例后仍会调用 ``__init__``，空实现可防止已有实例被重复初始化
+      （例如已消耗预算被悄悄清零）。
+    - 实例级锁 _mu 控制 spend/remaining 操作，确保多线程环境下的预算扣减是原子的。
+    - 若配置了环境变量 PRIVACY_BUDGET_DB，则将预算存储至 SQLite 中以支持多进程/多节点共享。
 
     可选的时间窗口重置机制：
     - 通过 window_seconds 参数或 PRIVACY_BUDGET_WINDOW_SECONDS 环境变量配置窗口。
@@ -99,19 +108,20 @@ class BudgetAccountant:
         _mu: 实例级锁，保护预算扣减与查询的原子性。
     """
 
-    _instances: Dict[str, "BudgetAccountant"] = {}
-
     def __new__(
         cls,
         namespace: str,
-        epsilon_total: float = 10.0,
-        delta_total: float = 1e-4,
+        epsilon_total: Optional[float] = None,
+        delta_total: Optional[float] = None,
         window_seconds: Optional[float] = None,
     ):
         """获取或创建指定命名空间的 BudgetAccountant 实例。
 
         为保证向后兼容，默认委托给全局注册表 default_registry.get_or_create()。
-        若针对相同 namespace 传入了冲突的预算参数，将发出 UserWarning 警告。
+        未提供的参数视为"不关心"：实例不存在时使用注册表默认值创建；实例已存在
+        时不参与冲突检测。显式传入且与已有配置不一致的参数会触发 UserWarning。
+
+        注意：返回值始终是 BudgetAccountant 实例，不支持通过子类化扩展。
         """
         return default_registry.get_or_create(
             namespace=namespace,
@@ -119,6 +129,20 @@ class BudgetAccountant:
             delta_total=delta_total,
             window_seconds=window_seconds,
         )
+
+    def __init__(
+        self,
+        namespace: str,
+        epsilon_total: Optional[float] = None,
+        delta_total: Optional[float] = None,
+        window_seconds: Optional[float] = None,
+    ) -> None:
+        """空操作保护。
+
+        真实的初始化逻辑在 ``_init_instance`` 中，由 BudgetRegistry 创建新实例时
+        调用一次。Python 在 ``__new__`` 返回已有实例后仍会调用 ``__init__``，
+        这里保持空实现，避免已有实例的预算状态被重复初始化而悄悄清零。
+        """
 
     def _init_instance(
         self,
@@ -429,27 +453,38 @@ class BudgetRegistry:
     def get_or_create(
         self,
         namespace: str,
-        epsilon_total: float = 10.0,
-        delta_total: float = 1e-4,
+        epsilon_total: Optional[float] = None,
+        delta_total: Optional[float] = None,
         window_seconds: Optional[float] = None,
     ) -> BudgetAccountant:
         """获取已有实例，或在不存在时创建新实例。
 
-        若实例已存在但传入的预算配置与已有配置不一致，会发出警告提示参数忽略。
+        参数语义：
+        - 实例不存在：未提供的参数使用默认值（epsilon_total=10.0, delta_total=1e-4）创建。
+        - 实例已存在：仅对**显式提供**且与现有配置不一致的参数发出 UserWarning；
+          未提供的参数视为"不关心"，不参与冲突检测。
+
+        Returns:
+            namespace 对应的 BudgetAccountant 实例（已有或新建）。
         """
         with self._lock:
             if namespace in self._instances:
                 existing = self._instances[namespace]
-                if (
-                    existing.epsilon_total != epsilon_total
-                    or existing.delta_total != delta_total
-                ):
+                ignored = []
+                if epsilon_total is not None and existing.epsilon_total != epsilon_total:
+                    ignored.append(f"epsilon_total={epsilon_total}")
+                if delta_total is not None and existing.delta_total != delta_total:
+                    ignored.append(f"delta_total={delta_total}")
+                if window_seconds is not None and existing.window_seconds != window_seconds:
+                    ignored.append(f"window_seconds={window_seconds}")
+                if ignored:
                     import warnings
 
                     warnings.warn(
                         f"BudgetAccountant for namespace '{namespace}' already exists with "
-                        f"epsilon_total={existing.epsilon_total}, delta_total={existing.delta_total}. "
-                        f"Passed parameters (epsilon_total={epsilon_total}, delta_total={delta_total}) are ignored!",
+                        f"epsilon_total={existing.epsilon_total}, delta_total={existing.delta_total}, "
+                        f"window_seconds={existing.window_seconds}. "
+                        f"Passed parameters ({', '.join(ignored)}) are ignored!",
                         stacklevel=2,
                     )
                 return existing
@@ -457,8 +492,8 @@ class BudgetRegistry:
             accountant = object.__new__(BudgetAccountant)
             accountant._init_instance(
                 namespace=namespace,
-                epsilon_total=epsilon_total,
-                delta_total=delta_total,
+                epsilon_total=10.0 if epsilon_total is None else epsilon_total,
+                delta_total=1e-4 if delta_total is None else delta_total,
                 window_seconds=window_seconds,
             )
             self._instances[namespace] = accountant
@@ -482,8 +517,6 @@ class BudgetRegistry:
 
 # 全局默认注册表单例
 default_registry = BudgetRegistry()
-# 保持向后兼容：将 BudgetAccountant._instances 链接至默认注册表内部字典
-BudgetAccountant._instances = default_registry._instances
 
 
 class RDPAccountant:

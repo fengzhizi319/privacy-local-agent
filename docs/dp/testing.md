@@ -284,7 +284,9 @@ from privacy_local_agent.privacy.budget import BudgetAccountant
 
 
 def test_budget_window_reset():
-    BudgetAccountant._instances.clear()
+    from privacy_local_agent.privacy.budget import default_registry
+
+    default_registry.reset()
     accountant = BudgetAccountant(
         "test-window", epsilon_total=2.0, delta_total=1e-5, window_seconds=0.1
     )
