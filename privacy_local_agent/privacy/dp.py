@@ -30,9 +30,13 @@ from enum import Enum
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Union
 import numpy as np
 
+from ..observability.logging_config import get_logger
 from ..observability.metrics import DP_QUERIES_TOTAL
 from .budget import BudgetRegistry, PrivacyBudgetExhausted, default_registry
 from .data_adapters import _is_sparse_matrix, _to_2d_numpy_array, extract_chunks, extract_values
+
+# Module-level structured logger for DP query and budget events
+logger = get_logger(__name__)
 
 
 class Mechanism(str, Enum):
@@ -165,7 +169,7 @@ class DPResult:
     delta_spent: float
     confidence_interval: Union[tuple[float, float], list[tuple[float, float]], Dict[Any, tuple[float, float]]]
 
-    def to_arrow(self):
+    def to_arrow(self) -> Any:
         # 将 DPResult 转换为附带 DP 隐私 Metadata 的 PyArrow Table，支持零拷贝列式传输
         """将 DPResult 包装转换为附带 DP 隐私 Metadata 的 PyArrow Table / Export to PyArrow Table with Embedded DP Metadata.
 
@@ -184,6 +188,7 @@ class DPResult:
 
         # Ensure all fields are JSON-serializable native Python types (no numpy objects)
         def _to_jsonable(obj: Any) -> Any:
+            """递归将 DPResult 字段转换为 JSON 可序列化类型（消除 numpy 对象）。"""
             # Convert numpy arrays to plain Python lists
             if isinstance(obj, np.ndarray):
                 return obj.tolist()
@@ -363,18 +368,22 @@ def calibrate_analytic_gaussian(epsilon: float, delta: float, sensitivity: float
 
     # Standard normal CDF: Phi(t) = 0.5 * (1 + erf(t / sqrt(2)))
     def Phi(t: float) -> float:
+        """标准正态分布累积分布函数 / Standard normal CDF."""
         return 0.5 * (1.0 + math.erf(float(t) / math.sqrt(2.0)))
 
     # Case A helper: delta as a function of the ratio s when delta >= delta_threshold
     def caseA(eps: float, s: float) -> float:
+        """解析高斯 Case A 辅助函数（delta >= delta_threshold 时使用）。"""
         return Phi(math.sqrt(eps * s)) - math.exp(eps) * Phi(-math.sqrt(eps * (s + 2.0)))
 
     # Case B helper: delta as a function of the ratio s when delta < delta_threshold
     def caseB(eps: float, s: float) -> float:
+        """解析高斯 Case B 辅助函数（delta < delta_threshold 时使用）。"""
         return Phi(-math.sqrt(eps * s)) - math.exp(eps) * Phi(-math.sqrt(eps * (s + 2.0)))
 
     # Doubling trick: exponentially expand the search interval [s_inf, s_sup] until predicate is met
     def doubling_trick(predicate_stop, s_inf: float, s_sup: float) -> tuple[float, float]:
+        """倍增法搜索满足 predicate_stop 的 s 区间 / Doubling-trick interval search."""
         while not predicate_stop(s_sup):
             s_inf = s_sup
             s_sup = 2.0 * s_inf
@@ -382,6 +391,7 @@ def calibrate_analytic_gaussian(epsilon: float, delta: float, sensitivity: float
 
     # Binary search: narrow down the interval to find s_final within tolerance
     def binary_search(predicate_stop, predicate_left, s_inf: float, s_sup: float) -> float:
+        """二分查找在 [s_inf, s_sup] 内定位满足 predicate_stop 的 s 值。"""
         s_mid = s_inf + (s_sup - s_inf) / 2.0
         while not predicate_stop(s_mid):
             if predicate_left(s_mid):
@@ -443,7 +453,7 @@ class SecureRandom(random.Random):
         self._seeded = False
 
     # 设置随机种子：提供种子时切换到确定性 PRNG 模式，否则恢复密码学安全模式
-    def seed(self, a=None, version=2):
+    def seed(self, a=None, version=2) -> None:
         # If a seed is provided, switch to deterministic mode for reproducible tests
         if a is not None:
             super().seed(a, version=version)
@@ -508,6 +518,15 @@ class DPApi:
             delta_total=delta_total,
             window_seconds=window_seconds,
         )
+        logger.info(
+            "dp_api_initialized",
+            extra={
+                "namespace": self.budget.namespace,
+                "epsilon_total": self.budget.epsilon_total,
+                "delta_total": self.budget.delta_total,
+                "seeded": random_state is not None,
+            },
+        )
         # Create a SecureRandom instance (cryptographic RNG by default)
         self.rng = SecureRandom()
         # If a seed is provided, switch to deterministic PRNG mode for reproducibility
@@ -515,7 +534,7 @@ class DPApi:
             self.rng.seed(random_state)
 
     @classmethod
-    def from_seed(cls, namespace: str = "default", seed: Optional[int] = None):
+    def from_seed(cls, namespace: str = "default", seed: Optional[int] = None) -> "DPApi":
         # 兼容旧接口的工厂方法：通过 seed 创建 DPApi 实例
         """兼容旧构造方式：通过 seed 创建 DPApi 实例。"""
         # Delegate to __init__ with random_state parameter
@@ -611,8 +630,30 @@ class DPApi:
         )
         return lower, upper
 
+    def _validate_inputs(
+        self,
+        epsilon: float,
+        delta: float = 0.0,
+        confidence_level: Optional[float] = None,
+    ) -> None:
+        """统一校验公共输入参数，确保失败时快速抛出清晰错误。
+
+        Args:
+            epsilon: 隐私预算 epsilon，必须 > 0。
+            delta: 隐私预算 delta，必须 >= 0。
+            confidence_level: 置信区间水平，若有值则必须在 (0, 1) 区间。
+        """
+        if epsilon <= 0:
+            raise ValueError(f"epsilon must be positive, got {epsilon}")
+        if delta < 0:
+            raise ValueError(f"delta must be non-negative, got {delta}")
+        if confidence_level is not None and not (0.0 < confidence_level < 1.0):
+            raise ValueError(
+                f"confidence_level must be in (0, 1), got {confidence_level}"
+            )
+
+
     def _validate_mechanism(self, mechanism: str, delta: float) -> str:
-        # 校验 mechanism 名称和 delta 兼容性，返回规范化的 mechanism 字符串（.value）
         """校验 mechanism 与 delta 参数，返回规范化后的 mechanism 字符串。
 
         内部使用 Mechanism 枚举做校验，返回 .value 保证下游兼容性（Prometheus 标签、序列化等）。
@@ -660,6 +701,138 @@ class DPApi:
         # Analytic Gaussian: calibrate sigma to the given sensitivity
         sigma = calibrate_analytic_gaussian(epsilon, delta, sensitivity)
         return self._sample_gaussian(sigma)
+
+    def _execute_scalar_query(
+        self,
+        aggregation: str,
+        true_value: float,
+        epsilon: float,
+        delta: float,
+        mechanism: str,
+        noise_sampler: Any,
+        noise_scale: float,
+        return_details: bool,
+        confidence_level: float,
+        round_int: bool = False,
+        clip_non_negative: bool = False,
+    ) -> Union[float, DPResult]:
+        """执行标量 DP 查询的公共模板：预算扣减、噪声采样、后处理、置信区间。
+
+        集中处理单次 (epsilon, delta) 标量查询的公共流程，减少 noisy_*/chunked_*
+        方法中的重复代码。
+        """
+        try:
+            self.budget.spend(epsilon, delta)
+        except PrivacyBudgetExhausted:
+            logger.error(
+                "privacy_budget_exhausted",
+                extra={
+                    "aggregation": aggregation,
+                    "namespace": self.budget.namespace,
+                    "epsilon": epsilon,
+                    "delta": delta,
+                },
+            )
+            raise
+
+        DP_QUERIES_TOTAL.labels(mechanism=mechanism, aggregation=aggregation).inc()
+        noise = noise_sampler()
+        raw_val = float(true_value) + noise
+        final_val = _apply_post_processing(
+            raw_val, round_int=round_int, clip_non_negative=clip_non_negative
+        )
+
+        logger.info(
+            "dp_scalar_query_completed",
+            extra={
+                "aggregation": aggregation,
+                "mechanism": mechanism,
+                "epsilon": epsilon,
+                "delta": delta,
+                "noise_scale": noise_scale,
+            },
+        )
+
+        if return_details:
+            ci = compute_confidence_interval(
+                final_val, noise_scale, mechanism, confidence_level
+            )
+            return DPResult(
+                value=final_val,
+                noise_mechanism=mechanism,
+                noise_scale=noise_scale,
+                epsilon_spent=epsilon,
+                delta_spent=delta,
+                confidence_interval=ci,
+            )
+        return final_val
+
+    def _execute_histogram_query(
+        self,
+        true_counts: Dict[Any, float],
+        epsilon: float,
+        delta: float,
+        mechanism: str,
+        noise_scale: float,
+        return_details: bool,
+        confidence_level: float,
+        round_int: bool = False,
+        clip_non_negative: bool = True,
+    ) -> Union[Dict[Any, float], DPResult]:
+        """执行直方图 DP 查询的公共模板：单次预算为所有分桶加噪。
+
+        直方图各分桶互斥，联合敏感度为 1，因此只扣减一次预算。
+        """
+        try:
+            self.budget.spend(epsilon, delta)
+        except PrivacyBudgetExhausted:
+            logger.error(
+                "privacy_budget_exhausted",
+                extra={
+                    "aggregation": "histogram",
+                    "namespace": self.budget.namespace,
+                    "epsilon": epsilon,
+                    "delta": delta,
+                },
+            )
+            raise
+
+        DP_QUERIES_TOTAL.labels(mechanism=mechanism, aggregation="histogram").inc()
+        res_dict: Dict[Any, float] = {}
+        ci_dict: Dict[Any, tuple[float, float]] = {}
+        for c in true_counts:
+            noise = self._sample_count_noise(epsilon, delta, mechanism)
+            raw_val = float(true_counts[c]) + noise
+            final_val = _apply_post_processing(
+                raw_val, round_int=round_int, clip_non_negative=clip_non_negative
+            )
+            res_dict[c] = final_val
+            if return_details:
+                ci_dict[c] = compute_confidence_interval(
+                    final_val, noise_scale, mechanism, confidence_level
+                )
+
+        logger.info(
+            "dp_histogram_query_completed",
+            extra={
+                "aggregation": "histogram",
+                "mechanism": mechanism,
+                "epsilon": epsilon,
+                "delta": delta,
+                "num_bins": len(true_counts),
+            },
+        )
+
+        if return_details:
+            return DPResult(
+                value=res_dict,
+                noise_mechanism=mechanism,
+                noise_scale=noise_scale,
+                epsilon_spent=epsilon,
+                delta_spent=delta,
+                confidence_interval=ci_dict,
+            )
+        return res_dict
 
     def count(
         self,
@@ -718,6 +891,8 @@ class DPApi:
         """
         # Step 1: Validate mechanism name and delta compatibility
         mechanism = self._validate_mechanism(mechanism, delta)
+        # Step 1.5: Validate common numeric inputs (epsilon, delta, confidence_level)
+        self._validate_inputs(epsilon, delta, confidence_level)
         # Step 2: Extract input data into contiguous ndarray or scipy.sparse matrix
         arr = extract_values(values, column=column, party=party)
 
@@ -842,6 +1017,8 @@ class DPApi:
         """
         # Step 1: Validate mechanism name and delta compatibility
         mechanism = self._validate_mechanism(mechanism, delta)
+        # Step 1.5: Validate common numeric inputs (epsilon, delta, confidence_level)
+        self._validate_inputs(epsilon, delta, confidence_level)
 
         # Step 2: Extract input data into contiguous ndarray or scipy.sparse matrix
         arr = extract_values(values, column=column, party=party)
@@ -968,6 +1145,8 @@ class DPApi:
 
         # Validate mechanism after empty check (avoid unnecessary validation)
         mechanism = self._validate_mechanism(mechanism, delta)
+        # Validate common numeric inputs (epsilon, delta, confidence_level)
+        self._validate_inputs(epsilon, delta, confidence_level)
 
         # Step 3: Apply composition theorem: split budget equally for count and sum
         eps_sub = epsilon / 2.0
@@ -1068,6 +1247,8 @@ class DPApi:
         """
         # Step 1: Validate mechanism and convert input to 2D matrix
         mechanism = self._validate_mechanism(mechanism, delta)
+        # Validate common numeric inputs (epsilon, delta, confidence_level)
+        self._validate_inputs(epsilon, delta, confidence_level)
         matrix = _to_2d_numpy_array(data)
 
         # Determine true per-column non-zero counts
@@ -1154,6 +1335,8 @@ class DPApi:
         """
         # Step 1: Validate mechanism and convert input to 2D matrix
         mechanism = self._validate_mechanism(mechanism, delta)
+        # Validate common numeric inputs (epsilon, delta, confidence_level)
+        self._validate_inputs(epsilon, delta, confidence_level)
         matrix = _to_2d_numpy_array(data)
 
         # Determine number of columns
@@ -1270,6 +1453,8 @@ class DPApi:
         """
         # Step 1: Validate mechanism and extract data
         mechanism = self._validate_mechanism(mechanism, delta)
+        # Validate common numeric inputs (epsilon, delta, confidence_level)
+        self._validate_inputs(epsilon, delta, confidence_level)
         arr = extract_values(values, column=column, party=party)
 
         # Step 2: Consume budget once for all bins (joint sensitivity = 1 for histogram)
@@ -1354,38 +1539,28 @@ class DPApi:
         """对已经聚合好的计数结果直接注入 DP 噪声。"""
         # Validate mechanism and delta compatibility
         mechanism = self._validate_mechanism(mechanism, delta)
-        # Consume privacy budget for this query
-        self.budget.spend(epsilon, delta)
-        # Increment Prometheus metrics counter
-        DP_QUERIES_TOTAL.labels(mechanism=mechanism, aggregation="count").inc()
-        # Sample DP noise calibrated for count (sensitivity=1)
-        noise = self._sample_count_noise(epsilon, delta, mechanism)
-        # Add noise to the pre-aggregated true count
-        raw_val = float(true_count) + noise
-        # Apply post-processing: non-negative clip and/or integer rounding
-        final_val = _apply_post_processing(
-            raw_val, round_int=round_int, clip_non_negative=clip_non_negative
-        )
+        # Validate common numeric inputs (epsilon, delta, confidence_level)
+        self._validate_inputs(epsilon, delta, confidence_level)
         # Compute noise scale for confidence interval reporting
         noise_scale = (
             1.0 / epsilon
             if mechanism == Mechanism.LAPLACE
             else calibrate_analytic_gaussian(epsilon, delta, 1.0)
         )
-        # If return_details, compute CI and wrap in DPResult
-        if return_details:
-            ci = compute_confidence_interval(
-                final_val, noise_scale, mechanism, confidence_level
-            )
-            return DPResult(
-                value=final_val,
-                noise_mechanism=mechanism,
-                noise_scale=noise_scale,
-                epsilon_spent=epsilon,
-                delta_spent=delta,
-                confidence_interval=ci,
-            )
-        return final_val
+        # Delegate common scalar DP flow to the shared template
+        return self._execute_scalar_query(
+            aggregation="count",
+            true_value=true_count,
+            epsilon=epsilon,
+            delta=delta,
+            mechanism=mechanism,
+            noise_sampler=lambda: self._sample_count_noise(epsilon, delta, mechanism),
+            noise_scale=noise_scale,
+            return_details=return_details,
+            confidence_level=confidence_level,
+            round_int=round_int,
+            clip_non_negative=clip_non_negative,
+        )
 
     def noisy_sum(
         self,
@@ -1403,41 +1578,33 @@ class DPApi:
         """对已经聚合好的求和结果直接注入 DP 噪声。"""
         # Validate mechanism and delta compatibility
         mechanism = self._validate_mechanism(mechanism, delta)
+        # Validate common numeric inputs (epsilon, delta, confidence_level)
+        self._validate_inputs(epsilon, delta, confidence_level)
         # Sensitivity must be non-negative (bounded range width)
         if sensitivity < 0:
             raise ValueError("sensitivity must be non-negative")
-        # Consume privacy budget for this query
-        self.budget.spend(epsilon, delta)
-        # Increment Prometheus metrics counter
-        DP_QUERIES_TOTAL.labels(mechanism=mechanism, aggregation="sum").inc()
-        # Sample DP noise calibrated to the given sensitivity
-        noise = self._sample_sum_noise(sensitivity, epsilon, delta, mechanism)
-        # Add noise to the pre-aggregated true sum
-        raw_val = float(true_sum) + noise
-        # Apply post-processing: non-negative clip and/or integer rounding
-        final_val = _apply_post_processing(
-            raw_val, round_int=round_int, clip_non_negative=clip_non_negative
-        )
         # Compute noise scale for confidence interval reporting
         noise_scale = (
             (sensitivity / epsilon)
             if (mechanism == Mechanism.LAPLACE and epsilon > 0)
             else calibrate_analytic_gaussian(epsilon, delta, sensitivity)
         )
-        # If return_details, compute CI and wrap in DPResult
-        if return_details:
-            ci = compute_confidence_interval(
-                final_val, noise_scale, mechanism, confidence_level
-            )
-            return DPResult(
-                value=final_val,
-                noise_mechanism=mechanism,
-                noise_scale=noise_scale,
-                epsilon_spent=epsilon,
-                delta_spent=delta,
-                confidence_interval=ci,
-            )
-        return final_val
+        # Delegate common scalar DP flow to the shared template
+        return self._execute_scalar_query(
+            aggregation="sum",
+            true_value=true_sum,
+            epsilon=epsilon,
+            delta=delta,
+            mechanism=mechanism,
+            noise_sampler=lambda: self._sample_sum_noise(
+                sensitivity, epsilon, delta, mechanism
+            ),
+            noise_scale=noise_scale,
+            return_details=return_details,
+            confidence_level=confidence_level,
+            round_int=round_int,
+            clip_non_negative=clip_non_negative,
+        )
 
     def noisy_mean(
         self,
@@ -1457,6 +1624,8 @@ class DPApi:
         """对已经聚合好的 sum/count 分别注入 DP 噪声后得到均值。"""
         # Validate mechanism and delta compatibility
         mechanism = self._validate_mechanism(mechanism, delta)
+        # Validate common numeric inputs (epsilon, delta, confidence_level)
+        self._validate_inputs(epsilon, delta, confidence_level)
         # Sensitivity must be non-negative (bounded range width)
         if sensitivity < 0:
             raise ValueError("sensitivity must be non-negative")
@@ -1552,46 +1721,26 @@ class DPApi:
         """对已经聚合好的直方图计数直接注入 DP 噪声。"""
         # Validate mechanism and delta compatibility
         mechanism = self._validate_mechanism(mechanism, delta)
-        # Consume budget once for all bins (joint sensitivity = 1)
-        self.budget.spend(epsilon, delta)
-        # Increment Prometheus metrics counter
-        DP_QUERIES_TOTAL.labels(mechanism=mechanism, aggregation="histogram").inc()
-
+        # Validate common numeric inputs (epsilon, delta, confidence_level)
+        self._validate_inputs(epsilon, delta, confidence_level)
         # Compute noise scale for confidence interval reporting
         noise_scale = (
             1.0 / epsilon
             if mechanism == Mechanism.LAPLACE
             else calibrate_analytic_gaussian(epsilon, delta, 1.0)
         )
-        # Inject independent DP noise into each pre-aggregated bin
-        res_dict = {}
-        ci_dict = {}
-        for c in true_counts:
-            # Sample fresh noise for each bin
-            noise = self._sample_count_noise(epsilon, delta, mechanism)
-            raw_val = float(true_counts[c]) + noise
-            # Apply post-processing: non-negative clip and/or integer rounding
-            final_val = _apply_post_processing(
-                raw_val, round_int=round_int, clip_non_negative=clip_non_negative
-            )
-            res_dict[c] = final_val
-            if return_details:
-                # Compute per-bin confidence interval
-                ci_dict[c] = compute_confidence_interval(
-                    final_val, noise_scale, mechanism, confidence_level
-                )
-
-        # Return DPResult with per-bin CIs or plain dict
-        if return_details:
-            return DPResult(
-                value=res_dict,
-                noise_mechanism=mechanism,
-                noise_scale=noise_scale,
-                epsilon_spent=epsilon,
-                delta_spent=delta,
-                confidence_interval=ci_dict,
-            )
-        return res_dict
+        # Delegate common histogram DP flow to the shared template
+        return self._execute_histogram_query(
+            true_counts=true_counts,
+            epsilon=epsilon,
+            delta=delta,
+            mechanism=mechanism,
+            noise_scale=noise_scale,
+            return_details=return_details,
+            confidence_level=confidence_level,
+            round_int=round_int,
+            clip_non_negative=clip_non_negative,
+        )
 
     def chunked_count(
         self,
@@ -1630,6 +1779,8 @@ class DPApi:
         """
         # Step 1: Validate mechanism and delta compatibility
         mechanism = self._validate_mechanism(mechanism, delta)
+        # Validate common numeric inputs (epsilon, delta, confidence_level)
+        self._validate_inputs(epsilon, delta, confidence_level)
         # Initialize running total for true count across all chunks
         true_count = 0.0
         # Step 2: Iterate over chunks, accumulating true count incrementally
@@ -1646,38 +1797,26 @@ class DPApi:
                 else:
                     # Object dtype: Python-level truthiness counting
                     true_count += float(sum(1 for v in chunk_arr if v))
-        # Step 3: Consume budget only once after all chunks are aggregated
-        self.budget.spend(epsilon, delta)
-        # Increment Prometheus metrics counter
-        DP_QUERIES_TOTAL.labels(mechanism=mechanism, aggregation="count").inc()
-        # Step 4: Sample DP noise and add to the accumulated true count
-        noise = self._sample_count_noise(epsilon, delta, mechanism)
-        raw_val = true_count + noise
-        # Apply post-processing: non-negative clip and/or integer rounding
-        final_val = _apply_post_processing(
-            raw_val, round_int=round_int, clip_non_negative=clip_non_negative
-        )
-
-        # Compute noise scale for confidence interval reporting
+        # Step 3: Compute noise scale for confidence interval reporting
         noise_scale = (
             1.0 / epsilon
             if mechanism == Mechanism.LAPLACE
             else calibrate_analytic_gaussian(epsilon, delta, 1.0)
         )
-        # Step 5: If return_details, compute CI and wrap in DPResult
-        if return_details:
-            ci = compute_confidence_interval(
-                final_val, noise_scale, mechanism, confidence_level
-            )
-            return DPResult(
-                value=final_val,
-                noise_mechanism=mechanism,
-                noise_scale=noise_scale,
-                epsilon_spent=epsilon,
-                delta_spent=delta,
-                confidence_interval=ci,
-            )
-        return final_val
+        # Delegate common scalar DP flow to the shared template
+        return self._execute_scalar_query(
+            aggregation="count",
+            true_value=true_count,
+            epsilon=epsilon,
+            delta=delta,
+            mechanism=mechanism,
+            noise_sampler=lambda: self._sample_count_noise(epsilon, delta, mechanism),
+            noise_scale=noise_scale,
+            return_details=return_details,
+            confidence_level=confidence_level,
+            round_int=round_int,
+            clip_non_negative=clip_non_negative,
+        )
 
     def chunked_sum(
         self,
@@ -1719,6 +1858,8 @@ class DPApi:
         """
         # Step 1: Validate mechanism and delta compatibility
         mechanism = self._validate_mechanism(mechanism, delta)
+        # Validate common numeric inputs (epsilon, delta, confidence_level)
+        self._validate_inputs(epsilon, delta, confidence_level)
         # chunked_sum requires explicit clip bounds (no data-dependent inference allowed)
         if clip_lower is None or clip_upper is None:
             raise ValueError(
@@ -1745,38 +1886,28 @@ class DPApi:
                 clipped = self._clip_values(chunk_arr, lower, upper)
                 true_sum += float(clipped.sum())
 
-        # Step 3: Consume budget only once after all chunks are aggregated
-        self.budget.spend(epsilon, delta)
-        # Increment Prometheus metrics counter
-        DP_QUERIES_TOTAL.labels(mechanism=mechanism, aggregation="sum").inc()
-        # Step 4: Sample DP noise calibrated to the clip-range sensitivity
-        noise = self._sample_sum_noise(sensitivity, epsilon, delta, mechanism)
-        raw_val = true_sum + noise
-        # Apply post-processing: non-negative clip and/or integer rounding
-        final_val = _apply_post_processing(
-            raw_val, round_int=round_int, clip_non_negative=clip_non_negative
-        )
-
-        # Compute noise scale for confidence interval reporting
+        # Step 3: Compute noise scale for confidence interval reporting
         noise_scale = (
             (sensitivity / epsilon)
             if (mechanism == Mechanism.LAPLACE and epsilon > 0)
             else calibrate_analytic_gaussian(epsilon, delta, sensitivity)
         )
-        # Step 5: If return_details, compute CI and wrap in DPResult
-        if return_details:
-            ci = compute_confidence_interval(
-                final_val, noise_scale, mechanism, confidence_level
-            )
-            return DPResult(
-                value=final_val,
-                noise_mechanism=mechanism,
-                noise_scale=noise_scale,
-                epsilon_spent=epsilon,
-                delta_spent=delta,
-                confidence_interval=ci,
-            )
-        return final_val
+        # Delegate common scalar DP flow to the shared template
+        return self._execute_scalar_query(
+            aggregation="sum",
+            true_value=true_sum,
+            epsilon=epsilon,
+            delta=delta,
+            mechanism=mechanism,
+            noise_sampler=lambda: self._sample_sum_noise(
+                sensitivity, epsilon, delta, mechanism
+            ),
+            noise_scale=noise_scale,
+            return_details=return_details,
+            confidence_level=confidence_level,
+            round_int=round_int,
+            clip_non_negative=clip_non_negative,
+        )
 
     def chunked_mean(
         self,
@@ -1802,6 +1933,8 @@ class DPApi:
         """
         # Step 1: Validate mechanism and require explicit clip bounds
         mechanism = self._validate_mechanism(mechanism, delta)
+        # Validate common numeric inputs (epsilon, delta, confidence_level)
+        self._validate_inputs(epsilon, delta, confidence_level)
         if clip_lower is None or clip_upper is None:
             raise ValueError(
                 "chunked_mean requires explicit clip_lower and clip_upper"
@@ -1909,6 +2042,8 @@ class DPApi:
         """
         # Step 1: Validate mechanism and delta compatibility
         mechanism = self._validate_mechanism(mechanism, delta)
+        # Validate common numeric inputs (epsilon, delta, confidence_level)
+        self._validate_inputs(epsilon, delta, confidence_level)
         # Initialize per-category bin counts to zero
         counts = {c: 0.0 for c in categories}
 
@@ -1933,42 +2068,24 @@ class DPApi:
                     if c in item_counts:
                         counts[c] += float(item_counts[c])
 
-        # Step 3: Consume budget once after all chunks are aggregated
-        self.budget.spend(epsilon, delta)
-        # Increment Prometheus metrics counter
-        DP_QUERIES_TOTAL.labels(mechanism=mechanism, aggregation="histogram").inc()
-
-        # Compute noise scale for confidence interval reporting
+        # Step 3: Compute noise scale for confidence interval reporting
         noise_scale = (
             1.0 / epsilon
             if mechanism == Mechanism.LAPLACE
             else calibrate_analytic_gaussian(epsilon, delta, 1.0)
         )
-        # Step 4: Inject independent DP noise into each bin
-        res_dict = {}
-        ci_dict = {}
-        for c in counts:
-            # Sample fresh noise for each bin
-            noise = self._sample_count_noise(epsilon, delta, mechanism)
-            raw_val = counts[c] + noise
-            # Apply post-processing: non-negative clip and/or integer rounding
-            final_val = _apply_post_processing(
-                raw_val, round_int=round_int, clip_non_negative=clip_non_negative
-            )
-            res_dict[c] = final_val
-            if return_details:
-                # Compute per-bin confidence interval
-                ci_dict[c] = compute_confidence_interval(
-                    final_val, noise_scale, mechanism, confidence_level
-                )
-
-        # Step 5: Return DPResult with per-bin CIs or plain dict
-        if return_details:
-            return DPResult(
-                value=res_dict, noise_mechanism=mechanism, noise_scale=noise_scale,
-                epsilon_spent=epsilon, delta_spent=delta, confidence_interval=ci_dict,
-            )
-        return res_dict
+        # Delegate common histogram DP flow to the shared template
+        return self._execute_histogram_query(
+            true_counts=counts,
+            epsilon=epsilon,
+            delta=delta,
+            mechanism=mechanism,
+            noise_scale=noise_scale,
+            return_details=return_details,
+            confidence_level=confidence_level,
+            round_int=round_int,
+            clip_non_negative=clip_non_negative,
+        )
 
     def dp_aggregate(
         self,
@@ -1984,11 +2101,18 @@ class DPApi:
 
         执行步骤：
         1. 获取待聚合规格 `num_specs = len(specs)`。
+           (Determine number of aggregation specs for budget splitting)
         2. 根据预算组合定理，将总预算均匀切分为 `eps_per_col = epsilon / num_specs` 与 `delta_per_col = delta / num_specs`。
+           (Split total budget equally across columns)
         3. 遍历 `specs` 配置字典（列名 -> 聚合类型及特定参数 tuple/str）。
+           (Iterate over specs dict)
         4. 链式分发调用 `self.count` / `self.sum` / `self.mean` / `self.histogram` 完成原位表格多列 DP 聚合。
+           (Dispatch to aggregation methods)
         5. 返回包含各列带噪聚合结果或 DPResult 对象的字典。
+           (Return dict of results)
         """
+        # Validate common numeric inputs (epsilon, delta)
+        self._validate_inputs(epsilon, delta)
         # Step 1: Determine number of aggregation specs for budget splitting
         num_specs = len(specs)
         if num_specs == 0:
@@ -2054,6 +2178,8 @@ class DPApi:
              若小于分位数则扩大 clip 界（`cur_clip *= 1.5`），反之缩减（`cur_clip *= 0.85`）。
         4. 返回迭代收敛后的安全上下界 `(0.0, float(cur_clip))`。
         """
+        # Validate common numeric inputs (epsilon)
+        self._validate_inputs(epsilon)
         # Step 1: Extract data and handle empty input edge case
         arr = extract_values(values, column=column, party=party)
         if (isinstance(arr, np.ndarray) and arr.size == 0) or (
@@ -2167,9 +2293,14 @@ class DPApi:
 
         执行步骤：
         1. Master 节点汇总来自于各个 Worker 的 `Accumulator` 对象并执行加法合并。
+           (Master merges Accumulator objects from workers)
         2. 根据 `aggregation` 目标算子（"count"/"sum"/"mean"/"histogram"）转发调用对应的 `noisy_*` 函数。
+           (Dispatch to noisy_* based on aggregation type)
         3. 仅在此处消耗一次 (epsilon, delta) 隐私预算，为总聚合统计量注入 DP 噪声并导出。
+           (Consume budget once and inject noise)
         """
+        # Validate common numeric inputs (epsilon, delta)
+        self._validate_inputs(epsilon, delta)
         # Step 1: Dispatch to the appropriate noisy_* method based on aggregation type
         if aggregation == AggregationType.COUNT:
             # Inject noise into the accumulated count
@@ -2218,6 +2349,8 @@ class DPApi:
         """
         # Step 1: Validate mechanism and convert input to 2D matrix (N x d)
         mechanism = self._validate_mechanism(mechanism, delta)
+        # Validate common numeric inputs (epsilon, delta, confidence_level)
+        self._validate_inputs(epsilon, delta, confidence_level)
         matrix = _to_2d_numpy_array(vectors)
 
         # Step 2: Compute L2 norm of each row vector
@@ -2285,6 +2418,8 @@ class DPApi:
         """
         # Step 1: Validate mechanism and convert input to 2D matrix (N x d)
         mechanism = self._validate_mechanism(mechanism, delta)
+        # Validate common numeric inputs (epsilon, delta, confidence_level)
+        self._validate_inputs(epsilon, delta, confidence_level)
         matrix = _to_2d_numpy_array(vectors)
         n_rows = matrix.shape[0]
 
@@ -2381,6 +2516,8 @@ class DPApi:
         5. 对保留下来的 Group 进一步计算目标 target_col 的 count/sum/mean 带噪聚合。
         6. 返回 Group 映射字典，有效防范数据记录存在性泄露（Group Leakage）。
         """
+        # Validate common numeric inputs (epsilon, delta)
+        self._validate_inputs(epsilon, delta)
         import pandas as pd
 
         # Step 1: Validate input is a pandas DataFrame
