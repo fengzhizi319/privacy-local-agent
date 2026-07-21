@@ -1,4 +1,21 @@
-"""Tests for the optional pandas-based VectorizedRuleEngine."""
+"""向量化规则引擎单元测试 / Vectorized Rule Engine Unit Tests.
+
+中文说明：
+验证基于 pandas 的向量化规则引擎（VectorizedRuleEngine）：
+- 标量接口与 DefaultRuleEngine 语义一致性。
+- 批量 evaluate_series 与逐元素标量引擎结果一致。
+- ClassificationAPI(use_vectorized=True) 与普通 API 输出一致。
+- 向量化性能优于纯标量行级循环。
+- pandas 缺失时自动回退到 DefaultRuleEngine。
+
+English Description:
+Tests for the optional pandas-based VectorizedRuleEngine:
+- Scalar interface consistency with DefaultRuleEngine.
+- Batch evaluate_series matches element-wise scalar engine results.
+- ClassificationAPI(use_vectorized=True) output matches default API.
+- Vectorized performance is faster than scalar row-level loops.
+- Automatic fallback to DefaultRuleEngine when pandas is missing.
+"""
 
 import time
 
@@ -13,6 +30,7 @@ from privacy_local_agent.privacy.classification_vectorized import VectorizedRule
 
 @pytest.fixture
 def params():
+    """创建默认分类参数。"""
     return ClassificationParams()
 
 
