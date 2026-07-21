@@ -10,7 +10,13 @@ from privacy_local_agent.privacy.kano_table import (
     k_anonymize_table,
 )
 from privacy_local_agent.privacy.kano import (
+    QIType,
+    GeneralizationStrategy,
     anonymize_record,
+    anonymize_records_batch,
+    choose_level,
+    salary_hierarchy,
+    education_hierarchy,
     KAnonymityRecordResult,
 )
 
@@ -71,7 +77,7 @@ class TestKAnonymizeTable:
 
     def test_missing_qi_cols_raises(self) -> None:
         with pytest.raises(ValueError, match="not found"):
-            k_anonymize_table([{"age": 1}], ["gender"], k=1)
+            k_anonymize_table([{"age": 1}, {"age": 2}], ["gender"], k=2)
 
     def test_k_anonymize_dataframe(self) -> None:
         pd = pytest.importorskip("pandas")
@@ -94,7 +100,7 @@ class TestKAnonymizeTable:
         k_anonymize_table(
             [{"age": 25, "zipcode": "100001"}, {"age": 26, "zipcode": "100002"}],
             ["age", "zipcode"],
-            k=1,
+            k=2,
         )
         after = REGISTRY.get_sample_value(
             "privacy_kano_operations_total", {"operation": "table"}
@@ -189,3 +195,90 @@ class TestAnonymizeRecord:
         table = result.to_arrow()
         assert isinstance(table, pa.Table)
         assert b"k_anonymity_record_metadata" in table.schema.metadata
+
+
+class TestQITypeEnum:
+    """准标识符类型枚举测试。"""
+
+    def test_qi_type_enum_values(self) -> None:
+        assert QIType.AGE == "age"
+        assert QIType.ZIPCODE == "zipcode"
+        assert QIType.GENDER == "gender"
+        assert QIType.SALARY == "salary"
+        assert QIType.EDUCATION == "education"
+
+
+class TestGeneralizationStrategyEnum:
+    """泛化策略枚举测试。"""
+
+    def test_generalization_strategy_enum_values(self) -> None:
+        assert GeneralizationStrategy.INTERVAL == "interval"
+        assert GeneralizationStrategy.SET == "set"
+        assert GeneralizationStrategy.SUPPRESSION == "suppression"
+        assert GeneralizationStrategy.PREFIX == "prefix"
+
+
+class TestInputValidationKano:
+    """输入校验测试。"""
+
+    def test_anonymize_record_k_less_than_2_raises(self) -> None:
+        with pytest.raises(ValueError, match="k must be at least 2"):
+            anonymize_record({"age": "25"}, ["age"], {}, k=1)
+
+    def test_anonymize_record_empty_qi_cols_raises(self) -> None:
+        with pytest.raises(ValueError, match="qi_cols must not be empty"):
+            anonymize_record({"age": "25"}, [], {}, k=5)
+
+    def test_anonymize_record_non_dict_raises(self) -> None:
+        with pytest.raises(ValueError, match="record must be a dict"):
+            anonymize_record(["not", "a", "dict"], ["age"], {}, k=5)  # type: ignore
+
+    def test_choose_level_invalid_max_level_raises(self) -> None:
+        with pytest.raises(ValueError, match="max_level must be at least 1"):
+            choose_level(5, 0)
+
+    def test_k_anonymize_table_k_less_than_2_raises(self) -> None:
+        with pytest.raises(ValueError, match="k must be at least 2"):
+            k_anonymize_table([{"age": 25}], ["age"], k=1)
+
+
+class TestNewHierarchies:
+    """新增泛化层次函数测试。"""
+
+    def test_salary_hierarchy(self) -> None:
+        assert salary_hierarchy("15", 0) == "15"
+        assert salary_hierarchy("15", 1) == "[15K-20K]"
+        assert salary_hierarchy("15", 2) == "[10K-20K]"
+        assert salary_hierarchy("15", 3) == "[0K-50K]"
+        assert salary_hierarchy("15", 4) == "*"
+
+    def test_education_hierarchy(self) -> None:
+        assert education_hierarchy("本科", 0) == "本科"
+        assert education_hierarchy("本科", 1) == "高等教育"
+        assert education_hierarchy("高中", 1) == "基础教育"
+        assert education_hierarchy("本科", 2) == "*"
+
+
+class TestAnonymizeRecordsBatch:
+    """批量记录泛化测试。"""
+
+    def test_anonymize_records_batch_basic(self) -> None:
+        records = [
+            {"age": "25", "zipcode": "100001"},
+            {"age": "30", "zipcode": "100002"},
+        ]
+        result = anonymize_records_batch(records, ["age", "zipcode"], k=2)
+        assert len(result) == 2
+
+    def test_anonymize_records_batch_return_details(self) -> None:
+        records = [
+            {"age": "25", "zipcode": "100001"},
+            {"age": "30", "zipcode": "100002"},
+        ]
+        result = anonymize_records_batch(records, ["age", "zipcode"], k=2, return_details=True)
+        assert isinstance(result, KAnonymityRecordResult)
+        assert result.k == 2
+
+    def test_anonymize_records_batch_empty_raises(self) -> None:
+        with pytest.raises(ValueError, match="records must not be empty"):
+            anonymize_records_batch([], ["age"], k=2)

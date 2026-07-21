@@ -443,10 +443,73 @@ message KAnonymizeTableResponse {
 }
 ```
 
-## 8. 测试策略
+## 8. 工业化增强特性
+
+### 8.1 结构化日志
+
+模块使用 `get_logger(__name__)` 创建结构化日志记录器，每次操作记录上下文信息：
+
+```python
+logger.info(
+    "kano_table_completed",
+    extra={
+        "k": k,
+        "qi_cols": qi_cols,
+        "num_rows": len(rows),
+        "equivalence_classes": eq_count,
+    },
+)
+```
+
+### 8.2 输入校验
+
+所有公开接口均内置参数校验，快速失败并给出清晰错误信息：
+
+- `k_anonymize_table`: 校验 k >= 2、qi_cols 非空且存在于数据中、行数 >= k
+- `anonymize_record`: 校验 k >= 2、qi_cols 非空、record 为字典
+- `choose_level`: 校验 k >= 2、max_level >= 1
+
+### 8.3 枚举类型安全
+
+提供 `QIType` 和 `GeneralizationStrategy` 枚举用于类型安全：
+
+```python
+from privacy_local_agent.privacy.kano import QIType, GeneralizationStrategy
+
+assert QIType.AGE == "age"
+assert QIType.SALARY == "salary"
+assert GeneralizationStrategy.INTERVAL == "interval"
+```
+
+### 8.4 新增泛化层次函数
+
+| 函数 | 描述 | 泛化示例 |
+|---|---|---|
+| `salary_hierarchy` | 薪资泛化 | `15` → `[15K-20K]` |
+| `education_hierarchy` | 学历泛化 | `本科` → `高等教育` |
+
+### 8.5 批量记录泛化
+
+新增 `anonymize_records_batch` 函数支持批量记录泛化：
+
+```python
+from privacy_local_agent.privacy.kano import anonymize_records_batch
+
+results = anonymize_records_batch(
+    records=[{"age": "25"}, {"age": "30"}],
+    qi_cols=["age"],
+    k=2
+)
+```
+
+## 9. 测试策略
 
 - Mondrian 实现单元测试，覆盖数值/分类 QI、等价组大小 ≥ k、敏感字段不变。
 - DataFrame 输入/输出测试。
 - `privacy_kano_operations_total` 指标测试。
 - REST/gRPC 接口测试（含 `KAnonymizeDataFrame`）。
 - 边界条件测试：记录数 < k、单值 QI、max_depth=0。
+- **枚举类型测试**：QIType、GeneralizationStrategy 枚举值验证。
+- **输入校验测试**：k < 2、空 qi_cols、非法 record 类型等边界条件。
+- **新增泛化层次测试**：salary_hierarchy、education_hierarchy 函数测试。
+- **批量泛化测试**：anonymize_records_batch 基本功能与边界条件测试。

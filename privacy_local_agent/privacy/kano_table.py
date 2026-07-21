@@ -1,10 +1,21 @@
-"""数据集级 K-匿名（K-Anonymity）处理模块。
+"""数据集级 K-匿名（K-Anonymity）处理模块 / Dataset-Level K-Anonymity Primitive API Implementation.
 
+中文说明：
 使用 Mondrian 多维分区算法对整张表进行 K-匿名泛化，确保每个等价组的大小
 至少为 k。对数值型准标识符输出区间泛化，对分类型准标识符输出取值集合。
+内置输入校验、结构化日志与 Prometheus 指标埋点。
 
+English Description:
 Dataset-level K-anonymity using the Mondrian multidimensional partitioning
 algorithm. Generalizes numeric QIs to intervals and categorical QIs to value sets.
+Ensures each equivalence class has at least k records.
+Built-in input validation, structured logging, and Prometheus metrics instrumentation.
+
+扩展能力 / Key Features:
+- Mondrian 多维分区：递归选择跨度最大维度进行中位数切分。
+- Pandas 向量化加速：优先使用 pandas 向量化实现，避免纯 Python 循环开销。
+- 结构化日志：记录 k 值、等价组数、处理行数等上下文信息。
+- 输入校验：统一的参数合法性检查，快速失败并给出清晰错误信息。
 """
 
 from __future__ import annotations
@@ -12,7 +23,11 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Union
 
+from ..observability.logging_config import get_logger
 from ..observability.metrics import KANO_OPERATIONS_TOTAL
+
+# Module-level structured logger for dataset-level K-anonymity operations
+logger = get_logger(__name__)
 
 
 @dataclass
@@ -150,18 +165,38 @@ def k_anonymize_table(
     max_depth: int = 10,
     return_details: bool = False,
 ) -> Union[List[Dict[str, Any]], KAnonymityResult]:
-    """对整张表执行 Mondrian K-匿名泛化。
+    """对整张表执行 Mondrian K-匿名泛化 / Mondrian K-Anonymity on Full Table.
 
-    执行步骤：
+    执行步骤 / Execution Steps:
     1. 校验输入数据集行数 >= k，校验准标识符列 qi_cols 必须非空且存在于表中。
-    2. 计算多维分割：使用 Pandas 向量化或递归递归选定跨度最大的准标识符维度。
+       (Validate row count >= k, qi_cols non-empty and present in table)
+    2. 计算多维分割：使用 Pandas 向量化或递归选定跨度最大的准标识符维度。
+       (Multidimensional partitioning: select max-span QI dimension via pandas or recursion)
     3. 寻找合法中位数切分点，使得切分后的左右两个等价组记录数均 >= k。
+       (Find valid median split ensuring both partitions have >= k records)
     4. 对终止切分的叶子节点（等价组）实施区间/组合集合泛化。
-    5. 返回泛化后的记录，若 `return_details=True` 封装导出 `KAnonymityResult`。
+       (Apply interval/set generalization on leaf equivalence classes)
+    5. 记录结构化日志并返回泛化后的记录。
+       (Emit structured log and return generalized records)
+
+    Args:
+        rows: 输入记录列表 / Input record list.
+        qi_cols: 准标识符列名列表 / Quasi-Identifier column names.
+        k: K-匿名阈值 / K-anonymity threshold.
+        max_depth: 最大递归深度 / Maximum recursion depth.
+        return_details: 是否返回 KAnonymityResult / Whether to return result struct.
+
+    Returns:
+        泛化后的记录列表或 KAnonymityResult / Generalized records or result struct.
+
+    Raises:
+        ValueError: 当行数 < k 或 qi_cols 无效时 / When rows < k or qi_cols invalid.
     """
     KANO_OPERATIONS_TOTAL.labels(operation="table").inc()
     if not rows:
         return []
+    if k < 2:
+        raise ValueError(f"k must be at least 2 for meaningful anonymity, got {k}")
     if len(rows) < k:
         raise ValueError(
             f"Input table has {len(rows)} rows, but k-anonymity requires at least {k}"
@@ -235,8 +270,19 @@ def k_anonymize_table(
 
         result_df = _mondrian_pd(df, max_depth)
         res_list = result_df.to_dict(orient="records")
+        eq_count = len(res_list) // max(1, k)
+        logger.info(
+            "kano_table_completed",
+            extra={
+                "k": k,
+                "qi_cols": qi_cols,
+                "num_rows": len(rows),
+                "equivalence_classes": eq_count,
+                "max_depth": max_depth,
+            },
+        )
         if return_details:
-            return KAnonymityResult(value=res_list, k=k, qi_cols=qi_cols, equivalence_classes_count=len(res_list)//max(1, k))
+            return KAnonymityResult(value=res_list, k=k, qi_cols=qi_cols, equivalence_classes_count=eq_count)
         return res_list
     except ImportError:
         pass
@@ -261,8 +307,19 @@ def k_anonymize_table(
         return left + right
 
     final_res = _mondrian(rows, max_depth)
+    eq_count = len(final_res) // max(1, k)
+    logger.info(
+        "kano_table_completed",
+        extra={
+            "k": k,
+            "qi_cols": qi_cols,
+            "num_rows": len(rows),
+            "equivalence_classes": eq_count,
+            "max_depth": max_depth,
+        },
+    )
     if return_details:
-        return KAnonymityResult(value=final_res, k=k, qi_cols=qi_cols, equivalence_classes_count=len(final_res)//max(1, k))
+        return KAnonymityResult(value=final_res, k=k, qi_cols=qi_cols, equivalence_classes_count=eq_count)
     return final_res
 
 

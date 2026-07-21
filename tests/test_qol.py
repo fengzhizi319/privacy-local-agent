@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import pytest
 from prometheus_client import REGISTRY
 
 from privacy_local_agent.privacy.qol import (
     MEDICAL_DUMMY,
+    ObfuscationDomain,
+    ObfuscationStrategy,
     obfuscate_query,
     obfuscate_query_batch,
 )
@@ -59,7 +62,8 @@ class TestObfuscateQueryBatch:
             assert len(r) == 3
 
     def test_obfuscate_query_batch_empty(self) -> None:
-        assert obfuscate_query_batch([]) == []
+        with pytest.raises(ValueError, match="must not be empty"):
+            obfuscate_query_batch([])
 
     def test_obfuscate_query_batch_records_metric(self) -> None:
         before = REGISTRY.get_sample_value(
@@ -70,3 +74,44 @@ class TestObfuscateQueryBatch:
             "privacy_qol_operations_total", {"domain": "generic"}
         )
         assert after == before + 1
+
+
+class TestObfuscationDomainEnum:
+    """混淆领域枚举测试。"""
+
+    def test_obfuscation_domain_enum_values(self) -> None:
+        assert ObfuscationDomain.MEDICAL == "medical"
+        assert ObfuscationDomain.GENERIC == "generic"
+
+
+class TestObfuscationStrategyEnum:
+    """混淆策略枚举测试。"""
+
+    def test_obfuscation_strategy_enum_values(self) -> None:
+        assert ObfuscationStrategy.SLOT_FILLING == "slot_filling"
+        assert ObfuscationStrategy.LENGTH_SIMILARITY == "length_similarity"
+        assert ObfuscationStrategy.HYBRID == "hybrid"
+
+
+class TestInputValidationQoL:
+    """输入校验测试。"""
+
+    def test_obfuscate_query_empty_raises(self) -> None:
+        with pytest.raises(ValueError, match="query must not be empty"):
+            obfuscate_query("")
+
+    def test_obfuscate_query_whitespace_only_raises(self) -> None:
+        with pytest.raises(ValueError, match="query must not be empty"):
+            obfuscate_query("   ")
+
+    def test_obfuscate_query_invalid_num_dummies_raises(self) -> None:
+        with pytest.raises(ValueError, match="num_dummies must be at least 1"):
+            obfuscate_query("测试查询", num_dummies=0)
+
+    def test_obfuscate_query_invalid_domain_raises(self) -> None:
+        with pytest.raises(ValueError, match="domain must be"):
+            obfuscate_query("测试查询", domain="invalid")
+
+    def test_obfuscate_query_batch_non_list_raises(self) -> None:
+        with pytest.raises(ValueError, match="queries must be a list"):
+            obfuscate_query_batch("not a list")  # type: ignore

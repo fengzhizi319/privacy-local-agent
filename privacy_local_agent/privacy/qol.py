@@ -1,19 +1,111 @@
-"""查询混淆（Query Obfuscation）模块。
+"""查询混淆（Query Obfuscation）模块 / Query Obfuscation Primitive API Implementation.
 
+中文说明：
 通过向真实查询中混入若干条虚假查询（dummy queries），降低查询日志被分析时
 泄露用户真实意图的风险。当前内置医疗领域与通用领域的 dummy 查询模板。
+支持语义槽位替换（Slot-Filling）与长度相近抽样两种混淆策略。
+内置输入校验、结构化日志与 Prometheus 指标埋点。
 
+English Description:
 Query obfuscation primitive. Mixes a real user query with dummy queries to
-mitigate inference attacks against query logs.
+mitigate inference attacks against query logs. Built-in medical and generic
+domain dummy query pools with semantic slot-filling and length-similarity strategies.
+Built-in input validation, structured logging, and Prometheus metrics instrumentation.
+
+扩展能力 / Key Features:
+- 枚举类型安全：ObfuscationDomain / ObfuscationStrategy 枚举避免裸字符串拼写错误。
+- 语义槽位替换：基于实体词库生成近邻语义 Dummy 查询，提升混淆质量。
+- 结构化日志：每次操作记录领域、虚假查询数、策略等上下文信息。
+- 输入校验：统一的参数合法性检查，快速失败并给出清晰错误信息。
+- 批量处理：支持批量查询混淆，保持接口一致性。
 """
 
 from __future__ import annotations
 
 import random
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import Any, List, Optional, Union
 
+from ..observability.logging_config import get_logger
 from ..observability.metrics import QOL_OPERATIONS_TOTAL
+
+# Module-level structured logger for query obfuscation operations
+logger = get_logger(__name__)
+
+
+class ObfuscationDomain(str, Enum):
+    """查询混淆领域枚举 / Query Obfuscation Domain Enum.
+
+    继承 str 保证与字符串的向后兼容性：ObfuscationDomain.MEDICAL == "medical" 为 True。
+    IDE 自动补全 + 静态类型检查，避免裸字符串拼写错误。
+    """
+
+    MEDICAL = "medical"
+    GENERIC = "generic"
+
+
+class ObfuscationStrategy(str, Enum):
+    """查询混淆策略枚举 / Query Obfuscation Strategy Enum.
+
+    继承 str 保证与字符串的向后兼容性。
+    用于标识不同的混淆方法（语义槽位替换、长度相近抽样、混合策略）。
+    """
+
+    SLOT_FILLING = "slot_filling"      # 语义槽位替换 / Semantic slot-filling
+    LENGTH_SIMILARITY = "length_similarity"  # 长度相近抽样 / Length-similarity sampling
+    HYBRID = "hybrid"                  # 混合策略 / Hybrid (slot-filling + length fallback)
+
+
+def _validate_query(query: str) -> None:
+    """校验查询参数有效性 / Validate query parameter.
+
+    Args:
+        query: 待校验的查询字符串。
+
+    Raises:
+        ValueError: 当查询为空或不是字符串时抛出。
+    """
+    if not isinstance(query, str):
+        raise ValueError(f"query must be a string, got {type(query).__name__}")
+    if not query.strip():
+        raise ValueError("query must not be empty or whitespace-only")
+
+
+def _validate_num_dummies(num_dummies: int) -> None:
+    """校验虚假查询数量参数有效性 / Validate num_dummies parameter.
+
+    Args:
+        num_dummies: 待校验的虚假查询数量。
+
+    Raises:
+        ValueError: 当数量不是正整数时抛出。
+    """
+    if not isinstance(num_dummies, int) or isinstance(num_dummies, bool):
+        raise ValueError(f"num_dummies must be an integer, got {type(num_dummies).__name__}")
+    if num_dummies < 1:
+        raise ValueError(f"num_dummies must be at least 1, got {num_dummies}")
+
+
+def _validate_domain(domain: str) -> str:
+    """校验并规范化领域参数 / Validate and normalize domain parameter.
+
+    Args:
+        domain: 待校验的领域字符串。
+
+    Returns:
+        规范化后的领域字符串（小写）/ Normalized domain string (lowercase).
+
+    Raises:
+        ValueError: 当领域不是支持的值时抛出。
+    """
+    normalized = domain.lower().strip()
+    if normalized not in (ObfuscationDomain.MEDICAL.value, ObfuscationDomain.GENERIC.value):
+        raise ValueError(
+            f"domain must be '{ObfuscationDomain.MEDICAL.value}' or '{ObfuscationDomain.GENERIC.value}', "
+            f"got '{domain}'"
+        )
+    return normalized
 
 
 @dataclass
@@ -128,24 +220,51 @@ def obfuscate_query(
     seed: Optional[int] = None,
     return_details: bool = False,
 ) -> Union[List[str], QoLResult]:
-    """对单个查询进行混淆。
+    """对单个查询进行混淆 / Obfuscate a Single Query with Dummy Queries.
 
-    执行步骤：
-    1. 根据 domain 选择医疗（medical）或通用（generic）虚假查询池。
-    2. 优先使用语义实体槽位（Slot-Filling）匹配并生成近邻语义 Dummy 查询。
-    3. 若未能匹配实体，基于长度相近原则（长度差 <= 6 字符）从 Dummy 池中抽取补齐。
-    4. 将真实 query 随机插入到混淆列表中的某个随机位置。
-    5. 返回混淆列表，若 `return_details=True` 封装导出包含真实 Query 索引的 `QoLResult`。
+    执行步骤 / Execution Steps:
+    1. 校验 query、num_dummies、domain 参数有效性。
+       (Validate query, num_dummies, and domain parameters)
+    2. 根据 domain 选择医疗（medical）或通用（generic）虚假查询池。
+       (Select medical or generic dummy pool by domain)
+    3. 优先使用语义实体槽位（Slot-Filling）匹配并生成近邻语义 Dummy 查询。
+       (Prefer semantic slot-filling to generate near-neighbor dummies)
+    4. 若未能匹配实体，基于长度相近原则从 Dummy 池中抽取补齐。
+       (Fallback to length-similarity sampling if no entity match)
+    5. 将真实 query 随机插入到混淆列表中的某个随机位置。
+       (Insert real query at random position in obfuscated list)
+    6. 记录结构化日志并返回混淆列表或 QoLResult。
+       (Emit structured log and return obfuscated list or QoLResult)
+
+    Args:
+        query: 待混淆的真实查询 / Real query to obfuscate.
+        num_dummies: 生成的虚假查询数量 / Number of dummy queries to generate.
+        domain: 混淆领域 / Obfuscation domain ("medical" or "generic").
+        medical_pool: 自定义医疗领域虚假查询池 / Custom medical dummy pool.
+        generic_pool: 自定义通用领域虚假查询池 / Custom generic dummy pool.
+        seed: 可选随机种子 / Optional random seed for reproducibility.
+        return_details: 是否返回 QoLResult / Whether to return QoLResult.
+
+    Returns:
+        混淆后的查询列表或 QoLResult / Obfuscated query list or QoLResult.
+
+    Raises:
+        ValueError: 当参数无效时 / When parameters are invalid.
     """
-    QOL_OPERATIONS_TOTAL.labels(domain=domain.lower()).inc()
+    _validate_query(query)
+    _validate_num_dummies(num_dummies)
+    domain = _validate_domain(domain)
 
-    is_medical = domain.lower() == "medical"
+    QOL_OPERATIONS_TOTAL.labels(domain=domain).inc()
+
+    is_medical = domain == ObfuscationDomain.MEDICAL.value
     pool = (medical_pool if is_medical else generic_pool)
     if pool is None:
         pool = (MEDICAL_DUMMY if is_medical else GENERIC_DUMMY)
 
     dummies: List[str] = []
     rng = random.Random(seed)
+    strategy_used = ObfuscationStrategy.LENGTH_SIMILARITY.value
 
     if (is_medical and medical_pool is None) or (not is_medical and generic_pool is None):
         matched_term = None
@@ -164,9 +283,12 @@ def obfuscate_query(
                 selected_terms = rng.sample(choices, num_dummies)
                 for st in selected_terms:
                     dummies.append(template.replace(placeholder, st))
+                strategy_used = ObfuscationStrategy.SLOT_FILLING.value
 
     needed = num_dummies - len(dummies)
     if needed > 0:
+        if dummies:
+            strategy_used = ObfuscationStrategy.HYBRID.value
         filtered_pool = [p for p in pool if p != query]
         if not filtered_pool:
             filtered_pool = list(pool)
@@ -184,6 +306,16 @@ def obfuscate_query(
     pos = rng.randint(0, len(dummies))
     result = list(dummies)
     result.insert(pos, query)
+
+    logger.info(
+        "qol_obfuscate_query_completed",
+        extra={
+            "domain": domain,
+            "num_dummies": num_dummies,
+            "strategy": strategy_used,
+            "real_query_index": pos,
+        },
+    )
 
     if return_details:
         return QoLResult(
@@ -204,13 +336,42 @@ def obfuscate_query_batch(
     seed: Optional[int] = None,
     return_details: bool = False,
 ) -> Union[List[List[str]], List[QoLResult]]:
-    """批量对查询进行混淆。
+    """批量对查询进行混淆 / Batch Obfuscate Queries with Dummy Queries.
 
-    执行步骤：
-    1. 遍历 `queries` 数组，对每个查询依次调用 `obfuscate_query`。
-    2. 支持透传 `return_details` 参数返回 `QoLResult` 结构的列表。
+    执行步骤 / Execution Steps:
+    1. 校验 queries 参数为非空列表。
+       (Validate queries is a non-empty list)
+    2. 遍历 `queries` 数组，对每个查询依次调用 `obfuscate_query`。
+       (Iterate queries and apply obfuscate_query per query)
+    3. 记录结构化日志并返回混淆结果列表。
+       (Emit structured log and return obfuscated results)
+
+    Args:
+        queries: 待混淆的查询列表 / List of queries to obfuscate.
+        num_dummies: 每个查询生成的虚假查询数量 / Number of dummies per query.
+        domain: 混淆领域 / Obfuscation domain.
+        medical_pool: 自定义医疗领域虚假查询池 / Custom medical dummy pool.
+        generic_pool: 自定义通用领域虚假查询池 / Custom generic dummy pool.
+        seed: 可选随机种子 / Optional random seed.
+        return_details: 是否返回 QoLResult 列表 / Whether to return QoLResult list.
+
+    Returns:
+        混淆后的查询列表的列表或 QoLResult 列表 / List of obfuscated query lists or QoLResults.
+
+    Raises:
+        ValueError: 当 queries 为空时 / When queries is empty.
     """
-    return [
+    if not queries:
+        raise ValueError("queries must not be empty")
+    if not isinstance(queries, list):
+        raise ValueError(f"queries must be a list, got {type(queries).__name__}")
+
+    logger.info(
+        "qol_obfuscate_query_batch_started",
+        extra={"num_queries": len(queries), "domain": domain, "num_dummies": num_dummies},
+    )
+
+    results = [
         obfuscate_query(
             query,
             num_dummies=num_dummies,
@@ -222,3 +383,10 @@ def obfuscate_query_batch(
         )
         for query in queries
     ]
+
+    logger.info(
+        "qol_obfuscate_query_batch_completed",
+        extra={"num_queries": len(queries), "domain": domain},
+    )
+
+    return results

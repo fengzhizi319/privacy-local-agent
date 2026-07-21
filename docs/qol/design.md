@@ -10,6 +10,7 @@
 - 支持批量查询混淆。
 - 提供可扩展的 dummy 查询池机制。
 - 暴露 `privacy_qol_operations_total` 指标。
+- **工业化增强**：结构化日志、输入校验、枚举类型安全、策略追踪。
 
 ## 3. 算法原理
 
@@ -46,15 +47,61 @@
 | `domain` | 触发场景 |
 |---|---|
 | `medical` | `domain="medical"` 时 |
-| `generic` | `domain="generic"` 或默认其他值时 |
+| `generic` | `domain="generic"` 时 |
 
-## 7. 模块设计
+## 7. 工业化增强特性
+
+### 7.1 结构化日志
+
+模块使用 `get_logger(__name__)` 创建结构化日志记录器，每次操作记录上下文信息：
+
+```python
+logger.info(
+    "qol_obfuscate_query_completed",
+    extra={
+        "domain": domain,
+        "num_dummies": num_dummies,
+        "strategy": strategy_used,
+        "real_query_index": pos,
+    },
+)
+```
+
+### 7.2 输入校验
+
+所有公开接口均内置参数校验，快速失败并给出清晰错误信息：
+
+- `obfuscate_query`: 校验 query 非空、num_dummies >= 1、domain 有效
+- `obfuscate_query_batch`: 校验 queries 为非空列表
+
+### 7.3 枚举类型安全
+
+提供 `ObfuscationDomain` 和 `ObfuscationStrategy` 枚举用于类型安全：
+
+```python
+from privacy_local_agent.privacy.qol import ObfuscationDomain, ObfuscationStrategy
+
+assert ObfuscationDomain.MEDICAL == "medical"
+assert ObfuscationStrategy.SLOT_FILLING == "slot_filling"
+```
+
+### 7.4 策略追踪
+
+模块自动追踪并记录使用的混淆策略：
+
+| 策略 | 描述 |
+|---|---|
+| `slot_filling` | 语义槽位替换（匹配到实体词） |
+| `length_similarity` | 长度相近抽样（未匹配实体） |
+| `hybrid` | 混合策略（部分槽位 + 部分长度抽样） |
+
+## 8. 模块设计
 
 - `privacy_local_agent/privacy/qol.py`：核心混淆逻辑。
 - `privacy_local_agent/service.py`：`PrivacyService` 封装。
 - `privacy_local_agent/main.py` / `grpc_server.py`：REST / gRPC 接口。
 
-## 8. 测试策略
+## 9. 测试策略
 
 - 单条查询混淆结果包含真实查询。
 - 批量查询混淆返回数量正确。
@@ -62,3 +109,5 @@
 - `seed` 参数可复现结果。
 - 指标递增测试。
 - REST/gRPC 接口测试。
+- **枚举类型测试**：ObfuscationDomain、ObfuscationStrategy 枚举值验证。
+- **输入校验测试**：空查询、无效 num_dummies、无效 domain 等边界条件。

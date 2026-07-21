@@ -2,15 +2,16 @@
 
 ## 1. 概述
 
-本文档定义 `privacy-local-agent` 数据脱敏模块的算法原理、字段识别规则与实现细节。脱敏模块通过字段名推断敏感类型，并应用格式保留的掩码规则,降低敏感信息泄露风险。
+本文档定义 `privacy-local-agent` 数据脱敏模块的算法原理、字段识别规则与实现细节。脱敏模块通过字段名推断敏感类型，并应用格式保留的掩码规则，降低敏感信息泄露风险。
 
 ## 2. 设计目标
 
 - 基于字段名关键字匹配自动识别敏感类型。
-- 对常见 PII（手机号、身份证、姓名、银行卡）提供默认掩码规则。
-- 支持单字段、整记录、批量字段、DataFrame 多种调用方式。
+- 对常见 PII（手机号、身份证、姓名、银行卡、邮箱、地址）提供默认掩码规则。
+- 支持单字段、整记录、批量字段、DataFrame、流式分块多种调用方式。
 - 提供 HMAC 哈希与字符串截断作为补充工具。
 - 暴露 `privacy_masking_operations_total` 指标。
+- **工业化增强**：结构化日志、输入校验、枚举类型安全、向量化批处理。
 
 ## 3. 应用场景
 
@@ -55,11 +56,24 @@
 
 | 字段名关键字 | 识别类型 | 脱敏函数 |
 |---|---|---|
-| `mobile` / `phone` | `mobile` | `mask_mobile` |
-| `id_card` / `idcard` / `身份证` | `id_card` | `mask_id_card` |
+| `mobile` / `phone` / `tel` | `mobile` | `mask_mobile` |
+| `id_card` / `idcard` / `身份证` / `identity` | `id_card` | `mask_id_card` |
+| `email` / `mail` / `邮箱` | `email` | `mask_email` |
+| `addr` / `address` / `地址` | `address` | `mask_address` |
 | `name` / `姓名` | `name` | `mask_name` |
 | `bank` / `card_no` | `bank_card` | `mask_bank_card` |
 | 其他 | `default` | `mask_default` |
+
+### 4.1 枚举类型安全
+
+模块提供 `FieldType` 枚举用于类型安全的字段类型判断：
+
+```python
+from privacy_local_agent.privacy.masking import FieldType
+
+assert FieldType.MOBILE == "mobile"
+assert FieldType.EMAIL == "email"
+```
 
 ## 5. 脱敏规则
 
@@ -97,7 +111,24 @@
 6222021234567890123 -> 6222 **** **** 0123
 ```
 
-### 5.5 默认策略
+### 5.5 邮箱
+
+保留用户名首尾字符，中间替换为 `***`，域名完整保留。
+
+```text
+zhangsan@example.com -> z***n@example.com
+ab@test.com -> a***@test.com
+```
+
+### 5.6 地址
+
+保留前 6 个字符（通常包含省/市/区信息），剩余部分替换为 `****`。
+
+```text
+北京市朝阳区某某街道123号 -> 北京市朝阳区****
+```
+
+### 5.7 默认策略
 
 保留前后指定位数（默认各 3 位），中间用 `*` 填充。
 
@@ -127,22 +158,59 @@
 | `mask_record` | `mask_record` |
 | `mask_value_batch` | `mask_value_batch` |
 | `mask_dataframe` | `mask_dataframe` |
-| `hash` | `hash_value` |
+| `hash_value` | `hash_value` |
 | `truncate` | `truncate` |
+| `chunked_mask_records` | `chunked_mask_records` |
 
-## 8. 模块设计
+## 8. 工业化增强特性
+
+### 8.1 结构化日志
+
+模块使用 `get_logger(__name__)` 创建结构化日志记录器，每次操作记录上下文信息：
+
+```python
+logger.info(
+    "mask_value_batch_completed",
+    extra={"num_fields": len(field_names), "context": context},
+)
+```
+
+### 8.2 输入校验
+
+所有公开接口均内置参数校验，快速失败并给出清晰错误信息：
+
+- `mask_value`: 校验 field_name 非空、value 为字符串
+- `hash_value`: 校验 salt 非空
+- `truncate`: 校验 keep_prefix 非负
+- `mask_record`: 校验 record 为非空字典
+- `mask_value_batch`: 校验列表非空且长度一致
+
+### 8.3 枚举类型安全
+
+提供 `MaskingOperation` 枚举用于操作类型标识：
+
+```python
+from privacy_local_agent.privacy.masking import MaskingOperation
+
+assert MaskingOperation.MASK_VALUE == "mask_value"
+assert MaskingOperation.HASH_VALUE == "hash_value"
+```
+
+## 9. 模块设计
 
 - `privacy_local_agent/privacy/masking.py`：核心脱敏逻辑。
 - `privacy_local_agent/privacy/data_adapters.py`：DataFrame 与记录列表互转。
 - `privacy_local_agent/service.py`：`PrivacyService` 封装。
 - `privacy_local_agent/main.py` / `grpc_server.py`：REST / gRPC 接口。
 
-## 9. 测试策略
+## 10. 测试策略
 
-- 各字段类型脱敏规则单元测试。
+- 各字段类型脱敏规则单元测试（含 email、address）。
 - 整记录脱敏不修改原记录测试。
 - 批量字段脱敏长度校验测试。
 - DataFrame 脱敏列选择与默认列测试。
 - HMAC 哈希与截断测试。
 - 指标递增测试。
 - REST/gRPC 接口测试。
+- **枚举类型测试**：FieldType、MaskingOperation 枚举值验证。
+- **输入校验测试**：空值、非法类型、边界条件测试。

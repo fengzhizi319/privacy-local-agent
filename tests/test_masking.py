@@ -6,10 +6,15 @@ import pytest
 from prometheus_client import REGISTRY
 
 from privacy_local_agent.privacy.masking import (
+    FieldType,
+    MaskingOperation,
     chunked_mask_records,
+    guess_field_type,
     hash_value,
+    mask_address,
     mask_dataframe,
     mask_default,
+    mask_email,
     mask_id_card,
     mask_mobile,
     mask_name,
@@ -34,6 +39,16 @@ class TestMaskValue:
         assert mask_name("张三丰") == "张**丰"
         assert mask_name("李四") == "李*"
 
+    def test_mask_email(self) -> None:
+        assert mask_email("zhangsan@example.com") == "z***n@example.com"
+        assert mask_email("ab@test.com") == "a***@test.com"
+        # 无 @ 使用默认策略（保留前后 3 位）
+        assert mask_email("noemail") == "noe*ail"
+
+    def test_mask_address(self) -> None:
+        assert mask_address("北京市朝阳区某某街道123号") == "北京市朝阳区****"
+        assert mask_address("短地址") == "短地址"  # 长度 <= 6 原样返回
+
     def test_mask_default(self) -> None:
         assert mask_default("abcdefgh") == "abc**fgh"
 
@@ -41,6 +56,8 @@ class TestMaskValue:
         assert mask_value("mobile", "13812345678") == "138****5678"
         assert mask_value("id_card", "110101199001011234") == "110101********1234"
         assert mask_value("name", "张三丰") == "张**丰"
+        assert mask_value("email", "test@example.com") == "t***t@example.com"
+        assert mask_value("address", "北京市朝阳区某某街道") == "北京市朝阳区****"
         assert mask_value("unknown", "abcdefgh") == "abc**fgh"
 
     def test_mask_value_records_metric(self) -> None:
@@ -53,6 +70,67 @@ class TestMaskValue:
             "privacy_masking_operations_total", {"operation": "mask_value"}
         )
         assert after == before + 1
+
+
+class TestFieldTypeEnum:
+    """字段类型枚举测试。"""
+
+    def test_field_type_enum_values(self) -> None:
+        assert FieldType.MOBILE == "mobile"
+        assert FieldType.ID_CARD == "id_card"
+        assert FieldType.EMAIL == "email"
+        assert FieldType.ADDRESS == "address"
+
+    def test_guess_field_type_email(self) -> None:
+        assert guess_field_type("email") == FieldType.EMAIL.value
+        assert guess_field_type("user_mail") == FieldType.EMAIL.value
+        assert guess_field_type("邮箱") == FieldType.EMAIL.value
+
+    def test_guess_field_type_address(self) -> None:
+        assert guess_field_type("address") == FieldType.ADDRESS.value
+        assert guess_field_type("home_addr") == FieldType.ADDRESS.value
+        assert guess_field_type("地址") == FieldType.ADDRESS.value
+
+
+class TestMaskingOperationEnum:
+    """脱敏操作枚举测试。"""
+
+    def test_masking_operation_enum_values(self) -> None:
+        assert MaskingOperation.MASK_VALUE == "mask_value"
+        assert MaskingOperation.HASH_VALUE == "hash_value"
+        assert MaskingOperation.TRUNCATE == "truncate"
+
+
+class TestInputValidation:
+    """输入校验测试。"""
+
+    def test_mask_value_empty_field_name_raises(self) -> None:
+        with pytest.raises(ValueError, match="field_name must not be empty"):
+            mask_value("", "test")
+
+    def test_mask_value_non_string_value_raises(self) -> None:
+        with pytest.raises(ValueError, match="value must be a string"):
+            mask_value("mobile", 12345)  # type: ignore
+
+    def test_hash_value_empty_salt_raises(self) -> None:
+        with pytest.raises(ValueError, match="salt must not be empty"):
+            hash_value("test", "")
+
+    def test_truncate_negative_prefix_raises(self) -> None:
+        with pytest.raises(ValueError, match="keep_prefix must be non-negative"):
+            truncate("test", -1)
+
+    def test_mask_record_non_dict_raises(self) -> None:
+        with pytest.raises(ValueError, match="record must be a dict"):
+            mask_record(["not", "a", "dict"])  # type: ignore
+
+    def test_mask_record_empty_raises(self) -> None:
+        with pytest.raises(ValueError, match="record must not be empty"):
+            mask_record({})
+
+    def test_mask_value_batch_empty_raises(self) -> None:
+        with pytest.raises(ValueError, match="must not be empty"):
+            mask_value_batch([], [])
 
 
 class TestMaskRecord:
