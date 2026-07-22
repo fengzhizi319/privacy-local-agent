@@ -27,7 +27,10 @@ Go 代理后端本身不实现隐私算法，只负责：
 1. 接收前端的 HTTP/JSON 请求；
 2. 通过 `internal/mapper` 将 REST 路径与 JSON 体映射为对应的 protobuf 请求；
 3. 调用 `privacy-local-agent` 的 gRPC 方法；
-4. 将 protobuf 响应转换为前端可展示的 JSON。
+4. 将 protobuf 响应转换为前端可展示的 JSON；
+5. 可选：挂载前端构建产物（`web/dist`）直接提供 Console UI，无需依赖 Python 后端。
+
+静态 UI 托管由 `PRIVACY_CONSOLE_STATIC_DIR`（默认 `../web/dist`）控制：目录存在时挂载 `/assets` 静态资源并对非 `/api` 路由回退 `index.html`；不存在时降级为纯 API 模式。
 
 ## 3. 目录布局
 
@@ -41,7 +44,7 @@ frontend/backend-go/
 │   ├── config/             # 环境变量配置
 │   │   └── config.go
 │   ├── handlers/           # HTTP 处理器
-│   │   ├── handlers.go     # /api/health、/api/samples、/api/proxy
+│   │   ├── handlers.go     # /api/health、/api/samples、/api/proxy、静态 UI 托管
 │   │   └── handlers_test.go
 │   ├── mapper/             # REST -> gRPC 路由映射
 │   │   ├── mapper.go       # Dispatch 与各 path handler

@@ -254,6 +254,7 @@ curl -s -X POST http://127.0.0.1:8081/api/proxy \
 | `PRIVACY_AGENT_API_KEY` | `""` | 可选的认证 API Key |
 | `PRIVACY_CONSOLE_HOST` | `127.0.0.1` | 本服务监听地址 |
 | `PRIVACY_CONSOLE_PORT` | `8081` | 本服务监听端口 |
+| `PRIVACY_CONSOLE_STATIC_DIR` | `../web/dist` | 前端构建产物目录，存在时提供 Console UI；设为空字符串可禁用 |
 
 ---
 

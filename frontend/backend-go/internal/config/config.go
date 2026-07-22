@@ -43,12 +43,21 @@ func Load() *Config {
 		AgentAPIKey:   getEnv("PRIVACY_AGENT_API_KEY", ""),
 		ConsoleHost:   getEnv("PRIVACY_CONSOLE_HOST", "127.0.0.1"),
 		ConsolePort:   getEnvInt("PRIVACY_CONSOLE_PORT", 8081),
-		StaticDistDir: getEnv("PRIVACY_CONSOLE_STATIC_DIR", "../web/dist"),
+		StaticDistDir: getEnvOptional("PRIVACY_CONSOLE_STATIC_DIR", "../web/dist"),
 	}
 }
 
 func getEnv(name, defaultValue string) string {
 	if v := os.Getenv(name); v != "" {
+		return v
+	}
+	return defaultValue
+}
+
+// getEnvOptional 与 getEnv 类似，但显式设置的空字符串也会生效，
+// 用于支持“设为空即禁用”的语义（如 PRIVACY_CONSOLE_STATIC_DIR）。
+func getEnvOptional(name, defaultValue string) string {
+	if v, ok := os.LookupEnv(name); ok {
 		return v
 	}
 	return defaultValue
