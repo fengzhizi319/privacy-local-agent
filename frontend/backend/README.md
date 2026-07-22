@@ -12,6 +12,17 @@ pip install -r requirements.txt
 ./run.sh
 ```
 
+## 单元测试
+
+```bash
+cd frontend/backend
+source .venv/bin/activate
+pip install -r requirements.txt  # 已包含 pytest 所需依赖
+pytest tests -v
+```
+
+测试使用 `fastapi.testclient.TestClient` 调用应用路由，并对 `app.main.agent_client.request` 进行 mock，因此**不需要**真实启动 `privacy_local_agent`。
+
 ## 环境变量
 
 | 变量 | 默认值 | 说明 |

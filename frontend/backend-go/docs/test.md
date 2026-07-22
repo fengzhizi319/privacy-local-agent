@@ -148,7 +148,24 @@ go vet ./...
 go test ./...
 ```
 
-## 7. 调试技巧
+## 8. 启动与停止
+
+启动 Go gRPC 代理后端：
+
+```bash
+cd /home/charles/code/sfwork/privacy-local-agent/frontend/backend-go
+go run ./cmd/server
+```
+
+或使用仓库根目录的一键脚本（同时启动 agent 与 Go 代理）：
+
+```bash
+cd /home/charles/code/sfwork/privacy-local-agent
+./frontend/start-go.sh
+./frontend/stop-go.sh    # 在另一个终端停止
+```
+
+## 9. 调试技巧
 
 - 在 mapper 测试中某个 RPC 失败，检查对应 handler 的 JSON 字段名是否与 proto 请求一致。
 - handler 测试失败时，可通过 `t.Logf` 输出响应体。

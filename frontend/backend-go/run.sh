@@ -10,4 +10,6 @@ PORT="${PRIVACY_CONSOLE_PORT:-8081}"
 export PRIVACY_CONSOLE_HOST="$HOST"
 export PRIVACY_CONSOLE_PORT="$PORT"
 
-exec go run ./cmd/server
+mkdir -p bin
+go build -o bin/backend-go ./cmd/server
+exec ./bin/backend-go

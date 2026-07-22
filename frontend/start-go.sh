@@ -27,6 +27,17 @@ if ! command -v go >/dev/null 2>&1; then
     exit 1
 fi
 
+AGENT_PID_FILE="$SCRIPT_DIR/.pids/agent-go.pid"
+CONSOLE_PID_FILE="$SCRIPT_DIR/.pids/console-go.pid"
+
+mkdir -p "$SCRIPT_DIR/.pids"
+
+write_pid() {
+    local file="$1"
+    local pid="$2"
+    echo "$pid" > "$file"
+}
+
 # 清理子进程
 PIDS=()
 cleanup() {
@@ -36,6 +47,7 @@ cleanup() {
         kill "$pid" 2>/dev/null || true
     done
     wait 2>/dev/null || true
+    rm -f "$AGENT_PID_FILE" "$CONSOLE_PID_FILE"
     echo "已停止。"
 }
 trap cleanup INT TERM EXIT
@@ -49,15 +61,20 @@ echo "启动 privacy_local_agent (REST: $AGENT_URL, gRPC: 127.0.0.1:50051)..."
     cd "$PROJECT_ROOT"
     exec python -m privacy_local_agent.server
 ) &
-PIDS+=("$!")
+AGENT_PID=$!
+PIDS+=("$AGENT_PID")
+write_pid "$AGENT_PID_FILE" "$AGENT_PID"
 
 # 启动 Go gRPC 代理后端
 echo "启动 Go gRPC 代理后端 (Console: $CONSOLE_URL)..."
 (
     cd "$SCRIPT_DIR/backend-go"
-    exec go run ./cmd/server
+    go build -o bin/backend-go ./cmd/server
+    exec ./bin/backend-go
 ) &
-PIDS+=("$!")
+CONSOLE_PID=$!
+PIDS+=("$CONSOLE_PID")
+write_pid "$CONSOLE_PID_FILE" "$CONSOLE_PID"
 
 # 等待服务就绪
 wait_for_service() {

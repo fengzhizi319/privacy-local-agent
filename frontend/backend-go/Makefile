@@ -21,7 +21,12 @@ build:
 
 # Run the server in development mode.
 run:
-	go run ./cmd/server
+	go mod tidy
+	go build -o bin/backend-go ./cmd/server
+	./bin/backend-go
+
+# Run the server in development mode (legacy alias).
+dev: run
 
 # Run all tests (unit + integration).
 # Integration tests require privacy_local_agent to be running on 127.0.0.1:50051.

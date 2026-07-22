@@ -20,10 +20,24 @@
 
 该脚本会同时启动 `privacy_local_agent` 和测试控制台后端，等待健康检查后输出访问地址，按 `Ctrl+C` 停止所有服务。
 
+也可以使用对应的停止脚本（例如在其他终端或 CI 场景中）：
+
+```bash
+./frontend/stop.sh
+```
+
+`stop.sh` 会读取 `frontend/.pids/` 下记录的 PID 并安全终止 `privacy_local_agent` 与测试控制台后端。
+
 若要通过 **Go gRPC** 后端访问同样的隐私能力，可改用：
 
 ```bash
 ./frontend/start-go.sh
+```
+
+对应停止脚本：
+
+```bash
+./frontend/stop-go.sh
 ```
 
 该脚本会启动 `privacy_local_agent`（同时监听 REST 与 gRPC）和 `frontend/backend-go` 中的 Go 代理服务，访问地址为 `http://127.0.0.1:8081`。
@@ -78,6 +92,43 @@ corepack pnpm build
 - `GET /api/health` - 检查后端与 agent 的连通性
 - `GET /api/samples` - 获取所有端点的示例数据
 - `POST /api/proxy` - 通用代理，将请求转发到 `privacy_local_agent`
+
+## 测试
+
+### Python 后端单元测试
+
+`frontend/backend/tests/` 目录包含基于 `pytest` + `fastapi.testclient.TestClient` 的单元测试，无需启动真实 agent，通过 mock `agent_client.request` 覆盖 `/api/health`、`/api/samples`、`/api/proxy` 等接口：
+
+```bash
+cd frontend/backend
+source .venv/bin/activate
+pytest tests -v
+```
+
+### Go gRPC 代理测试
+
+Go 后端包含单元测试与集成测试：
+
+```bash
+cd frontend/backend-go
+
+# 单元测试（无需 agent）
+go test -short ./...
+
+# 全部测试（集成测试需 agent 运行在 127.0.0.1:50051，否则自动跳过）
+go test ./...
+
+# 仅集成测试
+go test ./tests -v
+```
+
+### 前端构建检查
+
+```bash
+cd frontend/web
+corepack pnpm install
+corepack pnpm build
+```
 
 ## 烟雾测试
 
