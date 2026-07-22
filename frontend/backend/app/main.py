@@ -9,7 +9,7 @@ from __future__ import annotations
 import base64
 import time
 from contextlib import asynccontextmanager
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -38,6 +38,40 @@ class ProxyResponse(BaseModel):
     status: int
     duration_ms: float
     data: Any
+
+
+class BatchRequestItem(BaseModel):
+    """One request inside a batch."""
+
+    method: str = Field(default="POST")
+    path: str
+    body: Optional[Dict[str, Any]] = Field(default=None)
+
+
+class BatchRequest(BaseModel):
+    """Request body for the batch proxy endpoint."""
+
+    requests: List[BatchRequestItem] = Field(default_factory=list)
+
+
+class BatchResultItem(BaseModel):
+    """Outcome of a single request within a batch."""
+
+    method: str
+    path: str
+    status: int
+    duration_ms: float
+    data: Any = None
+    error: Optional[str] = None
+
+
+class BatchResponse(BaseModel):
+    """Aggregated result of a batch run."""
+
+    total: int
+    passed: int
+    failed: int
+    results: List[BatchResultItem]
 
 
 @asynccontextmanager
@@ -123,6 +157,56 @@ async def proxy(req: ProxyRequest):
     duration_ms = (time.perf_counter() - start) * 1000
 
     return ProxyResponse(status=200, duration_ms=round(duration_ms, 2), data=result)
+
+
+@app.post("/api/batch")
+async def batch(req: BatchRequest):
+    """Run a list of requests against the agent sequentially.
+
+    用于前端“一键批量测试”：逐个转发请求并汇总成功 / 失败统计，
+    单个请求失败不会中断整个批次。
+    """
+    results: List[BatchResultItem] = []
+    for item in req.requests:
+        method = item.method.upper()
+        start = time.perf_counter()
+        try:
+            data = await agent_client.request(method=method, path=item.path, body=item.body)
+            duration_ms = (time.perf_counter() - start) * 1000
+            results.append(
+                BatchResultItem(
+                    method=method,
+                    path=item.path,
+                    status=200,
+                    duration_ms=round(duration_ms, 2),
+                    data=data,
+                )
+            )
+        except HTTPException as exc:
+            duration_ms = (time.perf_counter() - start) * 1000
+            results.append(
+                BatchResultItem(
+                    method=method,
+                    path=item.path,
+                    status=exc.status_code,
+                    duration_ms=round(duration_ms, 2),
+                    error=str(exc.detail),
+                )
+            )
+        except Exception as exc:  # noqa: BLE001 - 批量执行需吸收单个请求的任何异常
+            duration_ms = (time.perf_counter() - start) * 1000
+            results.append(
+                BatchResultItem(
+                    method=method,
+                    path=item.path,
+                    status=500,
+                    duration_ms=round(duration_ms, 2),
+                    error=str(exc),
+                )
+            )
+
+    passed = sum(1 for r in results if 200 <= r.status < 300)
+    return BatchResponse(total=len(results), passed=passed, failed=len(results) - passed, results=results)
 
 
 # Static SPA serving: mount the built frontend at root. If the directory does not

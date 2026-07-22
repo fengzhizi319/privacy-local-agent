@@ -37,9 +37,9 @@ type ProxyRequest struct {
 
 // ProxyResponse is the unified JSON wrapper returned by /api/proxy.
 type ProxyResponse struct {
-	Status     int    `json:"status"`
-	DurationMs int64  `json:"duration_ms"`
-	Data       any    `json:"data"`
+	Status     int   `json:"status"`
+	DurationMs int64 `json:"duration_ms"`
+	Data       any   `json:"data"`
 }
 
 // ConsoleHealth is returned by GET /api/health.
@@ -54,4 +54,29 @@ type ConsoleHealth struct {
 // SamplesResponse wraps the list of endpoint samples.
 type SamplesResponse struct {
 	Samples []EndpointSample `json:"samples"`
+}
+
+// BatchRequest is the JSON body sent by the frontend to /api/batch.
+//
+// 中文说明：前端“一键批量测试”提交一组请求，后端逐个转发并汇总结果。
+type BatchRequest struct {
+	Requests []ProxyRequest `json:"requests"`
+}
+
+// BatchResultItem is the outcome of a single request within a batch.
+type BatchResultItem struct {
+	Method     string `json:"method"`
+	Path       string `json:"path"`
+	Status     int    `json:"status"`
+	DurationMs int64  `json:"duration_ms"`
+	Data       any    `json:"data,omitempty"`
+	Error      string `json:"error,omitempty"`
+}
+
+// BatchResponse is the aggregated result returned by /api/batch.
+type BatchResponse struct {
+	Total   int               `json:"total"`
+	Passed  int               `json:"passed"`
+	Failed  int               `json:"failed"`
+	Results []BatchResultItem `json:"results"`
 }

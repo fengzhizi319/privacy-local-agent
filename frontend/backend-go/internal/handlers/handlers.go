@@ -49,6 +49,7 @@ func (s *Server) RegisterRoutes(r *gin.Engine) {
 	r.GET("/api/health", s.Health)
 	r.GET("/api/samples", s.Samples)
 	r.POST("/api/proxy", s.Proxy)
+	r.POST("/api/batch", s.Batch)
 	s.registerStatic(r)
 }
 
@@ -186,6 +187,58 @@ func (s *Server) Proxy(c *gin.Context) {
 		Status:     http.StatusOK,
 		DurationMs: duration,
 		Data:       data,
+	})
+}
+
+// Batch 逐个转发一组请求并汇总成功 / 失败统计。
+//
+// 用于前端“一键批量测试”：单个请求失败不会中断整个批次，
+// 返回与 Python 后端一致的 {total, passed, failed, results} 结构。
+func (s *Server) Batch(c *gin.Context) {
+	var req models.BatchRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"detail": fmt.Sprintf("invalid request body: %v", err)})
+		return
+	}
+
+	results := make([]models.BatchResultItem, 0, len(req.Requests))
+	passed := 0
+	for _, item := range req.Requests {
+		method := strings.ToUpper(item.Method)
+		start := time.Now()
+		data, err := s.mapper.Dispatch(c.Request.Context(), s.client.Raw(), item.Path, item.Body)
+		duration := time.Since(start).Milliseconds()
+
+		if err != nil {
+			status := http.StatusBadRequest
+			if isUnavailable(err) {
+				status = http.StatusBadGateway
+			}
+			results = append(results, models.BatchResultItem{
+				Method:     method,
+				Path:       item.Path,
+				Status:     status,
+				DurationMs: duration,
+				Error:      err.Error(),
+			})
+			continue
+		}
+
+		passed++
+		results = append(results, models.BatchResultItem{
+			Method:     method,
+			Path:       item.Path,
+			Status:     http.StatusOK,
+			DurationMs: duration,
+			Data:       data,
+		})
+	}
+
+	c.JSON(http.StatusOK, models.BatchResponse{
+		Total:   len(results),
+		Passed:  passed,
+		Failed:  len(results) - passed,
+		Results: results,
 	})
 }
 

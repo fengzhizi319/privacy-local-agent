@@ -1,4 +1,5 @@
 import { setBaseUrl } from '@/api/client';
+import { Icon } from '@/components/icons';
 
 export interface BackendOption {
   label: string;
@@ -33,16 +34,24 @@ export default function BackendSelector({
   };
 
   return (
-    <select
-      value={value.value}
-      onChange={handleChange}
-      className="text-xs bg-indigo-800 text-white border border-indigo-600 rounded px-2 py-1 focus:outline-none focus:ring-2 focus:ring-white"
-    >
-      {DEFAULT_BACKENDS.map((b) => (
-        <option key={b.value} value={b.value}>
-          {b.label}
-        </option>
-      ))}
-    </select>
+    <label className="relative inline-flex items-center">
+      <span className="pointer-events-none absolute left-2.5 text-gray-400">
+        <Icon name="server" className="h-3.5 w-3.5" />
+      </span>
+      <select
+        value={value.value}
+        onChange={handleChange}
+        className="appearance-none rounded-lg border border-gray-200 bg-gray-50 py-1.5 pl-8 pr-8 text-xs font-medium text-gray-700 transition-colors hover:border-gray-300 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+      >
+        {DEFAULT_BACKENDS.map((b) => (
+          <option key={b.value} value={b.value}>
+            {b.label}
+          </option>
+        ))}
+      </select>
+      <span className="pointer-events-none absolute right-2.5 text-gray-400">
+        <Icon name="chevron-down" className="h-3.5 w-3.5" />
+      </span>
+    </label>
   );
 }

@@ -15,7 +15,9 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
 
 	"github.com/fengzhizi319/privacy-local-agent/frontend/backend-go/internal/agent"
@@ -279,6 +281,60 @@ func TestStaticServing(t *testing.T) {
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusNotFound || !strings.Contains(string(bodyBytes), "Not Found") {
 		t.Fatalf("GET /api/nonexistent expected 404 JSON, got status=%d body=%s", resp.StatusCode, bodyBytes)
+	}
+}
+
+// TestBatchHandler 验证批量代理端点：逐个转发并汇总成功 / 失败统计，
+// 单个请求失败不中断整个批次。
+func TestBatchHandler(t *testing.T) {
+	grpcSrv := &testPrivacyServer{
+		MaskFunc: func(_ context.Context, req *pb.MaskRequest) (*pb.MaskResponse, error) {
+			if req.Value == "bad" {
+				return nil, status.Error(codes.InvalidArgument, "invalid value")
+			}
+			return &pb.MaskResponse{Result: "***"}, nil
+		},
+	}
+	ts, _ := setupTestServer(t, grpcSrv)
+	defer ts.Close()
+
+	reqBody := map[string]any{
+		"requests": []map[string]any{
+			{"method": "POST", "path": "/v1/privacy/mask", "body": map[string]string{"field_name": "email", "value": "ok"}},
+			{"method": "POST", "path": "/v1/privacy/mask", "body": map[string]string{"field_name": "email", "value": "bad"}},
+		},
+	}
+	b, _ := json.Marshal(reqBody)
+	resp, err := http.Post(ts.URL+"/api/batch", "application/json", bytes.NewReader(b))
+	if err != nil {
+		t.Fatalf("POST /api/batch failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", resp.StatusCode)
+	}
+
+	var body struct {
+		Total   int `json:"total"`
+		Passed  int `json:"passed"`
+		Failed  int `json:"failed"`
+		Results []struct {
+			Path   string `json:"path"`
+			Status int    `json:"status"`
+			Error  string `json:"error"`
+		} `json:"results"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode response failed: %v", err)
+	}
+	if body.Total != 2 || body.Passed != 1 || body.Failed != 1 {
+		t.Fatalf("unexpected batch summary: total=%d passed=%d failed=%d", body.Total, body.Passed, body.Failed)
+	}
+	if body.Results[0].Status != http.StatusOK {
+		t.Fatalf("expected first result 200, got %d", body.Results[0].Status)
+	}
+	if body.Results[1].Status == http.StatusOK || body.Results[1].Error == "" {
+		t.Fatalf("expected second result to fail with error, got %+v", body.Results[1])
 	}
 }
 
