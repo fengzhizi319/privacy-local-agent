@@ -9,6 +9,7 @@
 - 基于字段名关键字匹配自动识别敏感类型。
 - 对常见 PII（手机号、身份证、姓名、银行卡、邮箱、地址）提供默认掩码规则。
 - 支持单字段、整记录、批量字段、DataFrame、流式分块多种调用方式。
+- **多格式输入适配**：参考 DP 模块 `extract_values` 设计，统一支持 pandas DataFrame、numpy ndarray、PyArrow Table/RecordBatch、Arrow IPC 字节流、Polars、SecretFlow、list of dict 等多种输入格式。
 - 提供 HMAC 哈希与字符串截断作为补充工具。
 - 暴露 `privacy_masking_operations_total` 指标。
 - **工业化增强**：结构化日志、输入校验、枚举类型安全、向量化批处理。
@@ -31,7 +32,7 @@
 
 - **mask_value_batch**：对多个独立字段值并行脱敏，各字段之间无关联
 - **mask_dataframe**：对 DataFrame 中每行记录独立脱敏，行间不产生联动
-- **性能优化**：使用 Pandas 向量化操作提升大数据集处理效率，但仍为逐行独立处理
+- **性能优化**：使用 Pandas 向量化操作或 PyArrow 列式计算内核提升大数据集处理效率，但仍为逐行独立处理
 
 ### 3.3 不适用场景：数据库级 K-匿名
 
@@ -145,8 +146,36 @@ ab@test.com -> a***@test.com
 1. **向量化加速（Pandas 专用通道）**：
    - 检测 `df` 是否为 `pandas.DataFrame` 实例。
    - 若是，对需要脱敏的列采用 Pandas 列式向量化 `.apply(lambda v: mask_value(...) if pd.notna(v) else v)`。这避免了行级 Dict 转换开销，在 C 语言层面由 Pandas 引擎执行，有效防止大数据集下的内存溢出。
-2. **平滑降级（兜底通道）**：
-   - 对于非 `pandas.DataFrame` 或未安装 Pandas 的环境，平滑降级为先通过 `data_adapters.to_records` 转化为 Dict 记录列表，逐行调用 `mask_value` 脱敏，再通过 `from_records` 还原为原 DataFrame 的处理模式。
+2. **列式计算加速（PyArrow 专用通道）**：
+   - 检测 `df` 是否为 `pyarrow.Table` 或 `pyarrow.RecordBatch` 实例。
+   - 若是，通过 `_mask_arrow_column` 利用 `pyarrow.compute` 的 UTF-8 内核（`utf8_slice_codeunits`、`binary_join_element_wise`、`replace_substring_regex` 等）在列式内存中直接完成脱敏。
+   - **避免 `to_pylist()` 全量物化**：数据始终留在 Arrow 列式 buffer，无 Python 对象 GC 压力。
+   - 返回值保持为 `pyarrow.Table`，调用方可继续用于 Arrow 生态下游处理。
+   - 支持 null 值透传：null 元素在脱敏后仍为 null。
+3. **多格式输入适配（统一转换通道）**：
+   - 对于非 pandas / 非 PyArrow 输入，通过 `_convert_to_records` 统一转换为记录列表。
+   - 支持的格式包括：
+     - **numpy ndarray**（1-D 或 2-D）：按列名或自动列名构建记录
+     - **Arrow IPC Stream 字节流**（bytes/bytearray）：解析后转换为记录
+     - **Polars DataFrame**：调用 `to_dicts()` 转换
+     - **SecretFlow DataFrame**：通过 `data_adapters.to_records` 转换
+     - **list of dict**：直接作为记录列表使用
+4. **平滑降级（兜底通道）**：
+   - 对于不支持的格式，抛出 `TypeError` 并提供清晰的错误信息。
+
+### 6.3 整记录脱敏
+
+`mask_record(record)` 支持多种单行数据格式输入：
+- **dict**：直接作为记录处理
+- **bytes/bytearray**：解析为 Arrow IPC Stream 并取第一行
+- **PyArrow Table / RecordBatch**：提取第一行为字典
+- **numpy ndarray**：1-D 数组按 `{col_0: val, ...}` 构建记录；2-D 取第一行
+- **pandas Series**：调用 `to_dict()` 转换
+- **Polars Series**：调用 `to_dict()` 转换
+
+### 6.4 流式分块脱敏
+
+`chunked_mask_records(chunks)` 的每个 chunk 支持多种数据格式（参考 6.2 节），通过 `_convert_to_records` 统一转换为记录列表后处理。
 
 ## 7. 指标
 
@@ -199,6 +228,9 @@ assert MaskingOperation.HASH_VALUE == "hash_value"
 ## 9. 模块设计
 
 - `privacy_local_agent/privacy/masking.py`：核心脱敏逻辑。
+  - `_mask_arrow_column`：PyArrow 列级向量化脱敏内核（`pyarrow.compute` UTF-8 算子）。
+  - `_coerce_to_dict`：单行多格式输入转 dict。
+  - `_convert_to_records`：多行多格式输入转记录列表。
 - `privacy_local_agent/privacy/data_adapters.py`：DataFrame 与记录列表互转。
 - `privacy_local_agent/service.py`：`PrivacyService` 封装。
 - `privacy_local_agent/main.py` / `grpc_server.py`：REST / gRPC 接口。
@@ -209,6 +241,7 @@ assert MaskingOperation.HASH_VALUE == "hash_value"
 - 整记录脱敏不修改原记录测试。
 - 批量字段脱敏长度校验测试。
 - DataFrame 脱敏列选择与默认列测试。
+- **PyArrow 列式计算快速路径测试**：验证返回类型为 `pa.Table`、null 透传、RecordBatch 输入、columns 过滤。
 - HMAC 哈希与截断测试。
 - 指标递增测试。
 - REST/gRPC 接口测试。

@@ -46,18 +46,28 @@ result = mask_value("name", "张三丰")
 位置：`privacy_local_agent.privacy.masking.mask_record`
 
 ```python
-def mask_record(record: Dict[str, str], context: str = "") -> Dict[str, str]
+def mask_record(record: Any, context: str = "") -> Any
 ```
 
-对记录字典中的每个字符串值按字段名脱敏。
+对记录中的每个字符串值按字段名脱敏。**支持多种输入数据格式**（参考 DP 模块 `extract_values` 设计）：
+
+- **dict**：直接作为记录处理
+- **bytes/bytearray**：解析为 Arrow IPC Stream 并取第一行
+- **PyArrow Table / RecordBatch**：提取第一行为字典
+- **numpy ndarray**：1-D 数组按 `{col_0: val, ...}` 构建记录；2-D 取第一行
+- **pandas Series**：调用 `to_dict()` 转换
+- **Polars Series**：调用 `to_dict()` 转换
 
 **使用场景：**
 - 用户信息完整记录的脱敏（包含多个PII字段）
 - 数据库查询结果单行记录的脱敏
 - API 返回完整用户对象前的脱敏处理
+- 从 Arrow IPC 字节流解析并脱敏单条记录
+- 从 numpy 数组构建记录并脱敏
 
 **参数建议：**
-- `record`：字典的键应为字段名，值为字符串类型；非字符串值会保持不变
+- `record`：支持多种格式，非 dict 格式会自动转换为字典
+- 字典的键应为字段名，值为字符串类型；非字符串值会保持不变
 - 返回新字典，不修改原记录
 
 **示例：**
@@ -125,11 +135,19 @@ def mask_dataframe(
 ) -> Any
 ```
 
-对 DataFrame 中的指定列脱敏。支持 pandas / SecretFlow DataFrame。
+对 DataFrame 中的指定列脱敏。**支持多种输入数据格式**（参考 DP 模块 `extract_values` 设计）：
+
+- **pandas DataFrame**：自动检测并使用 Pandas 向量化优化
+- **PyArrow Table / RecordBatch**：自动检测并使用 `pyarrow.compute` 列式计算内核，避免 `to_pylist()` 全量物化，返回值为 `pyarrow.Table`
+- **SecretFlow DataFrame / HDataFrame / VDataFrame**：联邦学习数据结构
+- **numpy ndarray**（1-D 或 2-D）：按列名或自动列名构建记录
+- **Arrow IPC Stream 字节流**（bytes/bytearray）：二进制传输格式
+- **Polars DataFrame**：高性能 DataFrame 库
+- **list of dict**：记录列表
 
 | 参数 | 类型 | 必填 | 说明 |
 |---|---|---|---|
-| `df` | `Any` | 是 | 输入 DataFrame |
+| `df` | `Any` | 是 | 输入数据（支持多种格式） |
 | `columns` | `Optional[List[str]]` | 否 | 目标列名；None 则对所有字符串列脱敏 |
 | `context` | `str` | 否 | 上下文信息 |
 
@@ -138,9 +156,14 @@ def mask_dataframe(
 - 数据导出前的整表脱敏处理
 - 数据分析前的隐私保护预处理
 - 机器学习训练数据的脱敏准备
+- 从 Arrow IPC 字节流解析并脱敏
+- 从 numpy 数组构建 DataFrame 并脱敏
+- Polars DataFrame 脱敏
 
 **参数建议：**
-- **性能优化**：模块会自动检测 pandas DataFrame 并使用向量化操作，性能提升 10-100 倍
+- **性能优化**：模块会自动检测 pandas DataFrame 并使用向量化操作，检测 PyArrow Table/RecordBatch 并使用列式计算内核，性能提升 10-100 倍
+- **PyArrow 快速路径**：PyArrow 输入通过 `pyarrow.compute` UTF-8 内核直接在列式内存中脱敏，避免全量物化为 Python 对象，返回值为 `pyarrow.Table`
+- **多格式支持**：非 pandas / 非 PyArrow 输入会自动转换为记录列表处理
 - `columns` 参数：
   - 明确指定需要脱敏的列，避免不必要的处理
   - 设为 `None` 时自动识别所有 object/string 类型列
@@ -150,6 +173,7 @@ def mask_dataframe(
 **示例：**
 ```python
 import pandas as pd
+import pyarrow as pa
 from privacy_local_agent.privacy.masking import mask_dataframe
 
 # 创建示例数据
@@ -170,6 +194,16 @@ print(masked_df)
 #       mobile   name  age              email
 # 0  138****5678   张*   25  t***@example.com
 # 1  139****4321   李*   30      u***@test.com
+
+# PyArrow Table 输入（列式计算快速路径，返回 pyarrow.Table）
+table = pa.table({
+    "mobile": ["13812345678", "13987654321"],
+    "name": ["张三", "李四"],
+})
+result_table = mask_dataframe(table)
+print(type(result_table))  # <class 'pyarrow.lib.Table'>
+print(result_table.column("mobile").to_pylist())
+# ['138****5678', '139****4321']
 ```
 
 ### `hash_value`
@@ -549,7 +583,7 @@ except grpc.RpcError as e:
 2. **性能优化**
    - 小数据量（<100条）：使用 `mask_record` 或多次 `mask_value`
    - 中等数据量（100-1000条）：使用 `mask_value_batch`
-   - 大数据量（>1000条）：使用 `mask_dataframe` + Pandas 向量化
+   - 大数据量（>1000条）：使用 `mask_dataframe` + Pandas 向量化或 PyArrow 列式计算
 
 3. **安全建议**
    - HMAC 盐值通过环境变量传递，不要硬编码

@@ -14,6 +14,7 @@ Supports scalar, batch, DataFrame, and streaming chunked processing modes with
 built-in input validation, structured logging, and Prometheus metrics instrumentation.
 
 扩展能力 / Key Features:
+- 多格式输入适配：参考 DP 模块 `extract_values` 设计，支持 pandas DataFrame、numpy ndarray、PyArrow Table/RecordBatch、Arrow IPC 字节流、Polars、SecretFlow、list of dict 等多种输入格式。
 - 向量化批处理：pandas DataFrame 列级 apply 加速，减少 Python 循环开销。
 - 结构化日志：每次操作记录操作类型、字段数、记录数等上下文信息。
 - 输入校验：统一的参数合法性检查，快速失败并给出清晰错误信息。
@@ -30,6 +31,8 @@ import re
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Dict, Iterable, Iterator, List, Optional, Sequence, Union
+
+import numpy as np
 
 from ..observability.logging_config import get_logger
 from ..observability.metrics import MASKING_OPERATIONS_TOTAL
@@ -421,6 +424,264 @@ def mask_value_batch(
     return masked_list
 
 
+def _coerce_to_dict(data: Any) -> Dict[str, Any]:
+    """将多种单行数据格式转换为字典 / Coerce Single-Row Data to Dict.
+
+    中文说明：
+    支持 dict（直接返回）、bytes/bytearray（Arrow IPC）、PyArrow Table/RecordBatch、
+    numpy ndarray、pandas Series 等格式。
+
+    English Description:
+    Supports dict (pass-through), bytes/bytearray (Arrow IPC), PyArrow Table/RecordBatch,
+    numpy ndarray, pandas Series, etc.
+
+    Args:
+        data: 输入数据 / Input data.
+
+    Returns:
+        字典记录 / Dict record.
+    """
+    # dict: return as-is
+    if isinstance(data, dict):
+        return data
+
+    # bytes/bytearray: parse Arrow IPC Stream → first row
+    if isinstance(data, (bytes, bytearray)):
+        import pyarrow.ipc as ipc
+        reader = ipc.RecordBatchStreamReader(data)
+        table = reader.read_all()
+        if table.num_rows == 0:
+            raise ValueError("Arrow IPC table is empty, cannot extract record")
+        return table.to_pylist()[0]
+
+    # PyArrow Table / RecordBatch
+    try:
+        import pyarrow as pa
+        if isinstance(data, pa.RecordBatch):
+            data = pa.Table.from_batches([data])
+        if isinstance(data, pa.Table):
+            if data.num_rows == 0:
+                raise ValueError("PyArrow table is empty, cannot extract record")
+            return {col: data.column(col)[0].as_py() for col in data.column_names}
+    except ImportError:
+        pass
+
+    # numpy ndarray
+    if isinstance(data, np.ndarray):
+        if data.ndim == 1:
+            return {f"col_{i}": str(v) for i, v in enumerate(data)}
+        if data.ndim == 2 and data.shape[0] > 0:
+            return {f"col_{j}": str(data[0, j]) for j in range(data.shape[1])}
+        raise ValueError("numpy array is empty or has unsupported dimensions")
+
+    # pandas Series → to_dict()
+    try:
+        import pandas as pd
+        if isinstance(data, pd.Series):
+            return data.to_dict()
+    except ImportError:
+        pass
+
+    # polars Series (has to_dict)
+    if hasattr(data, "to_dict") and not hasattr(data, "columns"):
+        try:
+            return data.to_dict()
+        except Exception:
+            pass
+
+    return data
+
+
+def _convert_to_records(data: Any) -> List[Dict[str, Any]]:
+    """将多种数据格式转换为记录列表 / Convert Multiple Data Formats to Record List.
+
+    中文说明：
+    扩展 `data_adapters.to_records` 的格式支持，额外处理 numpy ndarray、
+    PyArrow Table/RecordBatch、Arrow IPC 二进制字节流、Polars DataFrame。
+
+    English Description:
+    Extends `data_adapters.to_records` with additional format support including
+    numpy ndarray, PyArrow Table/RecordBatch, Arrow IPC bytes, and Polars DataFrame.
+
+    执行步骤 / Execution Steps:
+    1. 检测 bytes/bytearray 输入，解析 Arrow IPC Stream 并转换为记录列表。
+       (Detect bytes/bytearray input, parse Arrow IPC Stream and convert to records)
+    2. 检测 PyArrow Table/RecordBatch，直接转换为记录列表。
+       (Detect PyArrow Table/RecordBatch, convert to records directly)
+    3. 检测 numpy ndarray，按列名或自动列名构建记录列表。
+       (Detect numpy ndarray, build records with column names or auto-generated names)
+    4. 检测 Polars DataFrame，转换为记录列表。
+       (Detect Polars DataFrame, convert to records)
+    5. 回退到 `data_adapters.to_records` 处理 pandas/SecretFlow/原生 list 格式。
+       (Fallback to data_adapters.to_records for pandas/SecretFlow/native list formats)
+
+    Args:
+        data: 输入数据 / Input data (ndarray, Arrow Table, bytes, polars, etc.).
+
+    Returns:
+        记录列表 / List of record dicts.
+
+    Raises:
+        TypeError: 不支持的数据类型 / Unsupported data type.
+    """
+    # Step 1: Arrow IPC binary bytes → parse to Table then to records
+    if isinstance(data, (bytes, bytearray)):
+        import pyarrow.ipc as ipc
+        reader = ipc.RecordBatchStreamReader(data)
+        table = reader.read_all()
+        return table.to_pylist()
+
+    # Step 2: PyArrow Table / RecordBatch → to_pylist()
+    try:
+        import pyarrow as pa
+        if isinstance(data, pa.Table):
+            return data.to_pylist()
+        if isinstance(data, pa.RecordBatch):
+            table = pa.Table.from_batches([data])
+            return table.to_pylist()
+    except ImportError:
+        pass
+
+    # Step 3: numpy ndarray → build records from columns
+    if isinstance(data, np.ndarray):
+        if data.ndim == 1:
+            # 1-D array: treat as single-column records
+            return [{"value": str(v)} for v in data]
+        if data.ndim == 2:
+            # 2-D array: use column indices as field names
+            cols = [f"col_{i}" for i in range(data.shape[1])]
+            return [{cols[j]: str(row[j]) for j in range(data.shape[1])} for row in data]
+        raise ValueError(f"numpy array must be 1-D or 2-D, got {data.ndim}-D")
+
+    # Step 4: Polars DataFrame → to_dicts()
+    if hasattr(data, "to_dicts") and hasattr(data, "columns"):
+        try:
+            return data.to_dicts()
+        except Exception:
+            pass
+
+    # Step 5: Fallback to data_adapters.to_records (pandas, SecretFlow, list of dicts)
+    from .data_adapters import to_records
+    return to_records(data)
+
+
+def _mask_arrow_column(col: Any, col_name: str, context: str) -> Any:
+    """对 PyArrow Table 单列执行向量化脱敏 / Vectorized Column Masking via PyArrow Compute.
+
+    中文说明：
+    利用 pyarrow.compute 的 utf8 函数在列式内存中直接完成脱敏，
+    避免 to_pylist() 全量物化到 Python 对象带来的内存峰值与 GC 开销。
+    对于无法纯向量化表达的操作（如 email 的 @ 分割），使用
+    find_substring + utf8_slice_codeunits + binary_join_element_wise 组合实现。
+
+    English Description:
+    Applies masking directly on columnar Arrow memory using pyarrow.compute
+    UTF-8 kernels, avoiding full materialization via to_pylist().
+    For operations that cannot be expressed purely vectorized (e.g. email @-split),
+    combines find_substring + utf8_slice_codeunits + binary_join_element_wise.
+
+    Args:
+        col: PyArrow Array 或 ChunkedArray / PyArrow Array or ChunkedArray.
+        col_name: 列名，用于推断字段类型 / Column name for field type inference.
+        context: 脱敏上下文标识 / Masking context identifier.
+
+    Returns:
+        脱敏后的 PyArrow Array / Masked PyArrow Array.
+    """
+    import pyarrow.compute as pc
+
+    # 仅处理字符串类型列，非字符串列原样返回
+    if not hasattr(col, "type"):
+        return col
+    type_str = str(col.type)
+    if "string" not in type_str and "utf8" not in type_str:
+        return col
+
+    ft = guess_field_type(col_name)
+
+    if ft == FieldType.MOBILE:
+        # 保留前3后4，中间 ****；非11位原样返回
+        length = pc.utf8_length(col)
+        masked = pc.binary_join_element_wise(
+            pc.utf8_slice_codeunits(col, 0, 3),
+            "****",
+            pc.utf8_slice_codeunits(col, 7, None),
+            "",
+        )
+        return pc.if_else(pc.equal(length, 11), masked, col)
+
+    if ft == FieldType.ID_CARD:
+        # 保留前6后4，中间 ********；非18位原样返回
+        length = pc.utf8_length(col)
+        masked = pc.binary_join_element_wise(
+            pc.utf8_slice_codeunits(col, 0, 6),
+            "********",
+            pc.utf8_slice_codeunits(col, 14, None),
+            "",
+        )
+        return pc.if_else(pc.equal(length, 18), masked, col)
+
+    if ft == FieldType.BANK_CARD:
+        # 保留前4后4，中间 " **** **** "；长度<8原样返回
+        length = pc.utf8_length(col)
+        masked = pc.binary_join_element_wise(
+            pc.utf8_slice_codeunits(col, 0, 4),
+            " **** **** ",
+            pc.utf8_slice_codeunits(col, -4, None),
+            "",
+        )
+        return pc.if_else(pc.greater_equal(length, 8), masked, col)
+
+    if ft == FieldType.NAME:
+        # 2字: 首字+*; 3字+: 首字+**+尾字; 空串原样
+        length = pc.utf8_length(col)
+        first_char = pc.utf8_slice_codeunits(col, 0, 1)
+        last_char = pc.utf8_slice_codeunits(col, -1, None)
+        masked_2 = pc.binary_join_element_wise(first_char, "*", "")
+        masked_3plus = pc.binary_join_element_wise(first_char, "**", last_char, "")
+        result = pc.if_else(pc.equal(length, 2), masked_2, col)
+        result = pc.if_else(pc.greater_equal(length, 3), masked_3plus, result)
+        return result
+
+    if ft == FieldType.EMAIL:
+        # 无@原样; 有@: 首字+***+尾字+@+域名
+        # 使用 regex 替换实现向量化 email 脱敏，避免数组索引限制
+        at_pos = pc.find_substring(col, "@")
+        has_at = pc.greater_equal(at_pos, 0)
+        # 提取 local 部分（split_pattern index 0 始终安全，无@时返回原串）
+        local = pc.list_element(pc.split_pattern(col, pattern="@", max_splits=1), 0)
+        local_len = pc.utf8_length(local)
+        first_local = pc.utf8_slice_codeunits(local, 0, 1)
+        # 短 local (<=2): 首字+***+@+域名
+        domain_after_at = pc.replace_substring_regex(col, r"^[^@]*@", "")
+        masked_short = pc.binary_join_element_wise(first_local, "***", "@", domain_after_at, "")
+        # 长 local (>2): regex 保留首尾字符，中间替换为 ***
+        masked_long = pc.replace_substring_regex(
+            col, r"^(.)(.+)(.)@(.*)$", r"\1***\3@\4"
+        )
+        masked = pc.if_else(pc.less_equal(local_len, 2), masked_short, masked_long)
+        return pc.if_else(has_at, masked, col)
+
+    if ft == FieldType.ADDRESS:
+        # 保留前6字符，剩余替换为 ****；长度<=6原样返回
+        length = pc.utf8_length(col)
+        masked = pc.binary_join_element_wise(
+            pc.utf8_slice_codeunits(col, 0, 6),
+            "****",
+            "",
+        )
+        return pc.if_else(pc.greater(length, 6), masked, col)
+
+    # DEFAULT: 保留前3后3，中间 * 填充；长度<=6原样返回
+    length = pc.utf8_length(col)
+    prefix = pc.utf8_slice_codeunits(col, 0, 3)
+    suffix = pc.utf8_slice_codeunits(col, -3, None)
+    star_count = pc.subtract(length, 6)
+    stars = pc.binary_repeat("*", star_count)
+    masked = pc.binary_join_element_wise(prefix, stars, suffix, "")
+    return pc.if_else(pc.greater(length, 6), masked, col)
+
+
 def mask_dataframe(
     df: Any,
     columns: Optional[List[str]] = None,
@@ -429,20 +690,37 @@ def mask_dataframe(
 ) -> Union[Any, MaskingResult]:
     """对 DataFrame 中的指定列进行脱敏 / Mask Specified Columns in DataFrame.
 
-    支持 pandas DataFrame 与 SecretFlow DataFrame。
+    支持多种输入数据格式（参考 DP 模块 `extract_values` 设计）：
+    - pandas DataFrame
+    - SecretFlow DataFrame / HDataFrame / VDataFrame
+    - numpy ndarray（1-D 或 2-D）
+    - PyArrow Table / RecordBatch
+    - Arrow IPC Stream 二进制字节流（bytes / bytearray）
+    - Polars DataFrame
+    - list of dict 记录列表
+
+    Supports multiple input data formats (refer to DP module `extract_values` design):
+    - pandas DataFrame
+    - SecretFlow DataFrame / HDataFrame / VDataFrame
+    - numpy ndarray (1-D or 2-D)
+    - PyArrow Table / RecordBatch
+    - Arrow IPC Stream binary bytes (bytes / bytearray)
+    - Polars DataFrame
+    - list of dict records
 
     执行步骤 / Execution Steps:
-    1. 识别或指定输入 DataFrame 中需要脱敏的目标敏感列。
-       (Identify or specify target sensitive columns to mask)
-    2. 使用 pandas 向量化 apply 逐列应用 `mask_value` 方法。
-       (Apply mask_value per column using pandas vectorized apply)
-    3. 若未能导入 pandas 则回退使用 `data_adapters.to_records` 进行记录级脱敏。
-       (Fallback to record-level masking via data_adapters if pandas unavailable)
+    1. 优先检测 pandas DataFrame，使用向量化 apply 逐列脱敏。
+       (Detect pandas DataFrame first, apply vectorized column-level masking)
+    2. 非 pandas 输入通过 `_convert_to_records` 统一转换为记录列表。
+       (Convert non-pandas input to record list via _convert_to_records)
+    3. 对记录列表中每条记录的字符串字段按字段名推断类型并脱敏。
+       (Infer field type by name and mask string fields per record)
     4. 记录结构化日志并根据 `return_details` 返回结果。
        (Emit structured log and return result based on return_details)
 
     Args:
-        df: 输入 DataFrame / Input DataFrame.
+        df: 输入数据（支持 DataFrame/ndarray/Arrow Table/bytes/polars/list of dict）
+            / Input data (supports DataFrame/ndarray/Arrow Table/bytes/polars/list of dict).
         columns: 可选，限定需要脱敏的列名列表 / Optional column name list.
         context: 脱敏上下文标识 / Masking context identifier.
         return_details: 是否返回 MaskingResult / Whether to return MaskingResult.
@@ -452,6 +730,8 @@ def mask_dataframe(
     """
     MASKING_OPERATIONS_TOTAL.labels(operation=MaskingOperation.MASK_DATAFRAME.value).inc()
     target_cols = columns or []
+
+    # Step 1: pandas DataFrame fast path — vectorized column-level apply
     try:
         import pandas as pd
         if isinstance(df, pd.DataFrame):
@@ -486,14 +766,62 @@ def mask_dataframe(
     except ImportError:
         pass
 
-    from .data_adapters import from_records, to_records
-    records = to_records(df)
-    if not records:
-        res = from_records(records, df)
-        if return_details:
-            return MaskingResult(value=res, operation=MaskingOperation.MASK_DATAFRAME.value, masked_fields=[], total_masked=0)
-        return res
+    # Step 1.5: PyArrow Table / RecordBatch fast path — columnar compute without to_pylist()
+    try:
+        import pyarrow as pa
+        if isinstance(df, pa.RecordBatch):
+            df = pa.Table.from_batches([df])
+        if isinstance(df, pa.Table):
+            if columns is None:
+                target_cols = [
+                    name for name in df.column_names
+                    if "string" in str(df.schema.field(name).type)
+                    or "utf8" in str(df.schema.field(name).type)
+                ]
+            else:
+                target_cols = [c for c in columns if c in df.column_names]
 
+            new_columns = []
+            new_names = []
+            for name in df.column_names:
+                col = df.column(name)
+                if name in target_cols:
+                    col = _mask_arrow_column(col, name, context)
+                new_columns.append(col)
+                new_names.append(name)
+
+            result_table = pa.table(
+                {name: col for name, col in zip(new_names, new_columns)}
+            )
+            logger.info(
+                "mask_dataframe_completed",
+                extra={
+                    "num_rows": result_table.num_rows,
+                    "num_cols": len(target_cols),
+                    "columns": target_cols,
+                    "context": context,
+                    "engine": "pyarrow_compute",
+                },
+            )
+            if return_details:
+                return MaskingResult(
+                    value=result_table,
+                    operation=MaskingOperation.MASK_DATAFRAME.value,
+                    masked_fields=target_cols,
+                    total_masked=result_table.num_rows,
+                )
+            return result_table
+    except ImportError:
+        pass
+
+    # Step 2: Non-pandas input — convert to record list via extended format adapter
+    records = _convert_to_records(df)
+    if not records:
+        if return_details:
+            return MaskingResult(value=[], operation=MaskingOperation.MASK_DATAFRAME.value, masked_fields=[], total_masked=0)
+        return []
+
+    # Step 3: Determine target columns and apply field-level masking per record
     if columns is None:
         target_cols = [k for k in records[0].keys() if isinstance(records[0].get(k), str)]
 
@@ -511,15 +839,14 @@ def mask_dataframe(
         extra={"num_rows": len(records), "num_cols": len(target_cols), "context": context},
     )
 
-    res_df = from_records(masked_records, df)
     if return_details:
         return MaskingResult(
-            value=res_df,
+            value=masked_records,
             operation=MaskingOperation.MASK_DATAFRAME.value,
             masked_fields=target_cols,
             total_masked=len(records),
         )
-    return res_df
+    return masked_records
 
 
 def hash_value(value: str, salt: str, return_details: bool = False) -> Union[str, MaskingResult]:
@@ -591,22 +918,39 @@ def truncate(value: str, keep_prefix: int, return_details: bool = False) -> Unio
 
 
 def mask_record(
-    record: Dict[str, Any], context: str = "", return_details: bool = False
+    record: Any, context: str = "", return_details: bool = False
 ) -> Union[Dict[str, Any], MaskingResult]:
-    """对整条记录字典中的每个字符串值进行脱敏 / Mask All String Fields in Record.
+    """对整条记录中的每个字符串值进行脱敏 / Mask All String Fields in Record.
+
+    支持多种输入数据格式（参考 DP 模块 `extract_values` 设计）：
+    - dict 记录字典
+    - bytes / bytearray（Arrow IPC Stream 二进制字节流，自动解析为单条记录）
+    - PyArrow Table / RecordBatch（取第一行作为记录）
+    - numpy ndarray（1-D 数组按 {col_0: val, ...} 构建记录；2-D 取第一行）
+    - pandas Series（转为 dict）
+
+    Supports multiple input data formats (refer to DP module `extract_values` design):
+    - dict record
+    - bytes / bytearray (Arrow IPC Stream bytes, auto-parsed to single record)
+    - PyArrow Table / RecordBatch (first row as record)
+    - numpy ndarray (1-D → {col_0: val, ...}; 2-D → first row)
+    - pandas Series (convert to dict)
 
     执行步骤 / Execution Steps:
-    1. 校验 record 参数为非空字典。
+    1. 检测输入数据类型并转换为 dict 记录。
+       (Detect input data type and convert to dict record)
+    2. 校验 record 参数为非空字典。
        (Validate record is a non-empty dict)
-    2. 遍历记录字典各项 Key-Value。
+    3. 遍历记录字典各项 Key-Value。
        (Iterate over record key-value pairs)
-    3. 对字符串类型数据按 Key 名推断敏感类型并调用 `mask_value` 替换。
+    4. 对字符串类型数据按 Key 名推断敏感类型并调用 `mask_value` 替换。
        (Infer field type by key name and apply mask_value for string values)
-    4. 记录结构化日志并返回脱敏后记录或 MaskingResult。
+    5. 记录结构化日志并返回脱敏后记录或 MaskingResult。
        (Emit structured log and return masked record or MaskingResult)
 
     Args:
-        record: 待脱敏记录字典 / Record dict to mask.
+        record: 待脱敏记录（支持 dict/bytes/Arrow/ndarray/Series）
+            / Record to mask (supports dict/bytes/Arrow/ndarray/Series).
         context: 脱敏上下文标识 / Masking context identifier.
         return_details: 是否返回 MaskingResult / Whether to return MaskingResult.
 
@@ -614,10 +958,12 @@ def mask_record(
         脱敏后的记录字典或 MaskingResult / Masked record dict or MaskingResult.
 
     Raises:
-        ValueError: 当 record 不是字典或为空时 / When record is not a dict or empty.
+        ValueError: 当 record 无法转换为字典或为空时 / When record cannot be converted to dict or is empty.
     """
+    # Step 1: Convert non-dict input to dict record
+    record = _coerce_to_dict(record)
     if not isinstance(record, dict):
-        raise ValueError(f"record must be a dict, got {type(record).__name__}")
+        raise ValueError(f"record must be a dict or convertible type, got {type(record).__name__}")
     if not record:
         raise ValueError("record must not be empty")
     MASKING_OPERATIONS_TOTAL.labels(operation=MaskingOperation.MASK_RECORD.value).inc()
@@ -641,7 +987,7 @@ def mask_record(
 
 
 def chunked_mask_records(
-    chunks: Iterable[Iterable[Dict[str, Any]]],
+    chunks: Iterable[Any],
     columns: Optional[List[str]] = None,
     context: str = "",
     return_details: bool = False,
@@ -652,16 +998,37 @@ def chunked_mask_records(
     每个 chunk 惰性处理并 yield 结果，避免一次性加载全部数据到内存。
     适用于超大规模记录集的脱敏场景。
 
+    支持多种输入数据格式（参考 DP 模块 `extract_values` 设计）：
+    - list of dict 记录列表
+    - pandas DataFrame
+    - numpy ndarray（1-D 或 2-D）
+    - PyArrow Table / RecordBatch
+    - Arrow IPC Stream 二进制字节流
+    - Polars DataFrame
+    - SecretFlow DataFrame
+
+    Supports multiple input data formats (refer to DP module `extract_values` design):
+    - list of dict records
+    - pandas DataFrame
+    - numpy ndarray (1-D or 2-D)
+    - PyArrow Table / RecordBatch
+    - Arrow IPC Stream binary bytes
+    - Polars DataFrame
+    - SecretFlow DataFrame
+
     执行步骤 / Execution Steps:
-    1. 选代每个 chunk，对其中每条记录执行字段级脱敏。
-       (Iterate each chunk, apply field-level masking per record)
-    2. 累计每个 chunk 的脱敏字段数与记录数。
+    1. 迭代每个 chunk，通过 `_convert_to_records` 统一转换为记录列表。
+       (Iterate each chunk, convert to record list via _convert_to_records)
+    2. 对每条记录执行字段级脱敏。
+       (Apply field-level masking per record)
+    3. 累计每个 chunk 的脱敏字段数与记录数。
        (Accumulate masked field count and record count per chunk)
-    3. 记录结构化日志并 yield 脱敏结果。
+    4. 记录结构化日志并 yield 脱敏结果。
        (Emit structured log and yield masked result)
 
     Args:
-        chunks: 记录块的可迭代对象 / Iterable of record chunks.
+        chunks: 记录块的可迭代对象（支持多种数据格式）
+            / Iterable of record chunks (supports multiple data formats).
         columns: 可选，限定需要脱敏的列名列表 / Optional column filter.
         context: 脱敏上下文标识 / Masking context identifier.
         return_details: 是否对每个 chunk 返回 MaskingResult / Whether to yield MaskingResult per chunk.
@@ -672,10 +1039,12 @@ def chunked_mask_records(
     chunk_idx = 0
     for chunk in chunks:
         MASKING_OPERATIONS_TOTAL.labels(operation=MaskingOperation.CHUNKED_MASK_RECORDS.value).inc()
+        # Convert chunk to record list using extended format adapter
+        records = _convert_to_records(chunk)
         masked_chunk: List[Dict[str, Any]] = []
         all_masked_fields: List[str] = []
         total_masked = 0
-        for record in chunk:
+        for record in records:
             target_cols = columns or [k for k, v in record.items() if isinstance(v, str)]
             masked_rec = dict(record)
             chunk_fields: List[str] = []

@@ -61,6 +61,64 @@ def test_mask_dataframe():
     assert result["name"].tolist() == ["张*"]
 ```
 
+### 3.5 多格式输入测试
+
+```python
+import numpy as np
+import pyarrow as pa
+from privacy_local_agent.privacy.masking import mask_dataframe, mask_record
+
+
+def test_mask_dataframe_numpy():
+    """测试 numpy ndarray 输入"""
+    arr = np.array([["13812345678", "张三"]])
+    result = mask_dataframe(arr, columns=["col_0", "col_1"])
+    assert result[0]["col_0"] == "138****5678"
+    assert result[0]["col_1"] == "张*"
+
+
+def test_mask_dataframe_arrow():
+    """测试 PyArrow Table 输入（列式计算快速路径，返回 pyarrow.Table）"""
+    table = pa.table({"mobile": ["13812345678"], "name": ["张三"]})
+    result = mask_dataframe(table)
+    assert isinstance(result, pa.Table)
+    assert result.column("mobile").to_pylist() == ["138****5678"]
+    assert result.column("name").to_pylist() == ["张*"]
+
+
+def test_mask_dataframe_arrow_ipc():
+    """测试 Arrow IPC 字节流输入"""
+    import pyarrow.ipc as ipc
+    table = pa.table({"mobile": ["13812345678"]})
+    sink = pa.BufferOutputStream()
+    with ipc.new_stream(sink, table.schema) as writer:
+        writer.write_table(table)
+    arrow_bytes = sink.getvalue().to_pybytes()
+    result = mask_dataframe(arrow_bytes)
+    assert result[0]["mobile"] == "138****5678"
+
+
+def test_mask_record_numpy():
+    """测试 mask_record 支持 numpy ndarray"""
+    arr = np.array(["13812345678", "张三"])
+    result = mask_record(arr)
+    assert result["col_0"] == "138****5678"
+    assert result["col_1"] == "张*"
+
+
+def test_mask_record_arrow_ipc():
+    """测试 mask_record 支持 Arrow IPC 字节流"""
+    import pyarrow.ipc as ipc
+    table = pa.table({"mobile": ["13812345678"], "name": ["张三"]})
+    sink = pa.BufferOutputStream()
+    with ipc.new_stream(sink, table.schema) as writer:
+        writer.write_table(table)
+    arrow_bytes = sink.getvalue().to_pybytes()
+    result = mask_record(arrow_bytes)
+    assert result["mobile"] == "138****5678"
+    assert result["name"] == "张*"
+```
+
 ### 3.4 指标测试
 
 ```python
@@ -91,6 +149,7 @@ PYTHONPATH=. pytest tests/test_masking.py -v
 - [x] 整记录脱敏不修改原记录。
 - [x] 批量字段脱敏长度校验正确。
 - [x] DataFrame 脱敏测试通过。
+- [x] **多格式输入测试通过**（numpy、PyArrow Table 列式计算、Arrow IPC、Polars）。
 - [x] HMAC 哈希与截断测试通过。
 - [x] `privacy_masking_operations_total` 指标测试通过。
 - [x] REST/gRPC 接口测试通过。

@@ -62,7 +62,55 @@ print(result)
 # 1  139****5678   李*   34
 ```
 
-### 1.5 HMAC 哈希与截断
+### 1.5 多格式输入示例
+
+```python
+import numpy as np
+import pyarrow as pa
+from privacy_local_agent.privacy.masking import mask_dataframe, mask_record
+
+# numpy ndarray 输入
+arr = np.array([["13812345678", "张三"], ["13912345678", "李四"]])
+result = mask_dataframe(arr, columns=["col_0", "col_1"])
+print(result)
+# [{'col_0': '138****5678', 'col_1': '张*'}, {'col_0': '139****5678', 'col_1': '李*'}]
+
+# PyArrow Table 输入（列式计算快速路径，返回 pyarrow.Table）
+table = pa.table({
+    "mobile": ["13812345678", "13912345678"],
+    "name": ["张三", "李四"],
+})
+result = mask_dataframe(table)
+print(type(result))  # <class 'pyarrow.lib.Table'>
+print(result.column("mobile").to_pylist())
+# ['138****5678', '139****5678']
+print(result.column("name").to_pylist())
+# ['张*', '李*']
+
+# Arrow IPC 字节流输入
+import pyarrow.ipc as ipc
+sink = pa.BufferOutputStream()
+with ipc.new_stream(sink, table.schema) as writer:
+    writer.write_table(table)
+arrow_bytes = sink.getvalue().to_pybytes()
+
+result = mask_dataframe(arrow_bytes)
+print(result)
+# [{'mobile': '138****5678', 'name': '张*'}, {'mobile': '139****5678', 'name': '李*'}]
+
+# mask_record 支持 numpy ndarray 输入
+arr = np.array(["13812345678", "张三"])
+result = mask_record(arr)
+print(result)
+# {'col_0': '138****5678', 'col_1': '张*'}
+
+# mask_record 支持 Arrow IPC 字节流输入
+result = mask_record(arrow_bytes)
+print(result)
+# {'mobile': '138****5678', 'name': '张*'}
+```
+
+### 1.6 HMAC 哈希与截断
 
 ```python
 from privacy_local_agent.privacy.masking import hash_value, truncate
