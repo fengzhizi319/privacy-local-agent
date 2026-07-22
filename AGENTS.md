@@ -82,8 +82,9 @@ privacy-local-agent/
 │   ├── helm/
 │   ├── k8s/
 │   └── docker-compose/
-├── frontend/                      # 测试控制台（React + FastAPI 代理）
-│   ├── backend/                   # FastAPI 代理，转发请求到 agent
+├── frontend/                      # 测试控制台（React + FastAPI / Go 代理）
+│   ├── backend/                   # FastAPI 代理，转发请求到 agent REST
+│   ├── backend-go/                # Go gRPC 代理，可直接提供 Console UI
 │   └── web/                       # React 单页测试控制台
 ├── Makefile
 ├── pyproject.toml
@@ -327,6 +328,7 @@ Address these before any hardened production deployment.
 | Build core image | `make docker-core` |
 | Build ml image | `make docker-ml` |
 | Run test console | `./frontend/start.sh` |
+| Run Go gRPC console | `./frontend/start-go.sh` |
 | Run REST + gRPC | `python -m privacy_local_agent.server` |
 | Run test console backend | `cd frontend/backend && ./run.sh` |
 | Build test console frontend | `cd frontend/web && corepack pnpm install && corepack pnpm build` |
