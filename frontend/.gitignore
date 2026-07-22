@@ -1,0 +1,10 @@
+# Frontend / backend artifacts
+node_modules/
+dist/
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+.env
+.DS_Store
+*.log

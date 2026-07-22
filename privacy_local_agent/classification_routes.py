@@ -7,7 +7,7 @@
 import os
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from .classification_service import ClassificationService
@@ -128,14 +128,17 @@ def classify_secretflow(req: ClassifySecretFlowRequest):
 @classification_router.post("/v1/privacy/classify/review/confirm")
 def confirm_review(req: ConfirmReviewRequest):
     """确认或修正复核结果。"""
-    return {
-        "result": classification_service.confirm_review(
-            req.review_id,
-            req.corrected_level,
-            req.reviewer,
-            req.comment,
-        )
-    }
+    try:
+        return {
+            "result": classification_service.confirm_review(
+                req.review_id,
+                req.corrected_level,
+                req.reviewer,
+                req.comment,
+            )
+        }
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @classification_router.post("/v1/privacy/classify/review/export")

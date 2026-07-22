@@ -25,7 +25,7 @@ from .privacy.masking import (
     truncate,
 )
 from .privacy.profile import ParameterResolver, get_resolver
-from .privacy.qol import obfuscate_query
+from .privacy.qol import obfuscate_query, obfuscate_query_batch
 
 
 class PrivacyService:
