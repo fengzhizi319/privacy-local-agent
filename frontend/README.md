@@ -5,6 +5,7 @@
 ## 目录结构
 
 - `backend/` - Python FastAPI 代理服务，统一转发请求到 `privacy_local_agent` REST 接口，并提供示例数据。
+- `backend-go/` - Go gRPC 代理服务，将前端的 REST 请求转换为 gRPC 调用转发给 `privacy_local_agent`，接口格式与 Python 后端保持一致。
 - `web/` - React + TypeScript + Vite 前端，按功能分组展示所有端点，支持一键加载示例和发送请求。
 
 ## 快速开始
@@ -19,6 +20,14 @@
 
 该脚本会同时启动 `privacy_local_agent` 和测试控制台后端，等待健康检查后输出访问地址，按 `Ctrl+C` 停止所有服务。
 
+若要通过 **Go gRPC** 后端访问同样的隐私能力，可改用：
+
+```bash
+./frontend/start-go.sh
+```
+
+该脚本会启动 `privacy_local_agent`（同时监听 REST 与 gRPC）和 `frontend/backend-go` 中的 Go 代理服务，访问地址为 `http://127.0.0.1:8081`。
+
 ### 2. 手动启动
 
 启动 agent：
@@ -27,11 +36,18 @@
 python -m privacy_local_agent.server
 ```
 
-启动测试控制台后端：
+启动 Python REST 代理后端（默认监听 `127.0.0.1:8080`）：
 
 ```bash
 cd frontend/backend
 ./run.sh
+```
+
+启动 Go gRPC 代理后端（默认监听 `127.0.0.1:8081`）：
+
+```bash
+cd frontend/backend-go
+go run ./cmd/server
 ```
 
 ### 3. 构建前端
@@ -49,6 +65,13 @@ corepack pnpm build
 ### 4. 打开控制台
 
 浏览器访问 `http://127.0.0.1:8080`，左侧选择功能分组和端点，点击「Send Request」即可测试。
+
+页面顶部的 **Backend Selector** 可以切换后端地址：
+
+- `Python REST (8080)` — 使用 Python FastAPI 后端代理，调用 `privacy_local_agent` REST 接口。
+- `Go gRPC (8081)` — 使用 Go gRPC 代理后端，将请求通过 gRPC 转发给 `privacy_local_agent`。
+
+每个示例卡片会显示 `backend` 标签（`rest` / `both`），标识该端点在两个后端中的可用性。
 
 ## 后端提供的 API
 
@@ -81,6 +104,6 @@ python smoke_test.py
 
 ## 已知限制
 
-- 默认使用 REST 协议与 agent 通信；gRPC 端点未在此控制台中直接暴露。
+- 默认使用 Python REST 后端与 agent 通信；新增 Go gRPC 后端通过 gRPC 支持同样的隐私原语（ Masking、Hash、DP、LDP、K-Anonymity、Query Obfuscation、Classification、Profile 等），但 `/livez`、`/readyz`、`/readyz/llm`、`/v1/privacy/budget`、`/v1/privacy/dp/arrow_ipc` 等 REST 专属端点以及部分路径差异端点仅在 Python 后端可用。
 - 若 agent 启用了认证或限速，请正确配置 `PRIVACY_AGENT_API_KEY` 或相应环境变量。
 - `Arrow IPC` 端点的二进制响应会被后端解析为 JSON 记录后返回。

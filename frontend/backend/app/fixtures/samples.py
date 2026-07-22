@@ -36,6 +36,7 @@ class EndpointSample:
         body: Optional[Dict[str, Any]] = None,
         content_type: Optional[str] = None,
         raw_payload_b64: Optional[str] = None,
+        backend: str = "rest",
     ):
         self.method = method
         self.path = path
@@ -45,6 +46,7 @@ class EndpointSample:
         self.body = body
         self.content_type = content_type
         self.raw_payload_b64 = raw_payload_b64
+        self.backend = backend
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -56,22 +58,24 @@ class EndpointSample:
             "body": self.body,
             "contentType": self.content_type,
             "rawPayloadB64": self.raw_payload_b64,
+            "backend": self.backend,
         }
 
 
 # fmt: off
 SAMPLES: List[EndpointSample] = [
     # Health
-    EndpointSample("GET", "/health", "Health", "Health", "服务健康检查"),
-    EndpointSample("GET", "/livez", "Livez", "Health", "存活探针"),
-    EndpointSample("GET", "/readyz", "Readyz", "Health", "就绪探针"),
-    EndpointSample("GET", "/readyz/llm", "LLM Ready", "Health", "LLM 分类器就绪探针"),
+    EndpointSample("GET", "/health", "Health", "Health", "服务健康检查", backend="rest"),
+    EndpointSample("GET", "/livez", "Livez", "Health", "存活探针", backend="rest"),
+    EndpointSample("GET", "/readyz", "Readyz", "Health", "就绪探针", backend="rest"),
+    EndpointSample("GET", "/readyz/llm", "LLM Ready", "Health", "LLM 分类器就绪探针", backend="rest"),
 
     # Masking
     EndpointSample(
         "POST", "/v1/privacy/mask", "Mask", "Masking",
         "单字段脱敏",
         body={"field_name": "email", "value": "alice@example.com", "context": ""},
+        backend="both",
     ),
     EndpointSample(
         "POST", "/v1/privacy/mask_record", "Mask Record", "Masking",
@@ -85,6 +89,7 @@ SAMPLES: List[EndpointSample] = [
             },
             "context": "",
         },
+        backend="rest",
     ),
     EndpointSample(
         "POST", "/v1/privacy/mask/batch", "Mask Batch", "Masking",
@@ -94,6 +99,7 @@ SAMPLES: List[EndpointSample] = [
             "values": ["bob@example.com", "13900139000", "Bob"],
             "context": "",
         },
+        backend="rest",
     ),
     EndpointSample(
         "POST", "/v1/privacy/mask/dataframe", "Mask DataFrame", "Masking",
@@ -106,11 +112,13 @@ SAMPLES: List[EndpointSample] = [
             "columns": ["email", "phone"],
             "context": "",
         },
+        backend="rest",
     ),
     EndpointSample(
         "POST", "/v1/privacy/hash", "Hash", "Hash",
         "HMAC 哈希",
         body={"value": "sensitive-value", "salt": "demo-salt"},
+        backend="both",
     ),
 
     # DP
@@ -118,6 +126,7 @@ SAMPLES: List[EndpointSample] = [
         "POST", "/v1/privacy/dp/count", "DP Count", "DP",
         "差分隐私计数",
         body={"values": [1.0, 2.0, 3.0, 4.0, 5.0], "params": {"epsilon": 0.1, "mechanism": "laplace"}},
+        backend="both",
     ),
     EndpointSample(
         "POST", "/v1/privacy/dp/sum", "DP Sum", "DP",
@@ -126,6 +135,7 @@ SAMPLES: List[EndpointSample] = [
             "values": [1000.0, 2000.0, 3000.0, 4000.0, 5000.0],
             "params": {"epsilon": 0.1, "mechanism": "laplace", "clip_lower": 0.0, "clip_upper": 10000.0},
         },
+        backend="rest",
     ),
     EndpointSample(
         "POST", "/v1/privacy/dp/mean", "DP Mean", "DP",
@@ -134,6 +144,7 @@ SAMPLES: List[EndpointSample] = [
             "values": [20.0, 30.0, 40.0, 50.0, 60.0],
             "params": {"epsilon": 0.1, "mechanism": "laplace", "clip_lower": 0.0, "clip_upper": 100.0},
         },
+        backend="rest",
     ),
     EndpointSample(
         "POST", "/v1/privacy/dp/histogram", "DP Histogram", "DP",
@@ -143,11 +154,13 @@ SAMPLES: List[EndpointSample] = [
             "categories": ["eng", "hr", "sales", "marketing"],
             "params": {"epsilon": 0.1, "mechanism": "laplace"},
         },
+        backend="both",
     ),
     EndpointSample(
         "POST", "/v1/privacy/dp/noisy_count", "Noisy Count", "DP",
         "对已聚合计数加噪",
         body={"true_count": 100.0, "params": {"epsilon": 0.1, "mechanism": "laplace"}},
+        backend="both",
     ),
     EndpointSample(
         "POST", "/v1/privacy/dp/noisy_sum", "Noisy Sum", "DP",
@@ -156,6 +169,7 @@ SAMPLES: List[EndpointSample] = [
             "true_sum": 10000.0,
             "params": {"epsilon": 0.1, "mechanism": "laplace", "clip_lower": 0.0, "clip_upper": 10000.0},
         },
+        backend="rest",
     ),
     EndpointSample(
         "POST", "/v1/privacy/dp/noisy_mean", "Noisy Mean", "DP",
@@ -165,6 +179,7 @@ SAMPLES: List[EndpointSample] = [
             "true_count": 100.0,
             "params": {"epsilon": 0.1, "mechanism": "laplace", "clip_lower": 0.0, "clip_upper": 10000.0},
         },
+        backend="rest",
     ),
     EndpointSample(
         "POST", "/v1/privacy/dp/noisy_histogram", "Noisy Histogram", "DP",
@@ -173,6 +188,7 @@ SAMPLES: List[EndpointSample] = [
             "true_counts": {"eng": 50.0, "hr": 20.0, "sales": 30.0},
             "params": {"epsilon": 0.1, "mechanism": "laplace"},
         },
+        backend="both",
     ),
     EndpointSample(
         "POST", "/v1/privacy/dp/aggregate", "DP Aggregate", "DP",
@@ -191,6 +207,7 @@ SAMPLES: List[EndpointSample] = [
             },
             "params": {"epsilon": 0.5, "mechanism": "laplace"},
         },
+        backend="both",
     ),
     EndpointSample(
         "POST", "/v1/privacy/dp/vector_sum", "DP Vector Sum", "DP",
@@ -199,6 +216,7 @@ SAMPLES: List[EndpointSample] = [
             "vectors": [[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]],
             "params": {"epsilon": 0.1, "delta": 1e-5, "mechanism": "gaussian", "max_norm": 10.0},
         },
+        backend="rest",
     ),
     EndpointSample(
         "POST", "/v1/privacy/dp/vector_mean", "DP Vector Mean", "DP",
@@ -207,6 +225,7 @@ SAMPLES: List[EndpointSample] = [
             "vectors": [[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]],
             "params": {"epsilon": 0.1, "delta": 1e-5, "mechanism": "gaussian", "max_norm": 10.0},
         },
+        backend="rest",
     ),
     EndpointSample(
         "POST", "/v1/privacy/dp/adaptive_clip", "Adaptive Clip", "DP",
@@ -215,6 +234,7 @@ SAMPLES: List[EndpointSample] = [
             "values": [1.0, 5.0, 10.0, 15.0, 20.0],
             "params": {"epsilon": 0.1, "target_quantile": 0.95, "num_iterations": 15, "initial_clip": 10.0},
         },
+        backend="rest",
     ),
     EndpointSample(
         "POST", "/v1/privacy/dp/groupby", "DP GroupBy", "DP",
@@ -231,6 +251,7 @@ SAMPLES: List[EndpointSample] = [
             "agg": "sum",
             "params": {"epsilon": 0.1, "mechanism": "laplace", "clip_lower": 0.0, "clip_upper": 10000.0},
         },
+        backend="both",
     ),
     EndpointSample(
         "POST", "/v1/privacy/dp/chunked_count", "Chunked Count", "DP",
@@ -239,6 +260,7 @@ SAMPLES: List[EndpointSample] = [
             "chunks": [[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]],
             "params": {"epsilon": 0.1, "mechanism": "laplace"},
         },
+        backend="rest",
     ),
     EndpointSample(
         "POST", "/v1/privacy/dp/chunked_sum", "Chunked Sum", "DP",
@@ -247,6 +269,7 @@ SAMPLES: List[EndpointSample] = [
             "chunks": [[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]],
             "params": {"epsilon": 0.1, "mechanism": "laplace", "clip_lower": 0.0, "clip_upper": 10.0},
         },
+        backend="rest",
     ),
     EndpointSample(
         "POST", "/v1/privacy/dp/chunked_mean", "Chunked Mean", "DP",
@@ -255,6 +278,7 @@ SAMPLES: List[EndpointSample] = [
             "chunks": [[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]],
             "params": {"epsilon": 0.1, "mechanism": "laplace", "clip_lower": 0.0, "clip_upper": 10.0},
         },
+        backend="rest",
     ),
     EndpointSample(
         "POST", "/v1/privacy/dp/chunked_histogram", "Chunked Histogram", "DP",
@@ -264,6 +288,7 @@ SAMPLES: List[EndpointSample] = [
             "categories": ["eng", "hr", "sales", "marketing"],
             "params": {"epsilon": 0.1, "mechanism": "laplace"},
         },
+        backend="rest",
     ),
     EndpointSample(
         "POST", "/v1/privacy/dp/arrow_ipc", "Arrow IPC", "DP",
@@ -271,6 +296,7 @@ SAMPLES: List[EndpointSample] = [
         body={"column": "value", "aggregation": "count", "epsilon": 0.1, "delta": 0.0, "mechanism": "laplace"},
         content_type="application/vnd.apache.arrow.stream",
         raw_payload_b64=_arrow_ipc_payload(),
+        backend="rest",
     ),
 
     # LDP
@@ -278,16 +304,19 @@ SAMPLES: List[EndpointSample] = [
         "POST", "/v1/privacy/ldp/perturb/binary", "Perturb Binary", "LDP",
         "二值本地 DP 扰动",
         body={"values": [0, 1, 1, 0, 1], "epsilon": 1.0},
+        backend="both",
     ),
     EndpointSample(
         "POST", "/v1/privacy/ldp/perturb/categorical", "Perturb Categorical", "LDP",
         "类别型本地 DP 扰动",
         body={"values": ["eng", "hr", "eng", "sales"], "categories": ["eng", "hr", "sales"], "epsilon": 1.0},
+        backend="both",
     ),
     EndpointSample(
         "POST", "/v1/privacy/ldp/estimate/binary", "Estimate Binary", "LDP",
         "二值本地 DP 估计",
         body={"reported_values": [0, 1, 1, 0, 1], "epsilon": 1.0},
+        backend="both",
     ),
     EndpointSample(
         "POST", "/v1/privacy/ldp/estimate/categorical", "Estimate Categorical", "LDP",
@@ -297,6 +326,7 @@ SAMPLES: List[EndpointSample] = [
             "categories": ["eng", "hr", "sales"],
             "epsilon": 1.0,
         },
+        backend="both",
     ),
 
     # K-Anonymity
@@ -308,6 +338,7 @@ SAMPLES: List[EndpointSample] = [
             "qi_cols": ["age", "zip", "gender"],
             "k": 2,
         },
+        backend="both",
     ),
     EndpointSample(
         "POST", "/v1/privacy/k_anonymize/table", "K-Anonymize Table", "K-Anonymity",
@@ -323,6 +354,7 @@ SAMPLES: List[EndpointSample] = [
             "k": 2,
             "max_depth": 10,
         },
+        backend="both",
     ),
     EndpointSample(
         "POST", "/v1/privacy/k_anonymize/dataframe", "K-Anonymize DataFrame", "K-Anonymity",
@@ -338,6 +370,7 @@ SAMPLES: List[EndpointSample] = [
             "k": 2,
             "max_depth": 10,
         },
+        backend="both",
     ),
 
     # Query Obfuscation
@@ -345,6 +378,7 @@ SAMPLES: List[EndpointSample] = [
         "POST", "/v1/privacy/qol/obfuscate", "Obfuscate Query", "Query Obfuscation",
         "查询混淆",
         body={"query": "糖尿病患者用药推荐", "num_dummies": 3, "domain": "medical"},
+        backend="both",
     ),
     EndpointSample(
         "POST", "/v1/privacy/qol/obfuscate/batch", "Obfuscate Batch", "Query Obfuscation",
@@ -354,6 +388,7 @@ SAMPLES: List[EndpointSample] = [
             "num_dummies": 3,
             "domain": "medical",
         },
+        backend="both",
     ),
 
     # Classification
@@ -361,6 +396,7 @@ SAMPLES: List[EndpointSample] = [
         "POST", "/v1/privacy/classify/field", "Classify Field", "Classification",
         "单字段分类",
         body={"field_name": "email", "value": "alice@example.com", "params": {}},
+        backend="both",
     ),
     EndpointSample(
         "POST", "/v1/privacy/classify/record", "Classify Record", "Classification",
@@ -373,6 +409,7 @@ SAMPLES: List[EndpointSample] = [
             },
             "params": {},
         },
+        backend="both",
     ),
     EndpointSample(
         "POST", "/v1/privacy/classify/table", "Classify Table", "Classification",
@@ -385,6 +422,7 @@ SAMPLES: List[EndpointSample] = [
             ],
             "params": {},
         },
+        backend="both",
     ),
     EndpointSample(
         "POST", "/v1/privacy/classify/table/async", "Classify Table Async", "Classification",
@@ -397,10 +435,12 @@ SAMPLES: List[EndpointSample] = [
             ],
             "params": {},
         },
+        backend="both",
     ),
     EndpointSample(
         "GET", "/v1/privacy/classify/jobs/demo-job-id", "Get Job", "Classification",
         "查询异步分类任务（示例 job_id 可能不存在）",
+        backend="both",
     ),
     EndpointSample(
         "POST", "/v1/privacy/classify/secretflow", "Classify SecretFlow", "Classification",
@@ -410,6 +450,7 @@ SAMPLES: List[EndpointSample] = [
             "params_json": "{}",
             "data_json": '{"schema": ["email", "phone"], "rows": [{"email": "alice@example.com", "phone": "13800138000"}]}',
         },
+        backend="both",
     ),
     EndpointSample(
         "POST", "/v1/privacy/classify/review/confirm", "Confirm Review", "Classification",
@@ -420,15 +461,17 @@ SAMPLES: List[EndpointSample] = [
             "reviewer": "tester",
             "comment": "confirmed",
         },
+        backend="both",
     ),
     EndpointSample(
         "POST", "/v1/privacy/classify/review/export", "Export Reviews", "Classification",
         "导出复核样本",
         body={"format": "jsonl", "mask_input": False},
+        backend="both",
     ),
 
     # Budget & Profile
-    EndpointSample("GET", "/v1/privacy/budget", "Budget", "Budget", "查询剩余隐私预算"),
+    EndpointSample("GET", "/v1/privacy/budget", "Budget", "Budget", "查询剩余隐私预算", backend="rest"),
     EndpointSample(
         "POST", "/v1/privacy/profile/recommend", "Recommend Params", "Profile",
         "自动推荐隐私参数",
@@ -441,6 +484,7 @@ SAMPLES: List[EndpointSample] = [
             ],
             "qi_cols": ["age", "zip", "gender"],
         },
+        backend="both",
     ),
 ]
 # fmt: on

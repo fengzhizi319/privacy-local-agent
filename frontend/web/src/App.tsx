@@ -1,8 +1,12 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import type { EndpointSample, ConsoleHealth } from '@/types/api';
-import { fetchSamples, fetchHealth } from '@/api/client';
+import { fetchSamples, fetchHealth, setBaseUrl } from '@/api/client';
 import Sidebar from '@/components/Sidebar';
 import RequestForm from '@/components/RequestForm';
+import BackendSelector, {
+  type BackendOption,
+  DEFAULT_BACKEND,
+} from '@/components/BackendSelector';
 
 export default function App() {
   const [samples, setSamples] = useState<EndpointSample[]>([]);
@@ -10,30 +14,45 @@ export default function App() {
   const [health, setHealth] = useState<ConsoleHealth | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [backend, setBackend] = useState<BackendOption>(DEFAULT_BACKEND);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const [samplesData, healthData] = await Promise.all([fetchSamples(), fetchHealth()]);
+      setSamples(samplesData);
+      setHealth(healthData);
+      if (samplesData.length > 0) {
+        setSelected(samplesData[0]);
+      } else {
+        setSelected(null);
+      }
+    } catch (e) {
+      setError((e as Error).message);
+      setHealth(null);
+      setSamples([]);
+      setSelected(null);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
 
   useEffect(() => {
-    const load = async () => {
-      try {
-        const [samplesData, healthData] = await Promise.all([fetchSamples(), fetchHealth()]);
-        setSamples(samplesData);
-        setHealth(healthData);
-        if (samplesData.length > 0) {
-          setSelected(samplesData[0]);
-        }
-      } catch (e) {
-        setError((e as Error).message);
-      } finally {
-        setLoading(false);
-      }
-    };
+    setBaseUrl(backend.value);
     load();
-  }, []);
+  }, [backend, load]);
+
+  const handleBackendChange = (option: BackendOption) => {
+    setBackend(option);
+  };
 
   return (
     <div className="h-screen flex flex-col">
       <header className="bg-indigo-700 text-white px-4 py-2 flex items-center justify-between shadow">
         <div className="font-semibold">Privacy Local Agent Test Console</div>
         <div className="text-xs flex items-center gap-4">
+          <BackendSelector value={backend} onChange={handleBackendChange} />
           {health && (
             <>
               <span>

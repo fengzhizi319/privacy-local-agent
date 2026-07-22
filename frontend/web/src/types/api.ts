@@ -7,6 +7,7 @@ export interface EndpointSample {
   body?: Record<string, any> | null;
   contentType?: string | null;
   rawPayloadB64?: string | null;
+  backend?: "rest" | "grpc" | "both";
 }
 
 export interface ProxyRequest {

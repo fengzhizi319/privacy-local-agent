@@ -1,6 +1,10 @@
 import type { ProxyRequest, ProxyResponse, ConsoleHealth, EndpointSample } from '@/types/api';
 
-const API_BASE = '';
+let API_BASE = '';
+
+export function setBaseUrl(baseUrl: string): void {
+  API_BASE = baseUrl.replace(/\/$/, '');
+}
 
 export async function fetchHealth(): Promise<ConsoleHealth> {
   const res = await fetch(`${API_BASE}/api/health`);
