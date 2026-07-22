@@ -42,6 +42,20 @@
 
 该脚本会启动 `privacy_local_agent`（同时监听 REST 与 gRPC）和 `frontend/backend-go` 中的 Go 代理服务，访问地址为 `http://127.0.0.1:8081`。
 
+若要**同时启动两个后端**（Python REST + Go gRPC），以便在前端顶部 Backend Selector 中随意切换，可执行：
+
+```bash
+./frontend/start-all.sh
+```
+
+对应停止脚本：
+
+```bash
+./frontend/stop-all.sh
+```
+
+该脚本会同时启动 `privacy_local_agent`（REST 8079 + gRPC 50051）、Python REST 代理后端（`http://127.0.0.1:8080`）与 Go gRPC 代理后端（`http://127.0.0.1:8081`）。打开任一 Console 地址，顶部 Backend Selector 即可在两个后端间自由切换。
+
 ### 2. 手动启动
 
 启动 agent：
@@ -80,6 +94,7 @@ corepack pnpm build
 
 - `./frontend/start.sh` 启动后访问 `http://127.0.0.1:8080`（Python 后端提供 UI）
 - `./frontend/start-go.sh` 启动后访问 `http://127.0.0.1:8081`（Go 后端直接提供 UI）
+- `./frontend/start-all.sh` 启动后两个地址均可访问，顶部 Backend Selector 可随意切换后端
 
 左侧选择功能分组和端点，点击「Send Request」即可测试。
 
