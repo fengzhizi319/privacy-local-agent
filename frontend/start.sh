@@ -13,14 +13,46 @@ BACKEND_VENV="$SCRIPT_DIR/backend/.venv"
 AGENT_URL="http://127.0.0.1:8079"
 CONSOLE_URL="http://127.0.0.1:8080"
 
+# ── 自动补全缺失的依赖 / 构建产物 ─────────────────────────────────────
+
+# 1. Agent 虚拟环境：缺失时自动创建并安装项目依赖
 if [[ ! -d "$AGENT_VENV" ]]; then
-    echo "错误：未找到 agent 虚拟环境 $AGENT_VENV，请先安装项目依赖。"
-    exit 1
+    echo "未找到 agent 虚拟环境，自动创建并安装依赖：$AGENT_VENV"
+    python3 -m venv "$AGENT_VENV"
+    (
+        source "$AGENT_VENV/bin/activate"
+        cd "$PROJECT_ROOT"
+        pip install --upgrade pip >/dev/null
+        pip install -e .
+    )
+    echo "agent 依赖安装完成。"
 fi
 
+# 2. 控制台后端虚拟环境：缺失时自动创建并安装依赖
 if [[ ! -d "$BACKEND_VENV" ]]; then
-    echo "错误：未找到后端虚拟环境 $BACKEND_VENV，请先安装 frontend/backend 依赖。"
-    exit 1
+    echo "未找到后端虚拟环境，自动创建并安装依赖：$BACKEND_VENV"
+    python3 -m venv "$BACKEND_VENV"
+    (
+        source "$BACKEND_VENV/bin/activate"
+        pip install --upgrade pip >/dev/null
+        pip install -r "$SCRIPT_DIR/backend/requirements.txt"
+    )
+    echo "后端依赖安装完成。"
+fi
+
+# 3. 前端构建产物：缺失时自动执行 install + build
+if [[ ! -d "$SCRIPT_DIR/web/dist" ]]; then
+    echo "未找到前端构建产物，自动构建：$SCRIPT_DIR/web/dist"
+    (
+        cd "$SCRIPT_DIR/web"
+        if command -v pnpm >/dev/null 2>&1; then
+            pnpm install && pnpm build
+        elif command -v npm >/dev/null 2>&1; then
+            npm install && npm run build
+        else
+            echo "警告：未找到 pnpm/npm，跳过前端构建，控制台将以 API 模式运行。"
+        fi
+    )
 fi
 
 if [[ ! -d "$SCRIPT_DIR/web/dist" ]]; then
@@ -103,6 +135,12 @@ echo "======================================"
 echo "隐私测试控制台已启动"
 echo "Agent REST:  $AGENT_URL"
 echo "Console UI:  $CONSOLE_URL"
+if [[ ! -d "$SCRIPT_DIR/web/dist" ]]; then
+    echo ""
+    echo "注意：前端尚未构建，访问 $CONSOLE_URL 将显示 {\"detail\":\"Not Found\"}。"
+    echo "请先构建前端：cd $SCRIPT_DIR/web && corepack pnpm install && corepack pnpm build"
+    echo "构建完成后重新执行 ./frontend/start.sh 即可打开 Console UI。"
+fi
 echo "按 Ctrl+C 停止所有服务"
 echo "======================================"
 

@@ -5,7 +5,7 @@
 ## 目录结构
 
 - `backend/` - Python FastAPI 代理服务，统一转发请求到 `privacy_local_agent` REST 接口，并提供示例数据。
-- `backend-go/` - Go gRPC 代理服务，将前端的 REST 请求转换为 gRPC 调用转发给 `privacy_local_agent`，接口格式与 Python 后端保持一致。
+- `backend-go/` - Go gRPC 代理服务，将前端的 REST 请求转换为 gRPC 调用转发给 `privacy_local_agent`，接口格式与 Python 后端保持一致；同时可直接挂载 `web/dist` 提供 Console UI 页面。
 - `web/` - React + TypeScript + Vite 前端，按功能分组展示所有端点，支持一键加载示例和发送请求。
 
 ## 快速开始
@@ -78,9 +78,12 @@ corepack pnpm build
 
 ### 4. 打开控制台
 
-浏览器访问 `http://127.0.0.1:8080`，左侧选择功能分组和端点，点击「Send Request」即可测试。
+- `./frontend/start.sh` 启动后访问 `http://127.0.0.1:8080`（Python 后端提供 UI）
+- `./frontend/start-go.sh` 启动后访问 `http://127.0.0.1:8081`（Go 后端直接提供 UI）
 
-页面顶部的 **Backend Selector** 可以切换后端地址：
+左侧选择功能分组和端点，点击「Send Request」即可测试。
+
+页面顶部的 **Backend Selector** 可以切换后端地址（默认自动选中为当前页面提供服务的后端）：
 
 - `Python REST (8080)` — 使用 Python FastAPI 后端代理，调用 `privacy_local_agent` REST 接口。
 - `Go gRPC (8081)` — 使用 Go gRPC 代理后端，将请求通过 gRPC 转发给 `privacy_local_agent`。

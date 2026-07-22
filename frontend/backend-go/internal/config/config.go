@@ -22,6 +22,9 @@ type Config struct {
 	ConsoleHost string
 	// ConsolePort is the listen port for the Go proxy HTTP server.
 	ConsolePort int
+	// StaticDistDir is the path to the built frontend assets (frontend/web/dist).
+	// When the directory exists, the Go server also serves the Console UI.
+	StaticDistDir string
 }
 
 // Load reads configuration from environment variables and returns a populated Config.
@@ -32,6 +35,7 @@ type Config struct {
 //   - PRIVACY_AGENT_API_KEY：可选的认证 API Key
 //   - PRIVACY_CONSOLE_HOST：本后端监听地址，默认 127.0.0.1
 //   - PRIVACY_CONSOLE_PORT：本后端监听端口，默认 8081
+//   - PRIVACY_CONSOLE_STATIC_DIR：前端构建产物目录，默认 ../web/dist（相对于 backend-go 目录）
 func Load() *Config {
 	return &Config{
 		AgentGRPCHost: getEnv("PRIVACY_AGENT_GRPC_HOST", "127.0.0.1"),
@@ -39,6 +43,7 @@ func Load() *Config {
 		AgentAPIKey:   getEnv("PRIVACY_AGENT_API_KEY", ""),
 		ConsoleHost:   getEnv("PRIVACY_CONSOLE_HOST", "127.0.0.1"),
 		ConsolePort:   getEnvInt("PRIVACY_CONSOLE_PORT", 8081),
+		StaticDistDir: getEnv("PRIVACY_CONSOLE_STATIC_DIR", "../web/dist"),
 	}
 }
 

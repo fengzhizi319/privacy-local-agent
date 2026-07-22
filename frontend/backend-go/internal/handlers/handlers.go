@@ -7,7 +7,10 @@ package handlers
 
 import (
 	"fmt"
+	"log"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -46,6 +49,50 @@ func (s *Server) RegisterRoutes(r *gin.Engine) {
 	r.GET("/api/health", s.Health)
 	r.GET("/api/samples", s.Samples)
 	r.POST("/api/proxy", s.Proxy)
+	s.registerStatic(r)
+}
+
+// registerStatic 挂载前端构建产物（SPA），使 Go 后端能独立提供 Console UI，
+// 无需依赖 Python 后端。dist 目录不存在时跳过挂载，仅以 API 模式运行。
+//
+// 路由规则与 Python 后端保持一致：
+//   - /assets/* 静态资源
+//   - 其余非 /api 路由一律返回 index.html（SPA 回退）
+func (s *Server) registerStatic(r *gin.Engine) {
+	distDir := s.cfg.StaticDistDir
+	if distDir == "" {
+		return
+	}
+	info, err := os.Stat(distDir)
+	if err != nil || !info.IsDir() {
+		log.Printf("static dist dir not found (%s), serving API only", distDir)
+		return
+	}
+	indexPath := filepath.Join(distDir, "index.html")
+	if _, err := os.Stat(indexPath); err != nil {
+		log.Printf("index.html not found in %s, serving API only", distDir)
+		return
+	}
+
+	if assetsDir := filepath.Join(distDir, "assets"); dirExists(assetsDir) {
+		r.Static("/assets", assetsDir)
+	}
+
+	// SPA fallback：未匹配的路由（除 /api 外）均返回 index.html。
+	r.NoRoute(func(c *gin.Context) {
+		if strings.HasPrefix(c.Request.URL.Path, "/api/") {
+			c.JSON(http.StatusNotFound, gin.H{"detail": "Not Found", "status": http.StatusNotFound})
+			return
+		}
+		c.File(indexPath)
+	})
+	log.Printf("Console UI enabled, serving static files from %s", distDir)
+}
+
+// dirExists reports whether path exists and is a directory.
+func dirExists(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.IsDir()
 }
 
 // corsMiddleware adds permissive CORS headers so the Vite dev server can call the backend.
@@ -72,11 +119,11 @@ func (s *Server) Health(c *gin.Context) {
 
 	if err != nil {
 		c.JSON(http.StatusOK, models.ConsoleHealth{
-			Backend:  "ok",
-			Agent:    "unreachable",
-			AgentURL: s.cfg.AgentAddress(),
+			Backend:   "ok",
+			Agent:     "unreachable",
+			AgentURL:  s.cfg.AgentAddress(),
 			LatencyMs: &latency,
-			Error:    err.Error(),
+			Error:     err.Error(),
 		})
 		return
 	}
@@ -97,18 +144,20 @@ func (s *Server) Samples(c *gin.Context) {
 // Proxy dispatches a frontend request to the corresponding gRPC method.
 //
 // 请求体格式：
-//   {
-//     "method": "POST",
-//     "path": "/v1/privacy/mask",
-//     "body": {"field_name":"email","value":"alice@example.com"}
-//   }
+//
+//	{
+//	  "method": "POST",
+//	  "path": "/v1/privacy/mask",
+//	  "body": {"field_name":"email","value":"alice@example.com"}
+//	}
 //
 // 响应体格式：
-//   {
-//     "status": 200,
-//     "duration_ms": 12,
-//     "data": { ... }
-//   }
+//
+//	{
+//	  "status": 200,
+//	  "duration_ms": 12,
+//	  "data": { ... }
+//	}
 func (s *Server) Proxy(c *gin.Context) {
 	var req models.ProxyRequest
 	if err := c.ShouldBindJSON(&req); err != nil {

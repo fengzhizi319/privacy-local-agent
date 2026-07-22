@@ -26,6 +26,11 @@ class PrivacyAgentClient:
                 base_url=self.base_url,
                 timeout=60.0,
                 follow_redirects=True,
+                # 不读取环境变量 / macOS 系统代理配置：
+                # 控制台与本地 agent 通信必须直连，否则系统代理
+                # （如 Clash 等工具设置的 127.0.0.1:7897）会导致
+                # "All connection attempts failed" 连接失败。
+                trust_env=False,
             )
         return self._client
 

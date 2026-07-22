@@ -12,9 +12,19 @@ AGENT_VENV="$PROJECT_ROOT/.venv"
 AGENT_URL="http://127.0.0.1:8079"
 CONSOLE_URL="http://127.0.0.1:8081"
 
+# ── 自动补全缺失的依赖 / 构建产物 ─────────────────────────────────────
+
+# 1. Agent 虚拟环境：缺失时自动创建并安装项目依赖
 if [[ ! -d "$AGENT_VENV" ]]; then
-    echo "错误：未找到 agent 虚拟环境 $AGENT_VENV，请先安装项目依赖。"
-    exit 1
+    echo "未找到 agent 虚拟环境，自动创建并安装依赖：$AGENT_VENV"
+    python3 -m venv "$AGENT_VENV"
+    (
+        source "$AGENT_VENV/bin/activate"
+        cd "$PROJECT_ROOT"
+        pip install --upgrade pip >/dev/null
+        pip install -e .
+    )
+    echo "agent 依赖安装完成。"
 fi
 
 if [[ ! -d "$SCRIPT_DIR/backend-go" ]]; then
@@ -26,6 +36,26 @@ if ! command -v go >/dev/null 2>&1; then
     echo "错误：未找到 Go 工具链，请先安装 Go。"
     exit 1
 fi
+
+# 2. 前端构建产物：缺失时自动执行 install + build（Go 后端基于该产物提供 Console UI）
+if [[ ! -d "$SCRIPT_DIR/web/dist" ]]; then
+    echo "未找到前端构建产物，自动构建：$SCRIPT_DIR/web/dist"
+    (
+        cd "$SCRIPT_DIR/web"
+        if command -v pnpm >/dev/null 2>&1; then
+            pnpm install && pnpm build
+        elif command -v npm >/dev/null 2>&1; then
+            npm install && npm run build
+        else
+            echo "警告：未找到 pnpm/npm，跳过前端构建。"
+        fi
+    )
+fi
+
+# 3. 预编译 Go gRPC 代理后端二进制，编译失败时提前暴露错误
+echo "编译 Go gRPC 代理后端..."
+(cd "$SCRIPT_DIR/backend-go" && go build -o bin/backend-go ./cmd/server)
+echo "Go 后端编译完成。"
 
 AGENT_PID_FILE="$SCRIPT_DIR/.pids/agent-go.pid"
 CONSOLE_PID_FILE="$SCRIPT_DIR/.pids/console-go.pid"
@@ -69,7 +99,6 @@ write_pid "$AGENT_PID_FILE" "$AGENT_PID"
 echo "启动 Go gRPC 代理后端 (Console: $CONSOLE_URL)..."
 (
     cd "$SCRIPT_DIR/backend-go"
-    go build -o bin/backend-go ./cmd/server
     exec ./bin/backend-go
 ) &
 CONSOLE_PID=$!
@@ -102,9 +131,15 @@ wait_for_service "$CONSOLE_URL/api/health" "Go gRPC 代理后端"
 echo ""
 echo "======================================"
 echo "Go gRPC 代理控制台已启动"
-echo "Console UI:  $CONSOLE_URL"
 echo "Agent REST:  $AGENT_URL"
 echo "Agent gRPC:  127.0.0.1:50051"
+echo "Console UI:  $CONSOLE_URL (Go 后端直接提供 UI 与 API)"
+if [[ ! -d "$SCRIPT_DIR/web/dist" ]]; then
+    echo ""
+    echo "警告：前端尚未构建，$CONSOLE_URL 仅以 API 模式运行。"
+    echo "请先构建前端：cd $SCRIPT_DIR/web && corepack pnpm install && corepack pnpm build"
+    echo "构建完成后重新执行 ./frontend/start-go.sh 即可打开 Console UI。"
+fi
 echo "按 Ctrl+C 停止所有服务"
 echo "======================================"
 

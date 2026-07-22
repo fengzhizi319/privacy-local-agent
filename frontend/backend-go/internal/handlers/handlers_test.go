@@ -4,9 +4,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -178,5 +182,123 @@ func TestProxyHandlerMask(t *testing.T) {
 	data, ok := body["data"].(map[string]any)
 	if !ok || data["result"] != "***@example.com" {
 		t.Fatalf("unexpected proxy response: %+v", body)
+	}
+}
+
+// TestStaticServing 验证 Go 后端能独立提供 Console UI 静态资源与 SPA 回退。
+func TestStaticServing(t *testing.T) {
+	// 构造临时 dist 目录：index.html + assets/app.js
+	distDir := t.TempDir()
+	indexHTML := "<!doctype html><html><body>console-ui</body></html>"
+	if err := os.WriteFile(filepath.Join(distDir, "index.html"), []byte(indexHTML), 0o644); err != nil {
+		t.Fatalf("write index.html failed: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(distDir, "assets"), 0o755); err != nil {
+		t.Fatalf("mkdir assets failed: %v", err)
+	}
+	jsContent := "console.log('app');"
+	if err := os.WriteFile(filepath.Join(distDir, "assets", "app.js"), []byte(jsContent), 0o644); err != nil {
+		t.Fatalf("write app.js failed: %v", err)
+	}
+
+	grpcSrv := &testPrivacyServer{}
+	listener := bufconn.Listen(1024 * 1024)
+	gs := grpc.NewServer()
+	pb.RegisterPrivacyServiceServer(gs, grpcSrv)
+	go func() { _ = gs.Serve(listener) }()
+	conn, err := grpc.NewClient(
+		"passthrough:///bufnet",
+		grpc.WithContextDialer(func(ctx context.Context, _ string) (net.Conn, error) {
+			return listener.DialContext(ctx)
+		}),
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
+	if err != nil {
+		gs.Stop()
+		t.Fatalf("failed to create bufconn client: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = conn.Close()
+		gs.Stop()
+	})
+
+	cfg := &config.Config{
+		AgentGRPCHost: "127.0.0.1",
+		AgentGRPCPort: 50051,
+		ConsoleHost:   "127.0.0.1",
+		ConsolePort:   0,
+		StaticDistDir: distDir,
+	}
+	server := New(agent.NewFromConnection(conn), cfg)
+
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	server.RegisterRoutes(router)
+	ts := httptest.NewServer(router)
+	defer ts.Close()
+
+	// 1. 根路径返回 index.html
+	resp, err := http.Get(ts.URL + "/")
+	if err != nil {
+		t.Fatalf("GET / failed: %v", err)
+	}
+	bodyBytes, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || !strings.Contains(string(bodyBytes), "console-ui") {
+		t.Fatalf("GET / expected index.html, got status=%d body=%s", resp.StatusCode, bodyBytes)
+	}
+
+	// 2. 静态资源正常返回
+	resp, err = http.Get(ts.URL + "/assets/app.js")
+	if err != nil {
+		t.Fatalf("GET /assets/app.js failed: %v", err)
+	}
+	bodyBytes, _ = io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || string(bodyBytes) != jsContent {
+		t.Fatalf("GET /assets/app.js expected js content, got status=%d body=%s", resp.StatusCode, bodyBytes)
+	}
+
+	// 3. SPA 回退：任意非 /api 路径返回 index.html
+	resp, err = http.Get(ts.URL + "/some/spa/route")
+	if err != nil {
+		t.Fatalf("GET /some/spa/route failed: %v", err)
+	}
+	bodyBytes, _ = io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || !strings.Contains(string(bodyBytes), "console-ui") {
+		t.Fatalf("SPA fallback expected index.html, got status=%d body=%s", resp.StatusCode, bodyBytes)
+	}
+
+	// 4. 未注册的 /api 路径返回 404 JSON而非 index.html
+	resp, err = http.Get(ts.URL + "/api/nonexistent")
+	if err != nil {
+		t.Fatalf("GET /api/nonexistent failed: %v", err)
+	}
+	bodyBytes, _ = io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound || !strings.Contains(string(bodyBytes), "Not Found") {
+		t.Fatalf("GET /api/nonexistent expected 404 JSON, got status=%d body=%s", resp.StatusCode, bodyBytes)
+	}
+}
+
+// TestStaticServingDisabled 验证 dist 目录不存在时仅提供 API（不挂载静态路由）。
+func TestStaticServingDisabled(t *testing.T) {
+	grpcSrv := &testPrivacyServer{}
+	ts, cfg := setupTestServer(t, grpcSrv)
+	defer ts.Close()
+
+	// setupTestServer 未设置 StaticDistDir，静态服务应跳过。
+	if cfg.StaticDistDir != "" {
+		t.Fatalf("expected empty StaticDistDir in test config, got %q", cfg.StaticDistDir)
+	}
+
+	resp, err := http.Get(ts.URL + "/")
+	if err != nil {
+		t.Fatalf("GET / failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("expected 404 without dist dir, got %d", resp.StatusCode)
 	}
 }
