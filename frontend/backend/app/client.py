@@ -1,4 +1,13 @@
-"""HTTP client proxy for privacy-local-agent REST endpoints."""
+"""privacy-local-agent REST 接口的 HTTP 代理客户端。
+
+本模块是控制台后端与 agent 通信的唯一出口：
+    - 维护一个应用级单例的 ``httpx.AsyncClient`` 连接池，复用 TCP 连接；
+    - 统一处理 JSON / Arrow IPC / 其他二进制三类响应的解析；
+    - 把下游的网络异常、HTTP 错误状态码转换为 :class:`HTTPException`，
+      交由 FastAPI 统一返回给前端。
+
+全局单例 :data:`agent_client` 在 :mod:`app.main` 的 lifespan 中预热与释放。
+"""
 
 from __future__ import annotations
 
@@ -13,14 +22,25 @@ from .config import settings
 
 
 class PrivacyAgentClient:
-    """Thin async client that forwards requests to privacy-local-agent."""
+    """转发请求到 privacy-local-agent 的轻量异步客户端。
+
+    设计为应用级单例（见模块底部 :data:`agent_client`），内部懒初始化
+    ``httpx.AsyncClient`` 以复用连接池，避免每次请求重建连接的开销。
+    """
 
     def __init__(self) -> None:
+        # agent REST 基地址（去掉尾部斜杠，便于拼接 path）
         self.base_url = settings.privacy_agent_url.rstrip("/")
+        # 可选的认证 API Key（agent 开启 auth 时才需要）
         self.api_key = settings.privacy_agent_api_key
+        # 懒初始化的异步 HTTP 客户端（连接池）
         self._client: Optional[httpx.AsyncClient] = None
 
     async def _get_client(self) -> httpx.AsyncClient:
+        """获取（必要时创建）底层 ``httpx.AsyncClient``。
+
+        客户端未创建或已关闭时重建，保证连接池有效。
+        """
         if self._client is None or self._client.is_closed:
             self._client = httpx.AsyncClient(
                 base_url=self.base_url,
@@ -35,6 +55,7 @@ class PrivacyAgentClient:
         return self._client
 
     def _headers(self) -> Dict[str, str]:
+        """构造请求头：配置了 API Key 时附加 ``Authorization: Bearer``。"""
         headers: Dict[str, str] = {}
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
@@ -42,7 +63,13 @@ class PrivacyAgentClient:
 
     @staticmethod
     def _parse_arrow_response(response: httpx.Response) -> Dict[str, Any]:
-        """Parse an Arrow IPC stream and return records + metadata."""
+        """解析 Arrow IPC 流响应，返回记录列表 + schema 元数据。
+
+        agent 的 ``/v1/privacy/dp/arrow_ipc`` 等端点返回二进制 Arrow 流，
+        前端无法直接展示，这里将其转换为 JSON 友好的结构：
+            - ``metadata``：schema 级元数据（bytes 键值解码为 str）；
+            - ``records``：表格数据转为记录列表，NaN 替换为 None。
+        """
         import pyarrow as pa
 
         table = pa.ipc.open_stream(io.BytesIO(response.content)).read_all()
@@ -64,10 +91,18 @@ class PrivacyAgentClient:
         raw_content: Optional[bytes] = None,
         content_type: Optional[str] = None,
     ) -> Any:
-        """Forward a request to the privacy agent and return its response.
+        """转发一个请求到 privacy agent 并返回其响应。
 
-        JSON responses are parsed to Python objects. Arrow IPC responses are parsed
-        into records + metadata. Other binary responses are returned as base64.
+        参数优先级：``raw_content``（二进制）> ``body``（JSON）> 无请求体。
+
+        响应解析策略（按 Content-Type 区分）：
+            - Arrow IPC 流 → 解析为记录 + 元数据（见 :meth:`_parse_arrow_response`）；
+            - JSON → 解析为 Python 对象；
+            - 其他二进制 → base64 编码后返回，便于前端展示。
+
+        异常处理：
+            - 网络层错误（连不上、超时等）→ 502 Bad Gateway；
+            - agent 返回非 2xx → 透传原状态码与 ``detail``。
         """
         client = await self._get_client()
         url = f"{self.base_url}{path}"
@@ -89,6 +124,8 @@ class PrivacyAgentClient:
         try:
             response.raise_for_status()
         except httpx.HTTPStatusError as exc:
+            # 非 2xx：提取 agent 返回的 detail 并透传状态码，
+            # 让前端能看到与直连 agent 一致的错误信息。
             detail = self._extract_detail(response)
             raise HTTPException(status_code=response.status_code, detail=detail) from exc
 
@@ -98,7 +135,7 @@ class PrivacyAgentClient:
         if "application/json" in ct:
             return response.json()
 
-        # Fallback for other binary content: base64 encode so the UI can display it.
+        # 其他二进制内容的兑底处理：base64 编码，让前端能安全展示。
         return {
             "_content_type": ct,
             "_base64": base64.b64encode(response.content).decode("ascii"),
@@ -106,6 +143,11 @@ class PrivacyAgentClient:
 
     @staticmethod
     def _extract_detail(response: httpx.Response) -> str:
+        """从错误响应中提取可读的错误描述。
+
+        优先取 JSON 体中的 ``detail`` 字段（FastAPI 规范）；解析失败时
+        降级为原始文本或 HTTP reason phrase，保证始终有可读信息。
+        """
         try:
             data = response.json()
             if isinstance(data, dict) and "detail" in data:
@@ -115,4 +157,6 @@ class PrivacyAgentClient:
             return response.text or response.reason_phrase
 
 
+# 应用级单例：整个后端共享同一个客户端（连接池），
+# 由 :mod:`app.main` 的 lifespan 负责预热与优雅关闭。
 agent_client = PrivacyAgentClient()

@@ -1,3 +1,9 @@
+/**
+ * 侧边栏：接口导航树。
+ *
+ * 按分类分组展示全部接口，支持搜索过滤与分组折叠/展开；
+ * 顶部提供“接口总览”与“批量测试”两个快捷入口。
+ */
 import { useEffect, useMemo, useState } from 'react';
 import type { EndpointSample } from '@/types/api';
 import { categoryMeta, orderCategories } from '@/lib/categories';

@@ -1,3 +1,8 @@
+/**
+ * 顶部导航栏：品牌标识 + Agent 健康状态灯 + 后端切换器。
+ *
+ * 点击品牌区可返回总览页；HealthPill 实时反映 agent 连通性。
+ */
 import type { ConsoleHealth } from '@/types/api';
 import type { BackendOption } from '@/components/BackendSelector';
 import BackendSelector from '@/components/BackendSelector';

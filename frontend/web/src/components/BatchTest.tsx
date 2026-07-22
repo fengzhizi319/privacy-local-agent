@@ -1,3 +1,9 @@
+/**
+ * 批量测试视图：一键回归验证。
+ *
+ * 选择一个分类（或全部），顺序调用其下所有接口，
+ * 汇总展示通过率与逐条结果，单个失败不中断整个批次。
+ */
 import { useMemo, useState } from 'react';
 import type { EndpointSample, BatchResponse } from '@/types/api';
 import { batchRequest } from '@/api/client';

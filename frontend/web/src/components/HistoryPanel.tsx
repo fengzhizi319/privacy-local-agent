@@ -1,3 +1,8 @@
+/**
+ * 请求历史面板：以覆盖层形式展示当前端点的历史请求。
+ *
+ * 点击条目可快速回填请求体，支持单条删除与一键清空。
+ */
 import type { HistoryEntry } from '@/types/api';
 import { formatRelativeTime } from '@/lib/history';
 import { Icon } from '@/components/icons';

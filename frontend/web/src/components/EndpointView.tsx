@@ -1,3 +1,9 @@
+/**
+ * 端点测试视图：单个接口的调试页面。
+ *
+ * 上方为接口信息栏（返回 / method / 可编辑路径 / 分类），
+ * 下方左右分栏：请求编辑器（格式化 / cURL / 历史 / 重载示例）与响应查看器。
+ */
 import { useState, useEffect, useRef } from 'react';
 import type { EndpointSample, ProxyResponse, HistoryEntry } from '@/types/api';
 import { proxyRequest } from '@/api/client';

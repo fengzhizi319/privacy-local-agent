@@ -1,6 +1,13 @@
+/**
+ * 后端切换器：在 Python REST（8080）与 Go gRPC（8081）两个代理后端间切换。
+ *
+ * 切换时通过 ``setBaseUrl`` 更新全局 API 基址，后续所有请求
+ * 都会发往新选中的后端；默认优先选择与当前页面同源的后端。
+ */
 import { setBaseUrl } from '@/api/client';
 import { Icon } from '@/components/icons';
 
+/** 单个后端选项：展示标签 + API 基址。 */
 export interface BackendOption {
   label: string;
   value: string;

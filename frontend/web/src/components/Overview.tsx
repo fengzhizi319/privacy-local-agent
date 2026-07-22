@@ -1,3 +1,8 @@
+/**
+ * 接口总览页：控制台的首页。
+ *
+ * 以分类卡片网格展示全部功能模块，点击卡片进入该分类的第一个接口。
+ */
 import { useMemo } from 'react';
 import type { EndpointSample } from '@/types/api';
 import { categoryMeta, orderCategories } from '@/lib/categories';

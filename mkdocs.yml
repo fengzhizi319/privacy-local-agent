@@ -136,6 +136,22 @@ nav:
       - 需求文档: gateway_balancer/prd.md
       - 测试指南: gateway_balancer/testing.md
 
+  - 测试控制台:
+    - 控制台后端（Python）:
+      - 概览: console_backend/README.md
+      - 架构设计: console_backend/design.md
+      - API 参考: console_backend/api_reference.md
+      - 运维指南: console_backend/ops.md
+      - 需求文档: console_backend/prd.md
+      - 测试指南: console_backend/testing.md
+    - 控制台前端（Web）:
+      - 概览: console_web/README.md
+      - 架构设计: console_web/design.md
+      - API 参考: console_web/api_reference.md
+      - 运维指南: console_web/ops.md
+      - 需求文档: console_web/prd.md
+      - 测试指南: console_web/testing.md
+
   - 生产部署:
     - 安全 TLS/Auth/Rate Limit:
       - 概览: production_security/README.md

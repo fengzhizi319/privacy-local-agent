@@ -1,8 +1,11 @@
-"""Sample payloads for every privacy-local-agent REST endpoint.
+"""privacy-local-agent 所有 REST 端点的示例请求载荷。
 
-The samples are intentionally minimal and deterministic; they are meant to exercise
-connectivity and demonstrate valid request shapes. Users can edit them in the UI
-before sending.
+示例数据刻意保持**最小化与确定性**：只用于验证连通性、展示合法的
+请求形状。用户可以在 UI 中编辑后再发送。
+
+每个示例由 :class:`EndpointSample` 描述，含：请求方法 / 路径 / 展示标签 /
+功能分类 / 描述 / 默认请求体等。``backend`` 字段标识该端点在哪个后端
+可用（``rest`` 仅 Python REST 后端，``both`` 两个后端都支持）。
 """
 
 from __future__ import annotations
@@ -12,7 +15,12 @@ from typing import Any, Dict, List, Optional
 
 
 def _arrow_ipc_payload() -> str:
-    """Generate a tiny Arrow IPC stream and return it as a base64 string."""
+    """生成一个小型 Arrow IPC 流并返回其 base64 字符串。
+
+    用于 ``/v1/privacy/dp/arrow_ipc`` 端点的示例：该端点要求二进制
+    Arrow 流作为输入，这里构造一个 5 行的小表并编码为 base64，
+    由前端经 ``rawPayloadB64`` 字段传递、后端解码后转发。
+    """
     import pyarrow as pa
     import io
 
@@ -24,7 +32,17 @@ def _arrow_ipc_payload() -> str:
 
 
 class EndpointSample:
-    """Metadata and sample payload for one privacy-local-agent endpoint."""
+    """单个 privacy-local-agent 端点的元数据与示例载荷。
+
+    属性说明：
+        - ``method`` / ``path``：HTTP 方法与端点路径；
+        - ``label``：UI 中显示的简短名称；
+        - ``category``：功能分类（用于侧边栏分组，如 Masking / DP）；
+        - ``description``：中文功能描述；
+        - ``body``：默认 JSON 请求体（可为空）；
+        - ``content_type`` / ``raw_payload_b64``：二进制载荷场景使用；
+        - ``backend``：可用性标识（``rest`` / ``both``）。
+    """
 
     def __init__(
         self,
@@ -491,12 +509,12 @@ SAMPLES: List[EndpointSample] = [
 
 
 def get_samples() -> List[Dict[str, Any]]:
-    """Return all endpoint samples as plain dictionaries."""
+    """返回所有端点示例（纯字典列表），供 ``/api/samples`` 接口序列化。"""
     return [s.to_dict() for s in SAMPLES]
 
 
 def find_sample(path: str) -> Optional[Dict[str, Any]]:
-    """Find a sample by endpoint path."""
+    """按端点路径查找示例，未找到时返回 ``None``。"""
     for s in SAMPLES:
         if s.path == path:
             return s.to_dict()

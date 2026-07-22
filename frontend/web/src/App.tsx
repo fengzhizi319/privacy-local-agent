@@ -1,3 +1,14 @@
+/**
+ * 应用根组件：负责全局状态与三栏布局编排。
+ *
+ * 布局结构：顶部 Header + 左侧 Sidebar + 右侧主区域。
+ * 主区域通过 ``View`` 判别联合在三种视图间切换：
+ *   - overview：接口总览（卡片式）；
+ *   - endpoint：单端点测试（请求/响应分栏）；
+ *   - batch：批量测试。
+ *
+ * 数据流：启动时并行拉取 samples 与 health；切换后端时重新拉取。
+ */
 import { useEffect, useState, useCallback } from 'react';
 import type { EndpointSample, ConsoleHealth } from '@/types/api';
 import { fetchSamples, fetchHealth, setBaseUrl } from '@/api/client';
@@ -16,13 +27,19 @@ type View =
   | { type: 'batch' };
 
 export default function App() {
+  /** 全部端点示例（来自 /api/samples） */
   const [samples, setSamples] = useState<EndpointSample[]>([]);
+  /** 当前主区域视图 */
   const [view, setView] = useState<View>({ type: 'overview' });
+  /** 后端健康状态（用于 Header 状态灯与 cURL 基址推断） */
   const [health, setHealth] = useState<ConsoleHealth | null>(null);
+  /** 加载中 / 错误状态 */
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  /** 当前选中的后端（Python REST / Go gRPC） */
   const [backend, setBackend] = useState<BackendOption>(DEFAULT_BACKEND);
 
+  /** 并行拉取示例与健状态；失败时记录错误并重置视图。 */
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
@@ -42,11 +59,13 @@ export default function App() {
     }
   }, []);
 
+  // 后端切换时：更新 API 基址并重新拉取数据。
   useEffect(() => {
     setBaseUrl(backend.value);
     load();
   }, [backend, load]);
 
+  /** 当前选中的端点示例（仅 endpoint 视图非空）。 */
   const selected = view.type === 'endpoint' ? view.sample : null;
   const goOverview = () => setView({ type: 'overview' });
   const openEndpoint = (sample: EndpointSample) => setView({ type: 'endpoint', sample });
@@ -95,6 +114,8 @@ export default function App() {
               batchActive={view.type === 'batch'}
             />
             <main className="flex-1 overflow-hidden">
+              {/* 根据 view 类型渲染对应视图；EndpointView 用 key 强制在
+                  切换端点时重建组件，避免上一个端点的状态残留。 */}
               {view.type === 'endpoint' ? (
                 <EndpointView
                   key={`${view.sample.method}-${view.sample.path}`}

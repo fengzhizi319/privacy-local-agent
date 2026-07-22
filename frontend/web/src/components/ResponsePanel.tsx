@@ -1,3 +1,9 @@
+/**
+ * 响应查看器：展示请求结果。
+ *
+ * 三种状态：空状态（未发送）/ 错误状态 / 成功状态；
+ * 成功时对 JSON 做语法高亮，并提供复制与下载按钮。
+ */
 import { useState, type ReactNode } from 'react';
 import type { ProxyResponse } from '@/types/api';
 import { Icon } from '@/components/icons';
