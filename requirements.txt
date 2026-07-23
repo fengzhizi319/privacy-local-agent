@@ -1,4 +1,7 @@
 # 本地开发与测试完整依赖（core + dev）
+# 注意：依赖以 pyproject.toml 为唯一权威来源（core = [project] dependencies，
+# dev/docs = [project.optional-dependencies]），本文件与之保持一致，供本地快速安装。
+# 推荐改用：pip install -e ".[dev,docs]"
 fastapi>=0.110.0
 uvicorn[standard]>=0.27.0
 pydantic>=2.6.0

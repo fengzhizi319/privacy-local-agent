@@ -1,4 +1,6 @@
 # ML 扩展依赖（ml 镜像），在 core 基础上安装
+# 注意：依赖以 pyproject.toml 的 [project.optional-dependencies] ml extra 为唯一权威来源，
+# 本文件与之保持一致，供 Dockerfile ml 阶段直接安装使用。
 torch>=2.2.0
 # torchvision 为 qwen-vl-utils 多模态图片预处理的运行时依赖
 torchvision>=0.17.0
