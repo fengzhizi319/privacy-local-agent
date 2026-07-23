@@ -21,13 +21,18 @@ def _arrow_ipc_payload() -> str:
     Arrow 流作为输入，这里构造一个 5 行的小表并编码为 base64，
     由前端经 ``rawPayloadB64`` 字段传递、后端解码后转发。
     """
+    # 延迟导入 pyarrow：仅在生成 Arrow 示例时才引入重量级依赖。
     import pyarrow as pa
     import io
 
+    # 构造一个 5 行单列（value）的小表。
     table = pa.table({"value": [1.0, 2.0, 3.0, 4.0, 5.0]})
+    # 创建内存缓冲区作为 Arrow IPC 流的写入目标。
     sink = io.BytesIO()
+    # 以流式格式写入整张表（with 块结束时自动写入流尾）。
     with pa.ipc.new_stream(sink, table.schema) as writer:
         writer.write_table(table)
+    # 把二进制流编码为 base64 字符串，供前端经 rawPayloadB64 传递。
     return base64.b64encode(sink.getvalue()).decode("ascii")
 
 
@@ -56,17 +61,20 @@ class EndpointSample:
         raw_payload_b64: Optional[str] = None,
         backend: str = "rest",
     ):
-        self.method = method
-        self.path = path
-        self.label = label
-        self.category = category
-        self.description = description
-        self.body = body
-        self.content_type = content_type
-        self.raw_payload_b64 = raw_payload_b64
-        self.backend = backend
+        # 逐一保存端点的各项元数据与示例载荷。
+        self.method = method                  # HTTP 方法
+        self.path = path                      # 端点路径
+        self.label = label                    # UI 展示名称
+        self.category = category              # 功能分类（侧边栏分组）
+        self.description = description        # 中文功能描述
+        self.body = body                      # 默认 JSON 请求体
+        self.content_type = content_type      # 二进制载荷的 Content-Type
+        self.raw_payload_b64 = raw_payload_b64  # 二进制载荷的 base64
+        self.backend = backend                # 可用性标识（rest / both）
 
     def to_dict(self) -> Dict[str, Any]:
+        # 转换为前端可直接消费的字典；注意 contentType / rawPayloadB64
+        # 使用驼峰命名（与前端 TypeScript 契约一致）。
         return {
             "method": self.method,
             "path": self.path,
@@ -510,12 +518,15 @@ SAMPLES: List[EndpointSample] = [
 
 def get_samples() -> List[Dict[str, Any]]:
     """返回所有端点示例（纯字典列表），供 ``/api/samples`` 接口序列化。"""
+    # 把每个 EndpointSample 对象转换为字典。
     return [s.to_dict() for s in SAMPLES]
 
 
 def find_sample(path: str) -> Optional[Dict[str, Any]]:
     """按端点路径查找示例，未找到时返回 ``None``。"""
+    # 线性遍历 SAMPLES，按 path 精确匹配。
     for s in SAMPLES:
         if s.path == path:
             return s.to_dict()
+    # 未找到匹配的示例。
     return None

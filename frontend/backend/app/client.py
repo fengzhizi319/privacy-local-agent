@@ -70,16 +70,22 @@ class PrivacyAgentClient:
             - ``metadata``：schema 级元数据（bytes 键值解码为 str）；
             - ``records``：表格数据转为记录列表，NaN 替换为 None。
         """
+        # 延迟导入 pyarrow：避免在未用到 Arrow 的场景下引入重量级依赖。
         import pyarrow as pa
 
+        # 把响应体（二进制 Arrow 流）包装为 BytesIO 并读取为 Table。
         table = pa.ipc.open_stream(io.BytesIO(response.content)).read_all()
+        # 提取 schema 级元数据（可能为空）。
         metadata = {}
         if table.schema.metadata:
+            # Arrow 元数据的键值均为 bytes，统一解码为 str 以便 JSON 序列化。
             metadata = {k.decode() if isinstance(k, bytes) else k: v.decode() if isinstance(v, bytes) else v for k, v in table.schema.metadata.items()}
 
+        # 返回 JSON 友好结构：内容类型标记 + 元数据 + 记录列表。
         return {
             "_content_type": "application/vnd.apache.arrow.stream",
             "metadata": metadata,
+            # 表格转 pandas 再转记录列表；NaN 替换为 None（JSON 无 NaN）。
             "records": table.to_pandas().replace({float("nan"): None}).to_dict(orient="records"),
         }
 
@@ -104,24 +110,33 @@ class PrivacyAgentClient:
             - 网络层错误（连不上、超时等）→ 502 Bad Gateway；
             - agent 返回非 2xx → 透传原状态码与 ``detail``。
         """
+        # 获取（必要时重建）底层连接池客户端。
         client = await self._get_client()
+        # 拼接完整目标 URL（base_url + path）。
         url = f"{self.base_url}{path}"
+        # 构造请求头（可能携带 Bearer 认证）。
         headers = self._headers()
 
         try:
             if raw_content is not None:
+                # 二进制载荷：显式设置 Content-Type（兑底 octet-stream），
+                # 以 content= 传递原始字节。
                 headers["Content-Type"] = content_type or "application/octet-stream"
                 response = await client.request(method, url, content=raw_content, headers=headers)
             elif body is not None:
+                # JSON 载荷：httpx 自动序列化并设置 application/json。
                 response = await client.request(method, url, json=body, headers=headers)
             else:
+                # 无请求体（如 GET 请求）。
                 response = await client.request(method, url, headers=headers)
         except httpx.RequestError as exc:
+            # 网络层错误（连不上 / 超时等）：包装为 502 Bad Gateway。
             raise HTTPException(
                 status_code=502, detail=f"Unable to reach privacy agent: {exc}"
             ) from exc
 
         try:
+            # 状态码检查：非 2xx 抛出 HTTPStatusError。
             response.raise_for_status()
         except httpx.HTTPStatusError as exc:
             # 非 2xx：提取 agent 返回的 detail 并透传状态码，
@@ -129,10 +144,13 @@ class PrivacyAgentClient:
             detail = self._extract_detail(response)
             raise HTTPException(status_code=response.status_code, detail=detail) from exc
 
+        # 根据响应 Content-Type 选择解析方式。
         ct = response.headers.get("content-type", "application/json")
         if "application/vnd.apache.arrow.stream" in ct:
+            # Arrow IPC 流：解析为记录 + 元数据。
             return self._parse_arrow_response(response)
         if "application/json" in ct:
+            # JSON：直接反序列化为 Python 对象。
             return response.json()
 
         # 其他二进制内容的兑底处理：base64 编码，让前端能安全展示。
@@ -140,7 +158,7 @@ class PrivacyAgentClient:
             "_content_type": ct,
             "_base64": base64.b64encode(response.content).decode("ascii"),
         }
-    
+
     async def request_multipart(
         self,
         path: str,
@@ -159,26 +177,37 @@ class PrivacyAgentClient:
 
         异常处理与 :meth:`request` 一致：网络错误 → 502，agent 非 2xx → 透传。
         """
+        # 获取（必要时重建）底层连接池客户端。
         client = await self._get_client()
+        # 拼接完整目标 URL。
         url = f"{self.base_url}{path}"
+        # 构造请求头（可能携带 Bearer 认证）。
         headers = self._headers()
 
         try:
+            # 以 multipart/form-data 发送：files 为文件字段，
+            # data 为随附表单字段（httpx 自动构造 multipart 边界）。
             response = await client.post(url, files=files, data=data or {}, headers=headers)
         except httpx.RequestError as exc:
+            # 网络层错误：包装为 502 Bad Gateway。
             raise HTTPException(
                 status_code=502, detail=f"Unable to reach privacy agent: {exc}"
             ) from exc
 
         try:
+            # 状态码检查：非 2xx 抛出 HTTPStatusError。
             response.raise_for_status()
         except httpx.HTTPStatusError as exc:
+            # 非 2xx：提取 detail 并透传状态码。
             detail = self._extract_detail(response)
             raise HTTPException(status_code=response.status_code, detail=detail) from exc
 
+        # 根据响应 Content-Type 选择解析方式。
         ct = response.headers.get("content-type", "application/json")
         if "application/json" in ct:
+            # JSON：直接反序列化。
             return response.json()
+        # 非 JSON 响应的兑底：base64 编码后返回。
         return {
             "_content_type": ct,
             "_base64": base64.b64encode(response.content).decode("ascii"),
@@ -192,11 +221,15 @@ class PrivacyAgentClient:
         降级为原始文本或 HTTP reason phrase，保证始终有可读信息。
         """
         try:
+            # 尝试按 JSON 解析响应体。
             data = response.json()
             if isinstance(data, dict) and "detail" in data:
+                # FastAPI 规范：错误信息放在 detail 字段。
                 return str(data["detail"])
+            # 是 JSON 但无 detail 字段：直接字符串化整个体。
             return str(data)
         except Exception:  # noqa: BLE001
+            # 解析失败（非 JSON 响应）：降级为原始文本或 HTTP reason phrase。
             return response.text or response.reason_phrase
 
 

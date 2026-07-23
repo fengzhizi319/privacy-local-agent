@@ -8,6 +8,15 @@
 - `backend-go/` - Go gRPC 代理服务，将前端的 REST 请求转换为 gRPC 调用转发给 `privacy_local_agent`，接口格式与 Python 后端保持一致；同时可直接挂载 `web/dist` 提供 Console UI 页面。
 - `web/` - React + TypeScript + Vite 前端，按功能分组展示所有端点，支持一键加载示例和发送请求。
 
+## 文档
+
+两个代理后端各自维护一套 `docs/` 文档（设计 / 接口 / 测试 / 运维）：
+
+- `backend/docs/` - Python REST 代理后端：[design](backend/docs/design.md) · [api](backend/docs/api.md) · [test](backend/docs/test.md) · [ops](backend/docs/ops.md)
+- `backend-go/docs/` - Go gRPC 代理后端：[design](backend-go/docs/design.md) · [api](backend-go/docs/api.md) · [test](backend-go/docs/test.md) · [ops](backend-go/docs/ops.md)
+
+其中 **ops 运维文档** 说明了开发模式与生产模式的区别、环境变量配置、跨域（CORS）解决方案、启停脚本与常见问题排查，部署前建议先阅读。
+
 ## 快速开始
 
 ### 1. 一键启动（推荐）

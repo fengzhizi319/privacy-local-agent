@@ -196,8 +196,13 @@ async def lifespan(app: FastAPI):
     在 ``yield`` 之前创建 ``httpx.AsyncClient``（连接池），避免首个请求
     才懒初始化带来的额外延迟；``yield`` 之后（应用退出时）优雅关闭客户端。
     """
+    # 启动阶段：提前创建 httpx 连接池（预热），
+    # 避免首个真实请求才懒初始化连接带来的额外延迟。
     _ = await agent_client._get_client()
+    # yield 之前是启动逻辑，之后是关闭逻辑；
+    # FastAPI 会在应用退出时恢复执行 yield 之后的代码。
     yield
+    # 关闭阶段：若连接池仍存在则优雅关闭，释放底层 TCP 连接。
     if agent_client._client is not None:
         await agent_client._client.aclose()
 
@@ -228,26 +233,32 @@ async def health():
     注意：agent 不可达时仍返回 **HTTP 200**（而非 5xx），以便前端能
     够读取 ``agent == "unreachable"`` 并展示友好提示，而不是直接报错。
     """
+    # 记录起始时刻，用于计算探测 agent 的往返耗时。
     start = time.perf_counter()
     try:
+        # 经代理客户端转发 GET /health 到 agent，返回其健康信息。
         agent_health = await agent_client.request("GET", "/health")
+        # 计算耗时（秒 → 毫秒）。
         duration_ms = (time.perf_counter() - start) * 1000
+        # agent 可达：返回双正常结构与延迟、后端身份标识。
         return {
-            "backend": "ok",
-            "agent": agent_health,
-            "agent_url": settings.privacy_agent_url,
-            "latency_ms": round(duration_ms, 2),
-            "via": BACKEND_VIA,
-            "protocol": AGENT_PROTOCOL,
+            "backend": "ok",                 # 后端自身存活
+            "agent": agent_health,           # agent 的 /health 原始返回
+            "agent_url": settings.privacy_agent_url,  # 当前连接的 agent 地址
+            "latency_ms": round(duration_ms, 2),      # 探测耗时（保留两位小数）
+            "via": BACKEND_VIA,              # 后端标识：python-rest
+            "protocol": AGENT_PROTOCOL,      # 通信协议：REST
         }
     except HTTPException as exc:
+        # agent 不可达（client 已把网络错误包装为 502 HTTPException）：
+        # 仍返回 HTTP 200，让前端能读取 agent=="unreachable" 做友好提示。
         return JSONResponse(
-            status_code=200,
+            status_code=200,                 # 刻意返回 200 而非 5xx
             content={
-                "backend": "ok",
-                "agent": "unreachable",
+                "backend": "ok",             # 后端自身仍正常
+                "agent": "unreachable",      # 标记 agent 不可达
                 "agent_url": settings.privacy_agent_url,
-                "error": exc.detail,
+                "error": exc.detail,         # 附带不可达的具体原因
                 "via": BACKEND_VIA,
                 "protocol": AGENT_PROTOCOL,
             },
@@ -277,18 +288,27 @@ async def proxy(req: ProxyRequest):
     代理透明支持 JSON 与二进制（如 Arrow IPC）载荷；agent 侧的错误
     状态码会被 :class:`HTTPException` 透传给前端。
     """
+    # 统一转为大写，容忍前端传入小写方法名（如 "post"）。
     method = req.method.upper()
+    # 目标 agent 路径，原样透传（如 /v1/privacy/mask）。
     path = req.path
 
+    # 默认无二进制载荷（走 JSON 或无请求体分支）。
     raw_content: Optional[bytes] = None
     if req.raw_payload_b64:
+        # 携带二进制载荷（如 Arrow IPC）：先做 base64 解码。
         try:
             raw_content = base64.b64decode(req.raw_payload_b64)
         except Exception as exc:
+            # 解码失败属于客户端错误，返回 400 并说明原因。
             raise HTTPException(status_code=400, detail=f"Invalid base64 payload: {exc}") from exc
 
+    # 记录起始时刻用于统计转发耗时。
     start = time.perf_counter()
     try:
+        # 经代理客户端转发到 agent；client 内部自动区分
+        # 二进制（raw_content）/ JSON（body）/ 无请求体三种形态，
+        # 并按响应 Content-Type 解析为 JSON 友好结构。
         result = await agent_client.request(
             method=method,
             path=path,
@@ -297,10 +317,13 @@ async def proxy(req: ProxyRequest):
             content_type=req.content_type,
         )
     except HTTPException as exc:
-        # Re-raise as HTTPException so FastAPI returns the right status/detail.
+        # client 已把网络错误（502）与 agent 非 2xx（透传状态码）
+        # 包装为 HTTPException，这里直接重新抛出交给统一异常处理器。
         raise
+    # 计算转发耗时（秒 → 毫秒）。
     duration_ms = (time.perf_counter() - start) * 1000
 
+    # 包装为统一的 ProxyResponse（自动携带 via/protocol 默认值）。
     return ProxyResponse(status=200, duration_ms=round(duration_ms, 2), data=result)
 
 
@@ -311,13 +334,20 @@ async def batch(req: BatchRequest):
     用于前端“一键批量测试”：逐个转发请求并汇总成功 / 失败统计，
     单个请求失败不会中断整个批次。
     """
+    # 收集每个子请求的执行结果。
     results: List[BatchResultItem] = []
+    # 顺序逐个转发（非并发），避免给 agent 造成瞬时压力。
     for item in req.requests:
+        # 统一方法名为大写。
         method = item.method.upper()
+        # 记录该子请求的起始时刻。
         start = time.perf_counter()
         try:
+            # 转发 JSON 请求到 agent。
             data = await agent_client.request(method=method, path=item.path, body=item.body)
+            # 计算该子请求耗时。
             duration_ms = (time.perf_counter() - start) * 1000
+            # 成功：记录 200 与返回数据。
             results.append(
                 BatchResultItem(
                     method=method,
@@ -328,6 +358,8 @@ async def batch(req: BatchRequest):
                 )
             )
         except HTTPException as exc:
+            # agent 返回非 2xx 或网络错误：透传状态码与 detail，
+            # 单个失败不中断整个批次。
             duration_ms = (time.perf_counter() - start) * 1000
             results.append(
                 BatchResultItem(
@@ -339,6 +371,7 @@ async def batch(req: BatchRequest):
                 )
             )
         except Exception as exc:  # noqa: BLE001 - 批量执行需吸收单个请求的任何异常
+            # 其他未预期异常：记为 500，同样不中断批次。
             duration_ms = (time.perf_counter() - start) * 1000
             results.append(
                 BatchResultItem(
@@ -350,7 +383,9 @@ async def batch(req: BatchRequest):
                 )
             )
 
+    # 统计状态码落在 2xx 区间的子请求数为 passed。
     passed = sum(1 for r in results if 200 <= r.status < 300)
+    # 汇总为 BatchResponse（total == passed + failed 恒成立）。
     return BatchResponse(total=len(results), passed=passed, failed=len(results) - passed, results=results)
 
 
@@ -367,16 +402,25 @@ async def upload(
     的 ``{operation, rows_in, rows_out, result}`` 包装为 :class:`ProxyResponse`。
     具体的文件解析与隐私算法均由 agent 负责，后端仅做转发与包装。
     """
+    # 一次性读出上传文件的全部字节。
     content = await file.read()
+    # 构造 httpx 的 files 映射：(文件名, 内容, Content-Type)，
+    # 文件名缺失时兑底为 upload.bin，类型缺失时兑底为通用二进制流。
     files = {"file": (file.filename or "upload.bin", content, file.content_type or "application/octet-stream")}
+    # 随附的表单字段：操作类型与参数 JSON 字符串。
     data = {"operation": operation, "params": params}
 
+    # 记录起始时刻用于统计转发耗时。
     start = time.perf_counter()
+    # 以 multipart/form-data 透传到 agent 的 process_file 端点；
+    # 文件解析与隐私算法均由 agent 负责，后端仅转发。
     result = await agent_client.request_multipart(
         "/v1/privacy/process_file", files=files, data=data
     )
+    # 计算转发耗时（秒 → 毫秒）。
     duration_ms = (time.perf_counter() - start) * 1000
 
+    # 包装为统一的 ProxyResponse（自动携带 via/protocol）。
     return ProxyResponse(status=200, duration_ms=round(duration_ms, 2), data=result)
 
 
@@ -392,20 +436,26 @@ def _lb_pick_backends(strategy: str, n: int, num_backends: int) -> List[int]:
     - ``least_connections``：每次选当前累计命中最少的节点（同数取下标小者），
       效果上亦趋于均匀。
     """
+    # 无可用后端时返回空序列（上层会报 400）。
     if num_backends <= 0:
         return []
     if strategy == "round_robin":
+        # 轮询：下标依次取模，分发最均匀（0,1,...,n-1,0,1,...）。
         return [i % num_backends for i in range(n)]
     if strategy == "random":
+        # 随机：每个请求独立随机选一个节点。
         return [random.randrange(num_backends) for _ in range(n)]
     if strategy == "least_connections":
-        counts = [0] * num_backends
-        seq: List[int] = []
+        # 最少连接：每次选当前累计命中最少的节点。
+        counts = [0] * num_backends          # 各节点当前累计命中数
+        seq: List[int] = []                  # 生成的下标序列
         for _ in range(n):
+            # 选 (命中数, 下标) 最小者，同数取下标小者，保证确定性。
             idx = min(range(num_backends), key=lambda i: (counts[i], i))
-            counts[idx] += 1
+            counts[idx] += 1                 # 更新该节点的累计命中数
             seq.append(idx)
         return seq
+    # 未知策略：返回 400 并提示可选值。
     raise HTTPException(
         status_code=400,
         detail=f"不支持的策略 '{strategy}'，可选: {list(_LB_STRATEGIES)}",
@@ -422,50 +472,69 @@ async def _run_lb_test(
     伪造后端），生产环境为 ``None`` 即走真实网络。
     """
     backends = req.backends
+    # backends 为空属于参数错误，返回 400。
     if not backends:
         raise HTTPException(status_code=400, detail="backends 不能为空")
 
+    # 按策略生成 num_requests 个探测请求对应的后端下标序列。
     seq = _lb_pick_backends(req.strategy, req.num_requests, len(backends))
+    # 以下标为键，分别记录各节点的延迟样本 / 成功数 / 失败数。
     latencies: Dict[int, List[float]] = {i: [] for i in range(len(backends))}
     success: Dict[int, int] = {i: 0 for i in range(len(backends))}
     failed: Dict[int, int] = {i: 0 for i in range(len(backends))}
 
+    # 探测路径兑底为 /health。
     probe_path = req.probe_path or "/health"
 
     async def probe(idx: int) -> None:
+        """对指定下标的节点发一次探测请求并记录统计。"""
         backend = backends[idx]
+        # 拼接完整探测 URL（去掉基地址尾部斜杠避免双斜杠）。
         url = backend.url.rstrip("/") + probe_path
+        # 记录该次探测的起始时刻。
         start = time.perf_counter()
-        ok = False
+        ok = False                            # 默认失败，成功后置 True
         try:
             if req.probe_body is not None:
+                # 提供了探测体：用 POST 发送 JSON。
                 resp = await lb_client.post(url, json=req.probe_body)
             else:
+                # 未提供探测体：用 GET。
                 resp = await lb_client.get(url)
+            # 状态码 < 400 视为成功。
             ok = resp.status_code < 400
         except httpx.HTTPError:
+            # 网络异常（连不上 / 超时等）计为失败。
             ok = False
+        # 记录该次探测耗时（毫秒）到对应节点的延迟样本。
         latencies[idx].append((time.perf_counter() - start) * 1000)
+        # 按结果累加成功 / 失败计数。
         if ok:
             success[idx] += 1
         else:
             failed[idx] += 1
 
+    # 记录整体起始时刻（用于统计总耗时）。
     overall_start = time.perf_counter()
+    # 创建临时 httpx 客户端：transport 可注入（测试用 MockTransport），
+    # trust_env=False 保证直连、不走系统代理。
     async with httpx.AsyncClient(
         transport=transport, timeout=10.0, trust_env=False
     ) as lb_client:
+        # 并发发出所有探测请求（按 seq 中的下标）。
         await asyncio.gather(*(probe(i) for i in seq))
+    # 计算整体耗时（毫秒）。
     total_ms = (time.perf_counter() - overall_start) * 1000
 
+    # 汇总各节点的统计为 distribution（保持 backends 顺序）。
     distribution: List[LbDistItem] = []
-    total_success = 0
-    total_failed = 0
+    total_success = 0                         # 全局成功总数
+    total_failed = 0                          # 全局失败总数
     for i, backend in enumerate(backends):
-        lats = latencies[i]
-        count = len(lats)
-        total_success += success[i]
-        total_failed += failed[i]
+        lats = latencies[i]                   # 该节点的延迟样本列表
+        count = len(lats)                     # 该节点被命中的次数
+        total_success += success[i]           # 累加全局成功数
+        total_failed += failed[i]             # 累加全局失败数
         distribution.append(
             LbDistItem(
                 name=backend.name,
@@ -473,12 +542,15 @@ async def _run_lb_test(
                 count=count,
                 success=success[i],
                 failed=failed[i],
+                # 平均延迟：总延迟 / 次数；未命中时为 0。
                 avg_latency_ms=round(sum(lats) / count, 2) if count else 0.0,
+                # 最小 / 最大延迟：无样本时为 0。
                 min_latency_ms=round(min(lats), 2) if lats else 0.0,
                 max_latency_ms=round(max(lats), 2) if lats else 0.0,
             )
         )
 
+    # 汇总为最终的 LbTestResponse。
     return LbTestResponse(
         strategy=req.strategy,
         total=req.num_requests,
@@ -520,12 +592,17 @@ if static_dir.exists() and static_dir.is_dir():
         否则重新构建前端后浏览器仍会加载旧版本。
         带哈希的 /assets/* 资源则由浏览器正常缓存（内容变则 URL 变）。
         """
+        # index.html 的绝对路径。
         index_file = static_dir / "index.html"
         if index_file.exists():
+            # 返回 index.html 并禁用缓存（no-cache）：
+            # index.html 不带内容哈希，若被缓存会导致重新构建后
+            # 浏览器仍加载旧版本；带哈希的 /assets/* 则正常缓存。
             return FileResponse(
                 str(index_file),
                 headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
             )
+        # index.html 不存在（前端未构建）：返回 404。
         raise HTTPException(status_code=404, detail="Frontend not built")
 
 

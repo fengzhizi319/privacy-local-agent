@@ -41,6 +41,13 @@ pytest tests -v
 - `app/fixtures/samples.py` - 所有端点的示例数据
 - `smoke_test.py` - 自动化冒烟测试
 
+## 文档
+
+- `docs/design.md` - 架构与设计决策（选型、转发机制、SPA 托管、后端身份标识）
+- `docs/api.md` - 全部 HTTP 端点的请求 / 响应说明与 cURL 示例
+- `docs/test.md` - 测试策略、单元 / 冒烟测试与调试技巧
+- `docs/ops.md` - 运维手册（开发 / 生产模式区别、配置、跨域 CORS 解决方案、启停与排障）
+
 ## 烟雾测试
 
 ```bash
