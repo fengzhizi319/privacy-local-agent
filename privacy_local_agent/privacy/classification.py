@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
@@ -66,6 +67,41 @@ logger = get_logger(__name__)
 
 _PRIMITIVE_VERSION = "1.0.0"
 _RULE_ENGINE_VERSION = "1.0.0"
+
+# base64 data URI 前缀正则：匹配 data:image/png;base64, 等格式
+_DATA_URI_RE = re.compile(r"^data:image/[a-zA-Z]+;base64,", re.ASCII)
+
+
+def _summarize_field_value(value: Any) -> Optional[str]:
+    """将字段值转换为适合返回给前端的摘要字符串。
+
+    对于图片类 base64 数据（data URI 或超长纯 base64），不返回原始内容，
+    仅返回形如 ``[image data, ~123 KB]`` 的摘要，避免响应体过大、
+    前端显示冗长。
+
+    Args:
+        value: 原始字段值。
+
+    Returns:
+        摘要字符串，或 None（值为 None 时）。
+    """
+    if value is None:
+        return None
+    text = str(value)
+    # 1. data:image/xxx;base64,... 格式
+    m = _DATA_URI_RE.match(text)
+    if m:
+        raw_len = len(text) - m.end()
+        kb = max(1, round(raw_len * 3 / 4 / 1024))  # base64 → 近似原始字节
+        return f"[image data, ~{kb} KB]"
+    # 2. 纯 base64 且长度超过 512 字符：极可能是图片或其他二进制数据
+    if len(text) > 512 and not text.startswith("http") and not text.startswith("/"):
+        # 简单检测是否为合法 base64 字符集
+        sample = text[:128]
+        if all(c in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=\n\r" for c in sample):
+            kb = max(1, round(len(text) * 3 / 4 / 1024))
+            return f"[binary data, ~{kb} KB]"
+    return text
 
 __all__ = [
     "ClassificationAPI",
@@ -435,7 +471,7 @@ class ClassificationAPI:
 
         return FieldClassificationResult(
             field_name=field_name,
-            field_value=str(value) if value is not None and cp.return_field_values else None,
+            field_value=_summarize_field_value(value) if cp.return_field_values else None,
             tags=tags,
             final_level=final_level,
             confidence=confidence,

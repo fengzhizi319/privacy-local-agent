@@ -17,7 +17,9 @@ import base64
 import json
 import os
 import re
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from io import BytesIO
 from typing import Any, Dict, Optional
 
@@ -45,6 +47,10 @@ class Qwen2VLClassifier(LlmClassifier):
     Base64-encoded images, and plain text inputs.
     """
 
+    # VLM 推理超时（秒）：Qwen2-VL-2B 在 CPU 上单张图片推理可能需要 60-120 秒，
+    # 超时后放弃本次推理并返回 None 触发降级，避免无限阻塞 gRPC 工作线程。
+    _INFERENCE_TIMEOUT = int(os.environ.get("PRIVACY_VLM_TIMEOUT", "180"))
+
     def __init__(self, model_path: Optional[str] = None):
         """初始化分类器 / Initialize Classifier.
 
@@ -63,69 +69,88 @@ class Qwen2VLClassifier(LlmClassifier):
         self._processor = None
         self._initialized = False
         self._init_error = None
+        # 线程锁：gRPC 使用线程池处理请求，多个工作线程可能并发调用
+        # _lazy_init / classify，需要互斥保护以防止：
+        #   1. 多线程同时初始化模型导致重复加载或竞态
+        #   2. 多线程同时推理导致显存/内存争用引发 OOM 崩溃
+        self._lock = threading.Lock()
+        # 专用推理线程池：将模型推理隔离到单独线程，配合超时机制，
+        # 即使推理卡死也不会永久阻塞 gRPC 工作线程。
+        self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="vlm-infer")
 
     def _lazy_init(self):
         """延迟初始化模型 / Lazy-Initialize Model.
 
         中文说明：避免导入时或非 LLM 运行时占用显存或因缺少依赖报错。
+        使用双重检查锁定（double-checked locking）确保线程安全：
+        仅首次调用时加锁初始化，后续调用直接返回，避免锁竞争开销。
+
         English Description: Avoids occupying GPU memory at import time or when LLM
         is not needed, and prevents errors from missing dependencies.
+        Uses double-checked locking for thread safety.
 
         Raises:
             FileNotFoundError: 本地模型目录不存在 / Local model directory not found.
         """
+        # 快速路径：已初始化或已记录错误时无需加锁
         if self._initialized:
             return
-
         if self._init_error:
             raise self._init_error
 
-        try:
-            import torch
-            from transformers import AutoProcessor, Qwen2VLForConditionalGeneration
+        with self._lock:
+            # 双重检查：另一个线程可能已在等锁期间完成初始化
+            if self._initialized:
+                return
+            if self._init_error:
+                raise self._init_error
 
-            if not os.path.exists(self.model_path) or not os.path.isdir(self.model_path):
-                raise FileNotFoundError(
-                    f"本地模型未找到，请先运行下载脚本或下载模型至: {self.model_path}"
+            try:
+                import torch
+                from transformers import AutoProcessor, Qwen2VLForConditionalGeneration
+
+                if not os.path.exists(self.model_path) or not os.path.isdir(self.model_path):
+                    raise FileNotFoundError(
+                        f"本地模型未找到，请先运行下载脚本或下载模型至: {self.model_path}"
+                    )
+
+                # 检测设备，优先使用 GPU CUDA，其次为 macOS ARM 的 MPS 硬件加速，最后为 CPU
+                if torch.cuda.is_available():
+                    device = "cuda"
+                elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+                    device = "mps"
+                else:
+                    device = "cpu"
+
+                logger.info(
+                    "qwen2vl_model_loading",
+                    extra={"model_path": self.model_path, "device": device},
                 )
 
-            # 检测设备，优先使用 GPU CUDA，其次为 macOS ARM 的 MPS 硬件加速，最后为 CPU
-            if torch.cuda.is_available():
-                device = "cuda"
-            elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
-                device = "mps"
-            else:
-                device = "cpu"
+                torch_dtype = torch.float16 if device == "cuda" else torch.float32
 
-            logger.info(
-                "qwen2vl_model_loading",
-                extra={"model_path": self.model_path, "device": device},
-            )
+                self._model = Qwen2VLForConditionalGeneration.from_pretrained(
+                    self.model_path,
+                    torch_dtype=torch_dtype,
+                    device_map="auto" if device in ("cuda", "mps") else None,
+                )
+                if device in ("cpu", "mps"):
+                    self._model = self._model.to(device)
 
-            torch_dtype = torch.float16 if device == "cuda" else torch.float32
+                self._processor = AutoProcessor.from_pretrained(self.model_path)
+                self._initialized = True
+                logger.info(
+                    "qwen2vl_model_initialized",
+                    extra={"model_path": self.model_path, "device": device, "engine": "qwen2vl"},
+                )
 
-            self._model = Qwen2VLForConditionalGeneration.from_pretrained(
-                self.model_path,
-                torch_dtype=torch_dtype,
-                device_map="auto" if device in ("cuda", "mps") else None,
-            )
-            if device in ("cpu", "mps"):
-                self._model = self._model.to(device)
-
-            self._processor = AutoProcessor.from_pretrained(self.model_path)
-            self._initialized = True
-            logger.info(
-                "qwen2vl_model_initialized",
-                extra={"model_path": self.model_path, "device": device, "engine": "qwen2vl"},
-            )
-
-        except Exception as e:
-            self._init_error = e
-            logger.warning(
-                "qwen2vl_model_init_failed",
-                extra={"error": str(e), "model_path": self.model_path},
-            )
-            raise e
+            except Exception as e:
+                self._init_error = e
+                logger.warning(
+                    "qwen2vl_model_init_failed",
+                    extra={"error": str(e), "model_path": self.model_path},
+                )
+                raise e
 
     @property
     def is_ready(self) -> bool:
@@ -223,11 +248,13 @@ class Qwen2VLClassifier(LlmClassifier):
         执行步骤 / Execution Steps:
         1. 延迟初始化模型（若尚未加载）。
            (Lazy-initialize model if not yet loaded)
-        2. 检测并加载多模态图像输入。
+        2. 将实际推理提交到专用线程池并设置超时，防止推理卡死阻塞 gRPC 线程。
+           (Submit inference to a dedicated thread pool with timeout)
+        3. 检测并加载多模态图像输入。
            (Detect and load multimodal image input)
-        3. 构建 system/user prompt 并调用模型生成。
+        4. 构建 system/user prompt 并调用模型生成。
            (Build system/user prompt and invoke model generation)
-        4. 解析生成文本中的 JSON 结构。
+        5. 解析生成文本中的 JSON 结构。
            (Parse JSON structure from generated text)
 
         Args:
@@ -245,6 +272,72 @@ class Qwen2VLClassifier(LlmClassifier):
             return None  # 初始化失败，直接返回 None，自动触发底层降级逻辑
 
         start_time = time.monotonic()
+        try:
+            # 将实际推理提交到专用线程池，设置超时保护。
+            # 如果推理超时（如模型卡死），放弃本次推理并返回 None 触发降级，
+            # 避免永久阻塞 gRPC 工作线程导致后续所有请求排队失败。
+            future = self._executor.submit(
+                self._do_classify, text, upstream_level, upstream_confidence
+            )
+            result = future.result(timeout=self._INFERENCE_TIMEOUT)
+
+            duration = time.monotonic() - start_time
+            CLASSIFICATION_LLM_DURATION.labels(engine="qwen2vl").observe(duration)
+            logger.debug(
+                "llm_classify_completed",
+                extra={
+                    "duration_s": round(duration, 4),
+                    "has_result": result is not None,
+                },
+            )
+            return result
+
+        except FuturesTimeoutError:
+            duration = time.monotonic() - start_time
+            CLASSIFICATION_LLM_TOTAL.labels(status="timeout").inc()
+            CLASSIFICATION_LLM_DURATION.labels(engine="qwen2vl").observe(duration)
+            logger.error(
+                "llm_classify_timeout",
+                extra={
+                    "timeout_s": self._INFERENCE_TIMEOUT,
+                    "duration_s": round(duration, 4),
+                },
+            )
+            return None
+
+        except Exception as e:
+            duration = time.monotonic() - start_time
+            CLASSIFICATION_LLM_TOTAL.labels(status="error").inc()
+            CLASSIFICATION_LLM_DURATION.labels(engine="qwen2vl").observe(duration)
+            logger.error(
+                "llm_classify_error",
+                extra={"error": str(e), "duration_s": round(duration, 4)},
+            )
+            return None
+
+    def _do_classify(
+        self, text: str, upstream_level: SensitivityLevel, upstream_confidence: float
+    ) -> Optional[Dict[str, Any]]:
+        """实际执行模型推理的内部方法（在专用线程中运行）。
+
+        使用 self._lock 保护推理过程，确保同一时刻只有一个线程在执行
+        模型推理，避免多线程并发推理导致显存/内存争用引发 OOM 崩溃。
+
+        Args:
+            text: 待分类文本或图片路径。
+            upstream_level: 上游敏感度等级。
+            upstream_confidence: 上游置信度。
+
+        Returns:
+            分类结果字典或 None。
+        """
+        with self._lock:
+            return self._classify_inner(text, upstream_level, upstream_confidence)
+
+    def _classify_inner(
+        self, text: str, upstream_level: SensitivityLevel, upstream_confidence: float
+    ) -> Optional[Dict[str, Any]]:
+        """模型推理核心逻辑（已持有锁）。"""
         try:
             # 检测并加载多模态图像输入
             image = self._detect_image(text)
@@ -321,26 +414,14 @@ class Qwen2VLClassifier(LlmClassifier):
             # 从生成文本中提取 JSON 结构
             result = self._parse_json_result(output_text, upstream_level, upstream_confidence)
 
-            duration = time.monotonic() - start_time
             CLASSIFICATION_LLM_TOTAL.labels(status="success").inc()
-            CLASSIFICATION_LLM_DURATION.labels(engine="qwen2vl").observe(duration)
-            logger.debug(
-                "llm_classify_completed",
-                extra={
-                    "duration_s": round(duration, 4),
-                    "has_result": result is not None,
-                    "is_image": image is not None,
-                },
-            )
             return result
 
         except Exception as e:
-            duration = time.monotonic() - start_time
             CLASSIFICATION_LLM_TOTAL.labels(status="error").inc()
-            CLASSIFICATION_LLM_DURATION.labels(engine="qwen2vl").observe(duration)
             logger.error(
-                "llm_classify_error",
-                extra={"error": str(e), "duration_s": round(duration, 4)},
+                "llm_classify_inner_error",
+                extra={"error": str(e)},
             )
             return None
 

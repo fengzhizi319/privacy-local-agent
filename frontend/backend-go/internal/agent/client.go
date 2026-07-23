@@ -22,6 +22,8 @@ import (
 	"fmt"
 	// os：用于读取证书/私钥/CA 文件内容
 	"os"
+	// time：用于 keepalive 心跳间隔与超时配置
+	"time"
 
 	// grpc：gRPC 核心库，提供客户端连接与调用能力
 	"google.golang.org/grpc"
@@ -29,6 +31,8 @@ import (
 	"google.golang.org/grpc/credentials"
 	// insecure：非安全传输凭证，用于本地开发环境（无 TLS）
 	"google.golang.org/grpc/credentials/insecure"
+	// keepalive：gRPC 连接保活配置，定期发送心跳检测连接健康状态
+	"google.golang.org/grpc/keepalive"
 	// metadata：用于在 gRPC 调用中附加自定义元数据（如 authorization header）
 	"google.golang.org/grpc/metadata"
 
@@ -77,10 +81,21 @@ func New(cfg *config.Config) (*Client, error) {
 		target,
 		// 使用构造好的传输凭证：非安全或 TLS/mTLS
 		grpc.WithTransportCredentials(creds),
-		// 设置单次 RPC 调用最大接收消息大小为 64 MiB（64 * 2^20 字节）。
-		// 默认值为 4 MiB，大表分类或批量脱敏场景可能超出默认限制，
-		// 64<<20 使用位运算表示 64 MiB，兼顾可读性与性能。
-		grpc.WithDefaultCallOptions(grpc.MaxCallRecvMsgSize(64<<20)),
+		// 设置单次 RPC 调用最大接收与发送消息大小为 64 MiB（64 * 2^20 字节）。
+		// 默认值为 4 MiB，base64 编码的图片或大表分类场景可能超出默认限制，
+		// 导致服务端重置 HTTP/2 连接（表现为 connection reset by peer）。
+		grpc.WithDefaultCallOptions(
+			grpc.MaxCallRecvMsgSize(64<<20),
+			grpc.MaxCallSendMsgSize(64<<20),
+		),
+		// 配置连接保活策略：定期发送 HTTP/2 PING 帧检测连接健康状态。
+		// 当 Python agent 因 VLM 推理 OOM 等原因崩溃后，keepalive 能在
+		// 数秒内检测到连接断开并触发重连，避免后续请求持续失败。
+		grpc.WithKeepaliveParams(keepalive.ClientParameters{
+			Time:                10 * time.Second, // 每 10 秒发送一次心跳
+			Timeout:             5 * time.Second,  // 心跳超时 5 秒后判定连接断开
+			PermitWithoutStream: true,             // 无活跃 RPC 时也发送心跳
+		}),
 	)
 	if err != nil {
 		// 连接创建失败时返回包装后的错误，包含目标地址便于排查

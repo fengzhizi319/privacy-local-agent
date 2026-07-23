@@ -54,6 +54,47 @@ function highlightJson(json: string): ReactNode[] {
   return nodes;
 }
 
+/**
+ * 截断响应中超长的 base64 / data URI 字符串，避免图片编码内容擑满屏幕。
+ *
+ * 规则：
+ *   - 以 data:image/ 开头的 data URI → 替换为 "[image data, ~N KB]"
+ *   - 纯 base64 且长度 > 200 → 替换为 "[base64 data, ~N KB]"
+ *   - 其他超长字符串（> 500）→ 截断前 80 字符 + "…(N chars)"
+ */
+function truncateLongStrings(obj: unknown): unknown {
+  if (typeof obj === 'string') {
+    // data URI 图片
+    const dataUriMatch = obj.match(/^data:image\/[a-zA-Z]+;base64,/);
+    if (dataUriMatch) {
+      const rawLen = obj.length - dataUriMatch[0].length;
+      const kb = Math.max(1, Math.round((rawLen * 3) / 4 / 1024));
+      return `[image data, ~${kb} KB]`;
+    }
+    // 纯 base64（超过 200 字符且字符集合法）
+    if (obj.length > 200 && /^[A-Za-z0-9+/=\s]+$/.test(obj.slice(0, 128))) {
+      const kb = Math.max(1, Math.round((obj.length * 3) / 4 / 1024));
+      return `[base64 data, ~${kb} KB]`;
+    }
+    // 其他超长字符串
+    if (obj.length > 500) {
+      return obj.slice(0, 80) + `…(${obj.length} chars)`;
+    }
+    return obj;
+  }
+  if (Array.isArray(obj)) {
+    return obj.map(truncateLongStrings);
+  }
+  if (obj !== null && typeof obj === 'object') {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(obj)) {
+      out[k] = truncateLongStrings(v);
+    }
+    return out;
+  }
+  return obj;
+}
+
 /** 复制到剪贴板按钮，复制成功后短暂显示对勾。 */
 function CopyButton({ text }: { text: string }) {
   const [copied, setCopied] = useState(false);
@@ -133,8 +174,9 @@ export default function ResponsePanel({ response, error, duration, path = 'respo
     );
   }
 
-  // 成功状态
-  const jsonText = JSON.stringify(response?.data, null, 2);
+  // 成功状态：对响应 data 中的超长 base64 / data URI 字符串做截断处理，
+  // 避免图片编码内容擑满屏幕，仅展示分级结果等有效信息。
+  const jsonText = JSON.stringify(truncateLongStrings(response?.data), null, 2);
   // 后端身份标识：via 为处理请求的控制台后端，protocol 为其与 agent 的通信协议。
   // 切换 Python REST / Go gRPC 后，该徽章随之变化，可直观验证切换生效。
   const via = response?.via;

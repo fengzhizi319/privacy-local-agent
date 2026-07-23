@@ -41,6 +41,8 @@ class TestObfuscateQuery:
         # 执行混淆：3 条 Dummy + 1 条真实查询 = 4 条结果
         # seed=42 保证可复现性（相同 seed + 相同输入 = 相同输出）
         result = obfuscate_query("真实查询", num_dummies=3, domain="medical", seed=42)
+        # 打印result
+        print(result)
         # 真实查询必须存在于混淆列表中（否则调用方无法找回原始查询）
         assert "真实查询" in result
         # 总长度 = 3 条 Dummy + 1 条真实查询 = 4
@@ -50,6 +52,8 @@ class TestObfuscateQuery:
         """验证 generic 领域使用通用词库，结果长度正确。"""
         # 使用 generic 领域，应从 GENERIC_DUMMY 词库中抽取 Dummy
         result = obfuscate_query("真实查询", num_dummies=2, domain="generic", seed=42)
+        # 打印result
+        print(result)
         # 真实查询必须存在
         assert "真实查询" in result
         # 总长度 = 2 条 Dummy + 1 条真实查询 = 3
@@ -62,6 +66,8 @@ class TestObfuscateQuery:
         result = obfuscate_query(
             "真实查询", num_dummies=2, domain="medical", medical_pool=custom, seed=42
         )
+        # 打印result
+        print(result)
         # 真实查询必须存在
         assert "真实查询" in result
         # 验证所有非真实查询均必须来自自定义池（而非内置 MEDICAL_DUMMY）

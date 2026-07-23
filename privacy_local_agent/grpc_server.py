@@ -424,9 +424,17 @@ def serve(port: int = 50051, max_workers: int = 10, wait_for_termination: bool =
     if settings.rate_limit_enabled:
         interceptors.append(RateLimitInterceptor(settings))
 
+    # 设置 gRPC 消息大小限制：默认仅 4 MiB，base64 编码的图片或大表分类
+    # 场景极易超限导致服务端重置 HTTP/2 连接（表现为 connection reset by peer）。
+    # 将收发上限均提升至 64 MiB，与 Go 客户端保持一致。
+    _MAX_MSG_SIZE = 64 * 1024 * 1024  # 64 MiB
     server = grpc.server(
         futures.ThreadPoolExecutor(max_workers=max_workers),
         interceptors=tuple(interceptors) if interceptors else None,
+        options=[
+            ("grpc.max_receive_message_length", _MAX_MSG_SIZE),
+            ("grpc.max_send_message_length", _MAX_MSG_SIZE),
+        ],
     )
     privacy_pb2_grpc.add_PrivacyServiceServicer_to_server(PrivacyServicer(), server)
 
