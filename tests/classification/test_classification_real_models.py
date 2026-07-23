@@ -88,7 +88,7 @@ def _image_data_uri(filename: str) -> Optional[str]:
 @pytest.fixture(scope="module")
 def qwen_classifier():
     """真实加载 Qwen2-VL 分类器（不降级）。"""
-    from privacy_local_agent.privacy.classification_llm import Qwen2VLClassifier
+    from privacy_local_agent.privacy.classification.classification_llm import Qwen2VLClassifier
 
     clf = Qwen2VLClassifier()
     if not clf.warmup():
@@ -101,10 +101,10 @@ def qwen_classifier():
 def ner_engine():
     """按 ClassificationAPI 相同策略选择真实 NER 引擎（ONNX 优先，否则 ModelScope）。"""
     if NER_ONNX.exists():
-        from privacy_local_agent.privacy.classification_ner import ONNXSmallNerEngine
+        from privacy_local_agent.privacy.classification.classification_ner import ONNXSmallNerEngine
 
         return ONNXSmallNerEngine()
-    from privacy_local_agent.privacy.classification_ner import ModelScopeSmallNerEngine
+    from privacy_local_agent.privacy.classification.classification_ner import ModelScopeSmallNerEngine
 
     return ModelScopeSmallNerEngine()
 
@@ -134,7 +134,7 @@ def test_ner_real_extraction(ner_engine):
 def test_ner_real_sensitive_disease_escalation(ner_engine):
     """NER 抽取敏感疾病实体，经漏斗应升级至 L4。"""
     from privacy_local_agent.privacy.classification import ClassificationAPI
-    from privacy_local_agent.privacy.classification_models import SensitivityLevel
+    from privacy_local_agent.privacy.classification.classification_models import SensitivityLevel
 
     api = ClassificationAPI(small_ner=ner_engine)
     tags = api._run_small_ner("diagnosis", "患者确诊精神分裂症，长期服用抗精神病药物。")
@@ -153,7 +153,7 @@ def test_ner_real_sensitive_disease_escalation(ner_engine):
 @pytest.mark.skipif(not (HAS_ML and HAS_LLM_MODEL), reason=_SKIP_LLM)
 def test_llm_real_classify_text(qwen_classifier):
     """Qwen2-VL 真实加载并对含 PII 的文本定级，不降级为 None。"""
-    from privacy_local_agent.privacy.classification_models import SensitivityLevel
+    from privacy_local_agent.privacy.classification.classification_models import SensitivityLevel
 
     text = "患者身份证号 110101199003072316，手机号 13800138000，诊断高血压，门诊病历记录。"
     res = qwen_classifier.classify(text, SensitivityLevel.L1, 0.1)
@@ -180,7 +180,7 @@ def test_llm_real_classify_text(qwen_classifier):
 )
 def test_llm_real_classify_image(qwen_classifier, filename, expected_levels):
     """Qwen2-VL 对前端输入的图片病例进行 OCR + 定级（多模态不降级）。"""
-    from privacy_local_agent.privacy.classification_models import SensitivityLevel
+    from privacy_local_agent.privacy.classification.classification_models import SensitivityLevel
 
     data_uri = _image_data_uri(filename)
     if data_uri is None:
@@ -209,7 +209,7 @@ def test_classification_api_image_funnel_not_degraded(qwen_classifier):
     构造不触发模型加载）以验证自动选择逻辑未降级为 NoOp。
     """
     from privacy_local_agent.privacy.classification import ClassificationAPI
-    from privacy_local_agent.privacy.classification_models import EngineLayer
+    from privacy_local_agent.privacy.classification.classification_models import EngineLayer
 
     # 1. 验证自动选择逻辑：构造（不触发模型加载）即应选中真实 Qwen2VLClassifier
     auto_api = ClassificationAPI()

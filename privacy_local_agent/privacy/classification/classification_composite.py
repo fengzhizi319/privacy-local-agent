@@ -15,8 +15,8 @@ from __future__ import annotations
 import re
 from typing import Any, Dict, List, Optional
 
-from ..observability.logging_config import get_logger
-from ..observability.metrics import CLASSIFICATION_COMPOSITE_HITS_TOTAL
+from ...observability.logging_config import get_logger
+from ...observability.metrics import CLASSIFICATION_COMPOSITE_HITS_TOTAL
 from .classification_models import (
     CompositeRule,
     FieldClassificationResult,

@@ -33,10 +33,10 @@ function splitCols(text: string): string[] {
 const MAX_PREVIEW_ROWS = 50;
 
 /** 客户端上传大小上限（与后端 CONSOLE_MAX_UPLOAD_BYTES 默认值保持一致，10MB）。 */
-const MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
+export const MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
 
 /** 支持的文件扩展名。 */
-const ACCEPTED_EXTS = ['.csv', '.json'];
+export const ACCEPTED_EXTS = ['.csv', '.json'];
 
 /**
  * 客户端预校验文件类型与大小，返回错误提示；合法时返回 null。
@@ -44,7 +44,7 @@ const ACCEPTED_EXTS = ['.csv', '.json'];
  * 在上传前提前拦截不合规文件，避免无效的大文件 / 错误格式
  * 消耗网络与后端资源（与后端 413/400 校验互为双保险）。
  */
-function validateFile(f: File): string | null {
+export function validateFile(f: File): string | null {
   const lower = f.name.toLowerCase();
   if (!ACCEPTED_EXTS.some((ext) => lower.endsWith(ext))) {
     return '仅支持 .csv 与 .json 文件';

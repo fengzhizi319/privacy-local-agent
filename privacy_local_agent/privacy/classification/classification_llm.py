@@ -23,8 +23,8 @@ from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeou
 from io import BytesIO
 from typing import Any, Dict, Optional
 
-from ..observability.logging_config import get_logger
-from ..observability.metrics import (
+from ...observability.logging_config import get_logger
+from ...observability.metrics import (
     CLASSIFICATION_LLM_DURATION,
     CLASSIFICATION_LLM_TOTAL,
 )

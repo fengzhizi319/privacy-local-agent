@@ -29,8 +29,8 @@ import time
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
-from ..observability.logging_config import get_logger
-from ..observability.metrics import (
+from ...observability.logging_config import get_logger
+from ...observability.metrics import (
     CLASSIFICATION_DURATION,
     CLASSIFICATION_LLM_TOTAL,
     CLASSIFICATION_NER_TOTAL,
@@ -60,7 +60,7 @@ from .classification_models import (
 )
 from .classification_rule_engine import DefaultRuleEngine, RuleEngine, _unique_tags
 from .classification_utils import classify_secretflow, get_template_params, redact
-from .profile import ParameterResolver, get_resolver
+from ..profile import ParameterResolver, get_resolver
 
 # Module-level structured logger for classification events
 logger = get_logger(__name__)

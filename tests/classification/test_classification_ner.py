@@ -11,7 +11,7 @@ import pytest
 # 模拟 onnxruntime 模块以在无 onnxruntime 依赖环境下支持单元测试执行
 sys.modules["onnxruntime"] = MagicMock()
 
-from privacy_local_agent.privacy.classification_ner import (
+from privacy_local_agent.privacy.classification.classification_ner import (
     ONNXSmallNerEngine,
     SimpleChineseBertTokenizer,
 )
@@ -73,7 +73,7 @@ def test_parse_bio_tags():
     assert entities[0]["confidence"] == 0.98  # 置信度取内部所有 token 最小概率
 
 
-@patch("privacy_local_agent.privacy.classification_ner.ONNXSmallNerEngine._lazy_init")
+@patch("privacy_local_agent.privacy.classification.classification_ner.ONNXSmallNerEngine._lazy_init")
 def test_ner_extract_success(mock_lazy_init):
     """测试成功加载模型时执行 ONNX 推理及标签标准化映射。"""
     engine = ONNXSmallNerEngine()
@@ -112,10 +112,10 @@ def test_ner_fallback_when_uninitialized():
     assert entities == []
 
 
-@patch("privacy_local_agent.privacy.classification_ner.ModelScopeSmallNerEngine._lazy_init")
+@patch("privacy_local_agent.privacy.classification.classification_ner.ModelScopeSmallNerEngine._lazy_init")
 def test_modelscope_ner_extract_success(mock_lazy_init):
     """测试 ModelScope NER 引擎在 pipeline 返回数据时的提取与映射逻辑。"""
-    from privacy_local_agent.privacy.classification_ner import ModelScopeSmallNerEngine
+    from privacy_local_agent.privacy.classification.classification_ner import ModelScopeSmallNerEngine
 
     engine = ModelScopeSmallNerEngine()
 

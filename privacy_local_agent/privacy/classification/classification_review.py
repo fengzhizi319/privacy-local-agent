@@ -22,8 +22,8 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-from ..observability.logging_config import get_logger
-from ..observability.metrics import CLASSIFICATION_REVIEW_QUEUE_SIZE
+from ...observability.logging_config import get_logger
+from ...observability.metrics import CLASSIFICATION_REVIEW_QUEUE_SIZE
 from .classification_models import ReviewEntry, ReviewStatus, SensitivityLevel
 from .classification_utils import hash_value, redact
 

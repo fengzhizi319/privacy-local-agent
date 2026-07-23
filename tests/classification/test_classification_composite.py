@@ -20,7 +20,7 @@ Tests for composite rule engine capabilities:
 import pytest
 
 from privacy_local_agent.privacy.classification import ClassificationAPI
-from privacy_local_agent.privacy.classification_models import SensitivityLevel
+from privacy_local_agent.privacy.classification.classification_models import SensitivityLevel
 
 
 @pytest.fixture

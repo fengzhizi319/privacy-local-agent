@@ -39,4 +39,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 网关/负载均衡: REST + gRPC 反向代理
 - 部署: Dockerfile 多阶段 + Helm Chart + Kustomize + docker-compose
 - Arrow IPC 高效二进制端点
-- 个性化隐私画像 (personalized-profiles.yaml)
+- 个性化隐私画像 (config/personalized-profiles.yaml)

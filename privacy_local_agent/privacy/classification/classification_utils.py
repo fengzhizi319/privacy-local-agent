@@ -19,7 +19,7 @@ import hashlib
 import logging
 from typing import Any, Dict, List, Optional
 
-from ..observability.logging_config import get_logger
+from ...observability.logging_config import get_logger
 
 # Module-level structured logger for classification utils events
 logger = get_logger(__name__)
@@ -259,7 +259,7 @@ def get_template_params(template: Optional[str]) -> Dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-from .data_adapters import to_records
+from ..data_adapters import to_records
 
 
 def classify_secretflow(

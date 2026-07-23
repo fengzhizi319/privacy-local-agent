@@ -18,8 +18,8 @@ import time
 import pytest
 
 from privacy_local_agent.privacy.classification import ClassificationAPI
-from privacy_local_agent.privacy.classification_async import AsyncClassificationManager
-from privacy_local_agent.privacy.classification_models import ClassificationJobStatus
+from privacy_local_agent.privacy.classification.classification_async import AsyncClassificationManager
+from privacy_local_agent.privacy.classification.classification_models import ClassificationJobStatus
 
 
 @pytest.fixture

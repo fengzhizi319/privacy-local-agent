@@ -156,7 +156,7 @@ class ParameterResolver:
 
     参数优先级（从高到低） / Parameter Priority (high to low):
         1. 请求级参数 request_params
-        2. 个性化推荐参数 personalized-profiles.yaml
+        2. 个性化推荐参数 config/personalized-profiles.yaml
         3. YAML profile 中 primitives.<primitive> 的配置
         4. 内置 default_params 默认值
     """
@@ -226,7 +226,7 @@ class ParameterResolver:
 
         # 使用个性化推荐保存的参数进行覆盖（若指定了 namespace）
         if namespace:
-            personalized_path = os.environ.get("PRIVACY_PERSONALIZED_PROFILE", "personalized-profiles.yaml")
+            personalized_path = os.environ.get("PRIVACY_PERSONALIZED_PROFILE", "config/personalized-profiles.yaml")
             if os.path.exists(personalized_path):
                 with _profile_lock:
                     try:
@@ -289,10 +289,10 @@ def save_personalized_params(namespace: str, primitive: str, params: Dict[str, A
     """持久化保存推荐的个性化参数 / Persist Personalized Parameters.
 
     中文说明：
-    将推荐参数写入 personalized-profiles.yaml，按 namespace + primitive 分层存储。
+    将推荐参数写入 config/personalized-profiles.yaml，按 namespace + primitive 分层存储。
 
     English Description:
-    Persists recommended parameters to personalized-profiles.yaml, organized
+    Persists recommended parameters to config/personalized-profiles.yaml, organized
     by namespace and primitive layers.
 
     执行步骤 / Execution Steps:
@@ -313,7 +313,7 @@ def save_personalized_params(namespace: str, primitive: str, params: Dict[str, A
     if not primitive:
         raise ValueError("primitive must not be empty when saving personalized params")
 
-    personalized_path = os.environ.get("PRIVACY_PERSONALIZED_PROFILE", "personalized-profiles.yaml")
+    personalized_path = os.environ.get("PRIVACY_PERSONALIZED_PROFILE", "config/personalized-profiles.yaml")
     with _profile_lock:
         personalized_data: Dict[str, Any] = {}
         if os.path.exists(personalized_path):
@@ -334,6 +334,9 @@ def save_personalized_params(namespace: str, primitive: str, params: Dict[str, A
         personalized_data[namespace][primitive].update(params)
 
         try:
+            dir_name = os.path.dirname(personalized_path)
+            if dir_name:
+                os.makedirs(dir_name, exist_ok=True)
             with open(personalized_path, "w", encoding="utf-8") as f:
                 yaml.safe_dump(personalized_data, f, allow_unicode=True)
             logger.info(

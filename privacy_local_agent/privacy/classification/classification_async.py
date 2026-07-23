@@ -19,8 +19,8 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Callable, Dict, Optional
 
-from ..observability.logging_config import get_logger
-from ..observability.metrics import CLASSIFICATION_JOBS_DURATION, CLASSIFICATION_JOBS_TOTAL
+from ...observability.logging_config import get_logger
+from ...observability.metrics import CLASSIFICATION_JOBS_DURATION, CLASSIFICATION_JOBS_TOTAL
 from .classification_models import ClassificationJob, ClassificationJobResult, ClassificationJobStatus
 
 # Module-level structured logger for async job events

@@ -18,8 +18,8 @@ import time
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional, Tuple
 
-from ..observability.logging_config import get_logger
-from ..observability.metrics import (
+from ...observability.logging_config import get_logger
+from ...observability.metrics import (
     CLASSIFICATION_NER_DURATION,
     CLASSIFICATION_NER_TOTAL,
 )

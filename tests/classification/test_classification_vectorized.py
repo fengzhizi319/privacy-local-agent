@@ -23,9 +23,9 @@ import pandas as pd
 import pytest
 
 from privacy_local_agent.privacy.classification import ClassificationAPI
-from privacy_local_agent.privacy.classification_models import ClassificationParams, SensitivityLevel
-from privacy_local_agent.privacy.classification_rule_engine import DefaultRuleEngine
-from privacy_local_agent.privacy.classification_vectorized import VectorizedRuleEngine
+from privacy_local_agent.privacy.classification.classification_models import ClassificationParams, SensitivityLevel
+from privacy_local_agent.privacy.classification.classification_rule_engine import DefaultRuleEngine
+from privacy_local_agent.privacy.classification.classification_vectorized import VectorizedRuleEngine
 
 
 @pytest.fixture

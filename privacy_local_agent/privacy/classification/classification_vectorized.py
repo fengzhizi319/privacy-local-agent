@@ -19,8 +19,8 @@ import re
 import time
 from typing import Any, Dict, List
 
-from ..observability.logging_config import get_logger
-from ..observability.metrics import (
+from ...observability.logging_config import get_logger
+from ...observability.metrics import (
     CLASSIFICATION_RULE_HITS_TOTAL,
     CLASSIFICATION_VECTORIZED_BATCH_SIZE,
     CLASSIFICATION_VECTORIZED_BATCH_TOTAL,

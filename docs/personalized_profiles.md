@@ -16,14 +16,14 @@
      - `k`：根据表行数 $n$，推荐 $\max(2, \min(10, n \div 10))$，即数据量大时可适当增大 $k$ 以增加隐私保护强度，数据量小时减小以降低信息损失。
      - `max_depth`：默认推荐 `10`。
 3. **参数持久化存储**：
-   - 系统将推荐生成的参数自动保存到项目目录下的 `personalized-profiles.yaml` 文件中。
+   - 系统将推荐生成的参数自动保存到项目目录下的 `config/personalized-profiles.yaml` 文件中。
    - 写入时引入线程锁（Thread Lock），读取已有的 YAML 内容，更新对应 `namespace` 下的原语参数，再写回文件。
 4. **后续自动加载与应用**：
-   - 更新 [ParameterResolver](file:///home/charles/code/sfwork/privacy-local-agent/privacy_local_agent/privacy/profile.py#L83)，使其在合并参数时，增加对 `personalized-profiles.yaml` 的读取。
+   - 更新 [ParameterResolver](file:///home/charles/code/sfwork/privacy-local-agent/privacy_local_agent/privacy/profile.py#L83)，使其在合并参数时，增加对 `config/personalized-profiles.yaml` 的读取。
    - 参数合并优先级（从低到高）：
      1. 系统内置默认值（`default_params`）
      2. 静态全局 profile 配置文件（`privacy-profile.yaml`）
-     3. **个性化推荐保存的参数（`personalized-profiles.yaml` 中对应 `namespace` 的配置）**
+     3. **个性化推荐保存的参数（`config/personalized-profiles.yaml` 中对应 `namespace` 的配置）**
      4. 单次请求携带的 overrides 参数。
 
 ---

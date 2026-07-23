@@ -16,7 +16,7 @@ from unittest.mock import Mock
 
 import pytest
 
-from privacy_local_agent.privacy.classification_utils import (
+from privacy_local_agent.privacy.classification.classification_utils import (
     get_template_params,
     hash_value,
     mask_record_values,
