@@ -80,3 +80,59 @@ type BatchResponse struct {
 	Failed  int               `json:"failed"`
 	Results []BatchResultItem `json:"results"`
 }
+
+// UploadData 是 /api/upload 包装在 ProxyResponse.Data 中的处理结果。
+//
+// 与 Python 后端保持一致：operation 为操作类型，rows_in/rows_out 为输入/输出
+// 记录数，result 为具体处理结果（脱敏/K-匿名为记录数组，分类为结果对象）。
+type UploadData struct {
+	Operation string `json:"operation"`
+	RowsIn    int    `json:"rows_in"`
+	RowsOut   int    `json:"rows_out"`
+	Result    any    `json:"result"`
+}
+
+// LbBackend 是负载均衡测试中的单个目标后端节点。
+type LbBackend struct {
+	Name string `json:"name"`
+	URL  string `json:"url"`
+}
+
+// LbTestRequest 是 /api/lb_test 的请求体。
+//
+// 控制台后端按 Strategy 策略把 NumRequests 个探测请求分发到 Backends 中的各节点：
+//   - ProbePath：探测路径，默认 /health；
+//   - ProbeBody：提供时以 POST 发送该 JSON 体，否则用 GET。
+type LbTestRequest struct {
+	Backends    []LbBackend     `json:"backends"`
+	NumRequests int             `json:"num_requests"`
+	Strategy    string          `json:"strategy"`
+	ProbePath   string          `json:"probe_path"`
+	ProbeBody   json.RawMessage `json:"probe_body,omitempty"`
+}
+
+// LbDistItem 是负载均衡测试中单个节点的统计结果。
+//
+// 记录该节点被命中的次数、成功/失败数以及延迟分布（毫秒）。
+type LbDistItem struct {
+	Name         string  `json:"name"`
+	URL          string  `json:"url"`
+	Count        int     `json:"count"`
+	Success      int     `json:"success"`
+	Failed       int     `json:"failed"`
+	AvgLatencyMs float64 `json:"avg_latency_ms"`
+	MinLatencyMs float64 `json:"min_latency_ms"`
+	MaxLatencyMs float64 `json:"max_latency_ms"`
+}
+
+// LbTestResponse 是 /api/lb_test 的汇总结果。
+//
+// Distribution 按 Backends 顺序给出各节点统计，恒有 Total == Success + Failed。
+type LbTestResponse struct {
+	Strategy     string       `json:"strategy"`
+	Total        int          `json:"total"`
+	Success      int          `json:"success"`
+	Failed       int          `json:"failed"`
+	DurationMs   float64      `json:"duration_ms"`
+	Distribution []LbDistItem `json:"distribution"`
+}

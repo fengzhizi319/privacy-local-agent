@@ -33,6 +33,8 @@ export type IconName =
   | 'play'
   | 'clock'
   | 'code'
+  | 'upload'
+  | 'scale'
   | 'x';
 
 const PATHS: Record<IconName, ReactNode> = {
@@ -197,6 +199,22 @@ const PATHS: Record<IconName, ReactNode> = {
     <>
       <path d="m16 18 6-6-6-6" />
       <path d="m8 6-6 6 6 6" />
+    </>
+  ),
+  upload: (
+    <>
+      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+      <path d="m17 8-5-5-5 5" />
+      <path d="M12 3v12" />
+    </>
+  ),
+  scale: (
+    <>
+      <path d="m16 16 3-8 3 8c-.87.65-1.92 1-3 1s-2.13-.35-3-1Z" />
+      <path d="m2 16 3-8 3 8c-.87.65-1.92 1-3 1s-2.13-.35-3-1Z" />
+      <path d="M7 21h10" />
+      <path d="M12 3v18" />
+      <path d="M3 7h2c2 0 5-1 7-2 2 1 5 2 7 2h2" />
     </>
   ),
   x: (

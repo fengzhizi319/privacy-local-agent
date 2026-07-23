@@ -19,6 +19,14 @@ interface SidebarProps {
   onBatch?: () => void;
   /** 当前是否处于批量测试视图 */
   batchActive?: boolean;
+  /** 进入文件处理 */
+  onFileTest?: () => void;
+  /** 当前是否处于文件处理视图 */
+  fileTestActive?: boolean;
+  /** 进入负载均衡测试 */
+  onLbTest?: () => void;
+  /** 当前是否处于负载均衡测试视图 */
+  lbTestActive?: boolean;
 }
 
 /** method 徽章配色。 */
@@ -43,7 +51,7 @@ function groupSamples(samples: EndpointSample[]): Map<string, EndpointSample[]> 
   return grouped;
 }
 
-export default function Sidebar({ samples, selected, onSelect, onHome, onBatch, batchActive = false }: SidebarProps) {
+export default function Sidebar({ samples, selected, onSelect, onHome, onBatch, batchActive = false, onFileTest, fileTestActive = false, onLbTest, lbTestActive = false }: SidebarProps) {
   const [query, setQuery] = useState('');
   // 默认全部折叠，避免首页侧边栏过长；用户点击分组头展开。
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -128,7 +136,7 @@ export default function Sidebar({ samples, selected, onSelect, onHome, onBatch, 
         <button
           onClick={onBatch}
           className={[
-            'mb-2 flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] transition-colors',
+            'flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] transition-colors',
             batchActive
               ? 'bg-indigo-50 font-medium text-indigo-700'
               : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900',
@@ -138,6 +146,36 @@ export default function Sidebar({ samples, selected, onSelect, onHome, onBatch, 
             <Icon name="play" className="h-3 w-3" />
           </span>
           批量测试
+        </button>
+        {/* 文件处理入口 */}
+        <button
+          onClick={onFileTest}
+          className={[
+            'flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] transition-colors',
+            fileTestActive
+              ? 'bg-indigo-50 font-medium text-indigo-700'
+              : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900',
+          ].join(' ')}
+        >
+          <span className="flex h-5 w-5 items-center justify-center rounded bg-gray-100 text-gray-500">
+            <Icon name="upload" className="h-3 w-3" />
+          </span>
+          文件处理
+        </button>
+        {/* 负载均衡测试入口 */}
+        <button
+          onClick={onLbTest}
+          className={[
+            'mb-2 flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] transition-colors',
+            lbTestActive
+              ? 'bg-indigo-50 font-medium text-indigo-700'
+              : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900',
+          ].join(' ')}
+        >
+          <span className="flex h-5 w-5 items-center justify-center rounded bg-gray-100 text-gray-500">
+            <Icon name="scale" className="h-3 w-3" />
+          </span>
+          负载均衡
         </button>
         {visibleCategories.length === 0 && (
           <div className="px-3 py-8 text-center text-sm text-gray-400">

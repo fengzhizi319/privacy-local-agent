@@ -17,12 +17,15 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
+import random
 import time
 from contextlib import asynccontextmanager
 from typing import Any, Dict, List, Optional
 
-from fastapi import FastAPI, HTTPException, Request
+import httpx
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
@@ -112,6 +115,65 @@ class BatchResponse(BaseModel):
     passed: int
     failed: int
     results: List[BatchResultItem]
+
+
+class LbBackend(BaseModel):
+    """负载均衡测试中的单个目标后端节点。
+
+    ``name`` 用于在结果分布中标识节点，``url`` 为节点的 REST 基地址
+    （如 ``http://127.0.0.1:8079``）。
+    """
+
+    name: str
+    url: str
+
+
+class LbTestRequest(BaseModel):
+    """负载均衡测试端点 ``POST /api/lb_test`` 的请求体。
+
+    控制台后端按 ``strategy`` 策略把 ``num_requests`` 个探测请求分发到
+    ``backends`` 中的各节点，并统计命中与延迟：
+        - ``probe_path``：探测路径，默认 ``/health``；
+        - ``probe_body``：提供时以 ``POST`` 发送 JSON 体，否则用 ``GET``。
+    """
+
+    backends: List[LbBackend] = Field(default_factory=list)
+    num_requests: int = Field(default=10, ge=1, le=1000)
+    strategy: str = Field(default="round_robin")
+    probe_path: str = Field(default="/health")
+    probe_body: Optional[Dict[str, Any]] = Field(default=None)
+
+
+class LbDistItem(BaseModel):
+    """负载均衡测试中单个节点的统计结果。
+
+    记录该节点被命中的次数、成功 / 失败数以及延迟分布（毫秒）。
+    未被命中的节点 ``count`` 为 0，延迟字段为 0。
+    """
+
+    name: str
+    url: str
+    count: int
+    success: int
+    failed: int
+    avg_latency_ms: float
+    min_latency_ms: float
+    max_latency_ms: float
+
+
+class LbTestResponse(BaseModel):
+    """负载均衡测试的汇总结果。
+
+    ``distribution`` 按 ``backends`` 顺序给出各节点的统计，
+    三者关系恒为 ``total == success + failed``。
+    """
+
+    strategy: str
+    total: int
+    success: int
+    failed: int
+    duration_ms: float
+    distribution: List[LbDistItem]
 
 
 @asynccontextmanager
@@ -273,6 +335,152 @@ async def batch(req: BatchRequest):
 
     passed = sum(1 for r in results if 200 <= r.status < 300)
     return BatchResponse(total=len(results), passed=passed, failed=len(results) - passed, results=results)
+
+
+@app.post("/api/upload")
+async def upload(
+    file: UploadFile = File(...),
+    operation: str = Form(...),
+    params: str = Form("{}"),
+):
+    """数据文件隐私处理：接收上传文件并转发到 agent 的 ``process_file`` 端点。
+
+    前端以 multipart 上传 CSV/JSON 文件与操作类型，后端读取文件内容后
+    以 multipart 透传给 agent ``/v1/privacy/process_file``，并把 agent 返回
+    的 ``{operation, rows_in, rows_out, result}`` 包装为 :class:`ProxyResponse`。
+    具体的文件解析与隐私算法均由 agent 负责，后端仅做转发与包装。
+    """
+    content = await file.read()
+    files = {"file": (file.filename or "upload.bin", content, file.content_type or "application/octet-stream")}
+    data = {"operation": operation, "params": params}
+
+    start = time.perf_counter()
+    result = await agent_client.request_multipart(
+        "/v1/privacy/process_file", files=files, data=data
+    )
+    duration_ms = (time.perf_counter() - start) * 1000
+
+    return ProxyResponse(status=200, duration_ms=round(duration_ms, 2), data=result)
+
+
+# 负载均衡测试支持的三种分发策略。
+_LB_STRATEGIES = ("round_robin", "random", "least_connections")
+
+
+def _lb_pick_backends(strategy: str, n: int, num_backends: int) -> List[int]:
+    """按策略生成 ``n`` 个探测请求对应的后端下标序列。
+
+    - ``round_robin``：依次轮询，分发最均匀；
+    - ``random``：独立随机选择；
+    - ``least_connections``：每次选当前累计命中最少的节点（同数取下标小者），
+      效果上亦趋于均匀。
+    """
+    if num_backends <= 0:
+        return []
+    if strategy == "round_robin":
+        return [i % num_backends for i in range(n)]
+    if strategy == "random":
+        return [random.randrange(num_backends) for _ in range(n)]
+    if strategy == "least_connections":
+        counts = [0] * num_backends
+        seq: List[int] = []
+        for _ in range(n):
+            idx = min(range(num_backends), key=lambda i: (counts[i], i))
+            counts[idx] += 1
+            seq.append(idx)
+        return seq
+    raise HTTPException(
+        status_code=400,
+        detail=f"不支持的策略 '{strategy}'，可选: {list(_LB_STRATEGIES)}",
+    )
+
+
+async def _run_lb_test(
+    req: LbTestRequest,
+    transport: Optional[httpx.AsyncBaseTransport] = None,
+) -> LbTestResponse:
+    """执行负载均衡探测并统计各节点命中与延迟。
+
+    探测逻辑与端点解耦，``transport`` 可注入（测试时用 ``httpx.MockTransport``
+    伪造后端），生产环境为 ``None`` 即走真实网络。
+    """
+    backends = req.backends
+    if not backends:
+        raise HTTPException(status_code=400, detail="backends 不能为空")
+
+    seq = _lb_pick_backends(req.strategy, req.num_requests, len(backends))
+    latencies: Dict[int, List[float]] = {i: [] for i in range(len(backends))}
+    success: Dict[int, int] = {i: 0 for i in range(len(backends))}
+    failed: Dict[int, int] = {i: 0 for i in range(len(backends))}
+
+    probe_path = req.probe_path or "/health"
+
+    async def probe(idx: int) -> None:
+        backend = backends[idx]
+        url = backend.url.rstrip("/") + probe_path
+        start = time.perf_counter()
+        ok = False
+        try:
+            if req.probe_body is not None:
+                resp = await lb_client.post(url, json=req.probe_body)
+            else:
+                resp = await lb_client.get(url)
+            ok = resp.status_code < 400
+        except httpx.HTTPError:
+            ok = False
+        latencies[idx].append((time.perf_counter() - start) * 1000)
+        if ok:
+            success[idx] += 1
+        else:
+            failed[idx] += 1
+
+    overall_start = time.perf_counter()
+    async with httpx.AsyncClient(
+        transport=transport, timeout=10.0, trust_env=False
+    ) as lb_client:
+        await asyncio.gather(*(probe(i) for i in seq))
+    total_ms = (time.perf_counter() - overall_start) * 1000
+
+    distribution: List[LbDistItem] = []
+    total_success = 0
+    total_failed = 0
+    for i, backend in enumerate(backends):
+        lats = latencies[i]
+        count = len(lats)
+        total_success += success[i]
+        total_failed += failed[i]
+        distribution.append(
+            LbDistItem(
+                name=backend.name,
+                url=backend.url,
+                count=count,
+                success=success[i],
+                failed=failed[i],
+                avg_latency_ms=round(sum(lats) / count, 2) if count else 0.0,
+                min_latency_ms=round(min(lats), 2) if lats else 0.0,
+                max_latency_ms=round(max(lats), 2) if lats else 0.0,
+            )
+        )
+
+    return LbTestResponse(
+        strategy=req.strategy,
+        total=req.num_requests,
+        success=total_success,
+        failed=total_failed,
+        duration_ms=round(total_ms, 2),
+        distribution=distribution,
+    )
+
+
+@app.post("/api/lb_test")
+async def lb_test(req: LbTestRequest):
+    """负载均衡测试：按策略向多个后端节点分发探测请求并统计结果。
+
+    由控制台后端自行实现策略分发（round_robin / random / least_connections），
+    探测目标为用户填写的各 agent REST 地址，返回各节点命中数与延迟分布，
+    供前端可视化对比。
+    """
+    return await _run_lb_test(req)
 
 
 # 静态 SPA 托管：把构建好的前端挂载到根路径。

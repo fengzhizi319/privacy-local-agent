@@ -6,7 +6,9 @@
 package handlers
 
 import (
+	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -18,9 +20,12 @@ import (
 
 	"github.com/fengzhizi319/privacy-local-agent/frontend/backend-go/internal/agent"
 	"github.com/fengzhizi319/privacy-local-agent/frontend/backend-go/internal/config"
+	"github.com/fengzhizi319/privacy-local-agent/frontend/backend-go/internal/fileparse"
+	"github.com/fengzhizi319/privacy-local-agent/frontend/backend-go/internal/lbtest"
 	"github.com/fengzhizi319/privacy-local-agent/frontend/backend-go/internal/mapper"
 	"github.com/fengzhizi319/privacy-local-agent/frontend/backend-go/internal/models"
 	"github.com/fengzhizi319/privacy-local-agent/frontend/backend-go/internal/samples"
+	pb "github.com/fengzhizi319/privacy-local-agent/frontend/backend-go/proto"
 )
 
 // Server aggregates the dependencies required by HTTP handlers.
@@ -50,6 +55,8 @@ func (s *Server) RegisterRoutes(r *gin.Engine) {
 	r.GET("/api/samples", s.Samples)
 	r.POST("/api/proxy", s.Proxy)
 	r.POST("/api/batch", s.Batch)
+	r.POST("/api/upload", s.Upload)
+	r.POST("/api/lb_test", s.LbTest)
 	s.registerStatic(r)
 }
 
@@ -240,6 +247,239 @@ func (s *Server) Batch(c *gin.Context) {
 		Failed:  len(results) - passed,
 		Results: results,
 	})
+}
+
+// Upload 接收前端上传的 CSV/JSON 文件并执行隐私处理。
+//
+// 表单字段：file（数据文件）、operation（mask_dataframe | k_anonymize | classify_table）、
+// params（JSON 字符串，如 {"columns":[...],"qi_cols":[...],"k":2,"context":""}）。
+// 后端按扩展名解析文件为 records，直接构造 gRPC 请求调用 agent，
+// 返回与 Python 后端一致的 ProxyResponse（data 为 UploadData）。
+func (s *Server) Upload(c *gin.Context) {
+	file, header, err := c.Request.FormFile("file")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"detail": fmt.Sprintf("缺少文件: %v", err), "status": http.StatusBadRequest})
+		return
+	}
+	defer file.Close()
+
+	operation := c.PostForm("operation")
+	params := c.PostForm("params")
+	if params == "" {
+		params = "{}"
+	}
+
+	content, err := io.ReadAll(file)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"detail": fmt.Sprintf("读取文件失败: %v", err), "status": http.StatusBadRequest})
+		return
+	}
+
+	// 按扩展名解析文件为 records + schema。
+	var records []map[string]string
+	var schema []string
+	filename := strings.ToLower(header.Filename)
+	switch {
+	case strings.HasSuffix(filename, ".csv"):
+		records, schema, err = fileparse.ParseCSV(content)
+	case strings.HasSuffix(filename, ".json"):
+		records, schema, err = fileparse.ParseJSON(content)
+	default:
+		c.JSON(http.StatusBadRequest, gin.H{"detail": "仅支持 .csv 与 .json 文件", "status": http.StatusBadRequest})
+		return
+	}
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"detail": err.Error(), "status": http.StatusBadRequest})
+		return
+	}
+
+	// 解析 params（JSON 对象）。
+	var options map[string]any
+	if err := json.Unmarshal([]byte(params), &options); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"detail": fmt.Sprintf("params 需为合法 JSON: %v", err), "status": http.StatusBadRequest})
+		return
+	}
+
+	entries := toRecordEntries(records)
+	rowsIn := len(records)
+	client := s.client.Raw()
+	ctx := c.Request.Context()
+
+	start := time.Now()
+	var result any
+	var rowsOut int
+
+	switch operation {
+	case "mask_dataframe":
+		resp, e := client.MaskDataFrame(ctx, &pb.MaskDataFrameRequest{
+			Data:    entries,
+			Columns: stringSlice(options, "columns"),
+			Context: stringVal(options, "context"),
+		})
+		if e != nil {
+			s.writeUpstreamError(c, e)
+			return
+		}
+		result = recordEntriesToMaps(resp.Data)
+		rowsOut = len(resp.Data)
+
+	case "k_anonymize":
+		qiCols := stringSlice(options, "qi_cols")
+		if len(qiCols) == 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"detail": "k_anonymize 操作需提供 qi_cols 参数", "status": http.StatusBadRequest})
+			return
+		}
+		resp, e := client.KAnonymizeDataFrame(ctx, &pb.KAnonymizeDataFrameRequest{
+			Data:     entries,
+			QiCols:   qiCols,
+			K:        int32Val(options, "k", 5),
+			MaxDepth: int32Val(options, "max_depth", 10),
+		})
+		if e != nil {
+			s.writeUpstreamError(c, e)
+			return
+		}
+		result = recordEntriesToMaps(resp.Data)
+		rowsOut = len(resp.Data)
+
+	case "classify_table":
+		schemaUse := stringSlice(options, "schema")
+		if len(schemaUse) == 0 {
+			schemaUse = schema
+		}
+		// 分类参数取 params 内嵌套的 params 字段（与 agent process_file 一致）。
+		paramsJSON := "{}"
+		if p, ok := options["params"]; ok {
+			if b, e := json.Marshal(p); e == nil {
+				paramsJSON = string(b)
+			}
+		}
+		resp, e := client.ClassifyTable(ctx, &pb.ClassifyTableRequest{
+			Schema:     schemaUse,
+			Rows:       entries,
+			ParamsJson: paramsJSON,
+		})
+		if e != nil {
+			s.writeUpstreamError(c, e)
+			return
+		}
+		var parsed any
+		if e := json.Unmarshal([]byte(resp.ResultJson), &parsed); e != nil {
+			parsed = resp.ResultJson
+		}
+		result = parsed
+		rowsOut = rowsIn
+
+	default:
+		c.JSON(http.StatusBadRequest, gin.H{
+			"detail": fmt.Sprintf("不支持的操作 '%s'，可选: classify_table, k_anonymize, mask_dataframe", operation),
+			"status": http.StatusBadRequest,
+		})
+		return
+	}
+
+	duration := time.Since(start).Milliseconds()
+	c.JSON(http.StatusOK, models.ProxyResponse{
+		Status:     http.StatusOK,
+		DurationMs: duration,
+		Data: models.UploadData{
+			Operation: operation,
+			RowsIn:    rowsIn,
+			RowsOut:   rowsOut,
+			Result:    result,
+		},
+	})
+}
+
+// LbTest 按策略向多个后端节点分发探测请求并统计结果。
+//
+// 由控制台后端自行实现策略分发（round_robin / random / least_connections），
+// 探测目标为用户填写的各 agent REST 地址，返回各节点命中数与延迟分布。
+func (s *Server) LbTest(c *gin.Context) {
+	var req models.LbTestRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"detail": fmt.Sprintf("invalid request body: %v", err), "status": http.StatusBadRequest})
+		return
+	}
+	resp, err := lbtest.Run(c.Request.Context(), req, nil)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"detail": err.Error(), "status": http.StatusBadRequest})
+		return
+	}
+	c.JSON(http.StatusOK, resp)
+}
+
+// writeUpstreamError 把 gRPC 上游错误转换为 HTTP 响应：
+// 连接类错误 → 502，其余（参数/业务错误）→ 400。
+func (s *Server) writeUpstreamError(c *gin.Context, err error) {
+	status := http.StatusBadRequest
+	if isUnavailable(err) {
+		status = http.StatusBadGateway
+	}
+	c.JSON(status, gin.H{"detail": err.Error(), "status": status})
+}
+
+// toRecordEntries 把 records 转换为 gRPC RecordEntry 列表。
+func toRecordEntries(records []map[string]string) []*pb.RecordEntry {
+	entries := make([]*pb.RecordEntry, 0, len(records))
+	for _, r := range records {
+		fields := make(map[string]string, len(r))
+		for k, v := range r {
+			fields[k] = v
+		}
+		entries = append(entries, &pb.RecordEntry{Fields: fields})
+	}
+	return entries
+}
+
+// recordEntriesToMaps 把 gRPC RecordEntry 列表转回记录数组，供前端展示。
+func recordEntriesToMaps(entries []*pb.RecordEntry) []map[string]string {
+	out := make([]map[string]string, 0, len(entries))
+	for _, e := range entries {
+		out = append(out, e.Fields)
+	}
+	return out
+}
+
+// stringSlice 从 JSON 对象中取出字符串数组字段。
+func stringSlice(m map[string]any, key string) []string {
+	if v, ok := m[key]; ok {
+		if arr, ok := v.([]any); ok {
+			out := make([]string, 0, len(arr))
+			for _, item := range arr {
+				if s, ok := item.(string); ok {
+					out = append(out, s)
+				}
+			}
+			return out
+		}
+	}
+	return nil
+}
+
+// stringVal 从 JSON 对象中取出字符串字段。
+func stringVal(m map[string]any, key string) string {
+	if v, ok := m[key]; ok {
+		if s, ok := v.(string); ok {
+			return s
+		}
+	}
+	return ""
+}
+
+// int32Val 从 JSON 对象中取出整数字段（JSON 数字默认为 float64）。
+func int32Val(m map[string]any, key string, def int32) int32 {
+	if v, ok := m[key]; ok {
+		switch n := v.(type) {
+		case float64:
+			return int32(n)
+		case int:
+			return int32(n)
+		case int64:
+			return int32(n)
+		}
+	}
+	return def
 }
 
 // isUnavailable returns true when the error indicates the upstream agent is unreachable.

@@ -17,14 +17,18 @@ import Sidebar from '@/components/Sidebar';
 import Overview from '@/components/Overview';
 import EndpointView from '@/components/EndpointView';
 import BatchTest from '@/components/BatchTest';
+import FileTest from '@/components/FileTest';
+import LbTest from '@/components/LbTest';
 import { type BackendOption, DEFAULT_BACKEND } from '@/components/BackendSelector';
 import { Icon } from '@/components/icons';
 
-/** 主区域视图：总览 / 单端点测试 / 批量测试。 */
+/** 主区域视图：总览 / 单端点测试 / 批量测试 / 文件处理 / 负载均衡。 */
 type View =
   | { type: 'overview' }
   | { type: 'endpoint'; sample: EndpointSample }
-  | { type: 'batch' };
+  | { type: 'batch' }
+  | { type: 'filetest' }
+  | { type: 'lbtest' };
 
 export default function App() {
   /** 全部端点示例（来自 /api/samples） */
@@ -112,6 +116,10 @@ export default function App() {
               onHome={goOverview}
               onBatch={() => setView({ type: 'batch' })}
               batchActive={view.type === 'batch'}
+              onFileTest={() => setView({ type: 'filetest' })}
+              fileTestActive={view.type === 'filetest'}
+              onLbTest={() => setView({ type: 'lbtest' })}
+              lbTestActive={view.type === 'lbtest'}
             />
             <main className="flex-1 overflow-hidden">
               {/* 根据 view 类型渲染对应视图；EndpointView 用 key 强制在
@@ -125,6 +133,10 @@ export default function App() {
                 />
               ) : view.type === 'batch' ? (
                 <BatchTest samples={samples} onSelectSample={openEndpoint} />
+              ) : view.type === 'filetest' ? (
+                <FileTest />
+              ) : view.type === 'lbtest' ? (
+                <LbTest agentUrl={health?.agent_url} />
               ) : (
                 <Overview samples={samples} onSelect={openEndpoint} />
               )}

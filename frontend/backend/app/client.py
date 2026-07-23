@@ -140,6 +140,49 @@ class PrivacyAgentClient:
             "_content_type": ct,
             "_base64": base64.b64encode(response.content).decode("ascii"),
         }
+    
+    async def request_multipart(
+        self,
+        path: str,
+        files: Dict[str, Any],
+        data: Optional[Dict[str, Any]] = None,
+    ) -> Any:
+        """以 multipart/form-data 转发请求到 privacy agent 并返回其响应。
+
+        用于文件上传类请求的转发（如 ``/v1/privacy/process_file``）：
+        前端把文件上传到控制台后端，后端再以 multipart 透传给 agent。
+
+        Args:
+            path: 目标 agent 路径。
+            files: httpx files 映射（如 ``{"file": (filename, content, content_type)}``）。
+            data: 随附的表单字段（如 ``operation`` / ``params``）。
+
+        异常处理与 :meth:`request` 一致：网络错误 → 502，agent 非 2xx → 透传。
+        """
+        client = await self._get_client()
+        url = f"{self.base_url}{path}"
+        headers = self._headers()
+
+        try:
+            response = await client.post(url, files=files, data=data or {}, headers=headers)
+        except httpx.RequestError as exc:
+            raise HTTPException(
+                status_code=502, detail=f"Unable to reach privacy agent: {exc}"
+            ) from exc
+
+        try:
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            detail = self._extract_detail(response)
+            raise HTTPException(status_code=response.status_code, detail=detail) from exc
+
+        ct = response.headers.get("content-type", "application/json")
+        if "application/json" in ct:
+            return response.json()
+        return {
+            "_content_type": ct,
+            "_base64": base64.b64encode(response.content).decode("ascii"),
+        }
 
     @staticmethod
     def _extract_detail(response: httpx.Response) -> str:

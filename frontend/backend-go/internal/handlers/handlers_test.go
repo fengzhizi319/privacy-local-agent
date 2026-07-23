@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"mime/multipart"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -29,8 +30,11 @@ import (
 type testPrivacyServer struct {
 	pb.UnimplementedPrivacyServiceServer
 
-	HealthFunc func(context.Context, *pb.HealthRequest) (*pb.HealthResponse, error)
-	MaskFunc   func(context.Context, *pb.MaskRequest) (*pb.MaskResponse, error)
+	HealthFunc              func(context.Context, *pb.HealthRequest) (*pb.HealthResponse, error)
+	MaskFunc                func(context.Context, *pb.MaskRequest) (*pb.MaskResponse, error)
+	MaskDataFrameFunc       func(context.Context, *pb.MaskDataFrameRequest) (*pb.MaskDataFrameResponse, error)
+	KAnonymizeDataFrameFunc func(context.Context, *pb.KAnonymizeDataFrameRequest) (*pb.KAnonymizeDataFrameResponse, error)
+	ClassifyTableFunc       func(context.Context, *pb.ClassifyTableRequest) (*pb.ClassifyTableResponse, error)
 }
 
 func (s *testPrivacyServer) Health(ctx context.Context, req *pb.HealthRequest) (*pb.HealthResponse, error) {
@@ -45,6 +49,27 @@ func (s *testPrivacyServer) Mask(ctx context.Context, req *pb.MaskRequest) (*pb.
 		return s.MaskFunc(ctx, req)
 	}
 	return s.UnimplementedPrivacyServiceServer.Mask(ctx, req)
+}
+
+func (s *testPrivacyServer) MaskDataFrame(ctx context.Context, req *pb.MaskDataFrameRequest) (*pb.MaskDataFrameResponse, error) {
+	if s.MaskDataFrameFunc != nil {
+		return s.MaskDataFrameFunc(ctx, req)
+	}
+	return s.UnimplementedPrivacyServiceServer.MaskDataFrame(ctx, req)
+}
+
+func (s *testPrivacyServer) KAnonymizeDataFrame(ctx context.Context, req *pb.KAnonymizeDataFrameRequest) (*pb.KAnonymizeDataFrameResponse, error) {
+	if s.KAnonymizeDataFrameFunc != nil {
+		return s.KAnonymizeDataFrameFunc(ctx, req)
+	}
+	return s.UnimplementedPrivacyServiceServer.KAnonymizeDataFrame(ctx, req)
+}
+
+func (s *testPrivacyServer) ClassifyTable(ctx context.Context, req *pb.ClassifyTableRequest) (*pb.ClassifyTableResponse, error) {
+	if s.ClassifyTableFunc != nil {
+		return s.ClassifyTableFunc(ctx, req)
+	}
+	return s.UnimplementedPrivacyServiceServer.ClassifyTable(ctx, req)
 }
 
 // setupTestServer 启动内存 gRPC 服务器并创建带路由的 HTTP 测试服务器。
@@ -356,5 +381,217 @@ func TestStaticServingDisabled(t *testing.T) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusNotFound {
 		t.Fatalf("expected 404 without dist dir, got %d", resp.StatusCode)
+	}
+}
+
+// postUploadMultipart 构造一个上传文件的 multipart 请求并发送。
+func postUploadMultipart(t *testing.T, url, filename, content, operation, params string) *http.Response {
+	t.Helper()
+	var buf bytes.Buffer
+	w := multipart.NewWriter(&buf)
+	fw, err := w.CreateFormFile("file", filename)
+	if err != nil {
+		t.Fatalf("create form file failed: %v", err)
+	}
+	if _, err := fw.Write([]byte(content)); err != nil {
+		t.Fatalf("write file content failed: %v", err)
+	}
+	_ = w.WriteField("operation", operation)
+	if params != "" {
+		_ = w.WriteField("params", params)
+	}
+	w.Close()
+
+	resp, err := http.Post(url, w.FormDataContentType(), &buf)
+	if err != nil {
+		t.Fatalf("POST /api/upload failed: %v", err)
+	}
+	return resp
+}
+
+// TestUploadHandlerMask 验证上传 CSV 执行脱敏：解析文件 → 构造 gRPC 请求 → 包装返回。
+func TestUploadHandlerMask(t *testing.T) {
+	grpcSrv := &testPrivacyServer{
+		MaskDataFrameFunc: func(_ context.Context, req *pb.MaskDataFrameRequest) (*pb.MaskDataFrameResponse, error) {
+			if len(req.Data) != 2 {
+				t.Fatalf("expected 2 record entries, got %d", len(req.Data))
+			}
+			if len(req.Columns) != 1 || req.Columns[0] != "email" {
+				t.Fatalf("unexpected columns: %v", req.Columns)
+			}
+			// 返回脱敏后的记录。
+			return &pb.MaskDataFrameResponse{
+				Data: []*pb.RecordEntry{
+					{Fields: map[string]string{"email": "a***@example.com", "phone": "13800138000"}},
+					{Fields: map[string]string{"email": "b***@example.com", "phone": "13900139000"}},
+				},
+			}, nil
+		},
+	}
+	ts, _ := setupTestServer(t, grpcSrv)
+	defer ts.Close()
+
+	csv := "email,phone\nalice@example.com,13800138000\nbob@example.com,13900139000\n"
+	resp := postUploadMultipart(t, ts.URL+"/api/upload", "data.csv", csv, "mask_dataframe", `{"columns":["email"]}`)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("expected 200, got %d: %s", resp.StatusCode, body)
+	}
+
+	var body struct {
+		Status int `json:"status"`
+		Data   struct {
+			Operation string              `json:"operation"`
+			RowsIn    int                 `json:"rows_in"`
+			RowsOut   int                 `json:"rows_out"`
+			Result    []map[string]string `json:"result"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode failed: %v", err)
+	}
+	if body.Data.Operation != "mask_dataframe" || body.Data.RowsIn != 2 || body.Data.RowsOut != 2 {
+		t.Fatalf("unexpected upload data: %+v", body.Data)
+	}
+	if body.Data.Result[0]["email"] != "a***@example.com" {
+		t.Fatalf("unexpected masked result: %+v", body.Data.Result)
+	}
+}
+
+// TestUploadHandlerClassify 验证上传 JSON 执行整表分类。
+func TestUploadHandlerClassify(t *testing.T) {
+	grpcSrv := &testPrivacyServer{
+		ClassifyTableFunc: func(_ context.Context, req *pb.ClassifyTableRequest) (*pb.ClassifyTableResponse, error) {
+			if len(req.Rows) != 2 {
+				t.Fatalf("expected 2 rows, got %d", len(req.Rows))
+			}
+			return &pb.ClassifyTableResponse{ResultJson: `{"table_level":"L2"}`}, nil
+		},
+	}
+	ts, _ := setupTestServer(t, grpcSrv)
+	defer ts.Close()
+
+	jsonData := `[{"email":"alice@example.com"},{"email":"bob@example.com"}]`
+	resp := postUploadMultipart(t, ts.URL+"/api/upload", "data.json", jsonData, "classify_table", "{}")
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("expected 200, got %d: %s", resp.StatusCode, body)
+	}
+
+	var body struct {
+		Data struct {
+			Operation string         `json:"operation"`
+			RowsIn    int            `json:"rows_in"`
+			Result    map[string]any `json:"result"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode failed: %v", err)
+	}
+	if body.Data.Operation != "classify_table" || body.Data.RowsIn != 2 {
+		t.Fatalf("unexpected upload data: %+v", body.Data)
+	}
+	if body.Data.Result["table_level"] != "L2" {
+		t.Fatalf("unexpected classify result: %+v", body.Data.Result)
+	}
+}
+
+// TestUploadHandlerUnsupportedFormat 验证不支持的文件格式返回 400。
+func TestUploadHandlerUnsupportedFormat(t *testing.T) {
+	grpcSrv := &testPrivacyServer{}
+	ts, _ := setupTestServer(t, grpcSrv)
+	defer ts.Close()
+
+	resp := postUploadMultipart(t, ts.URL+"/api/upload", "data.txt", "hello", "mask_dataframe", "")
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", resp.StatusCode)
+	}
+}
+
+// TestUploadHandlerUnsupportedOperation 验证不支持的操作类型返回 400。
+func TestUploadHandlerUnsupportedOperation(t *testing.T) {
+	grpcSrv := &testPrivacyServer{}
+	ts, _ := setupTestServer(t, grpcSrv)
+	defer ts.Close()
+
+	resp := postUploadMultipart(t, ts.URL+"/api/upload", "data.csv", "a,b\n1,2\n", "foobar", "")
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", resp.StatusCode)
+	}
+}
+
+// TestLbTestHandler 验证负载均衡端点：分发探测请求并返回统计。
+func TestLbTestHandler(t *testing.T) {
+	// 起两个假后端作为探测目标。
+	fakeA := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer fakeA.Close()
+	fakeB := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer fakeB.Close()
+
+	grpcSrv := &testPrivacyServer{}
+	ts, _ := setupTestServer(t, grpcSrv)
+	defer ts.Close()
+
+	reqBody := map[string]any{
+		"backends": []map[string]string{
+			{"name": "a", "url": fakeA.URL},
+			{"name": "b", "url": fakeB.URL},
+		},
+		"num_requests": 6,
+		"strategy":     "round_robin",
+	}
+	b, _ := json.Marshal(reqBody)
+	resp, err := http.Post(ts.URL+"/api/lb_test", "application/json", bytes.NewReader(b))
+	if err != nil {
+		t.Fatalf("POST /api/lb_test failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("expected 200, got %d: %s", resp.StatusCode, body)
+	}
+
+	var body struct {
+		Strategy     string `json:"strategy"`
+		Total        int    `json:"total"`
+		Success      int    `json:"success"`
+		Failed       int    `json:"failed"`
+		Distribution []struct {
+			Name  string `json:"name"`
+			Count int    `json:"count"`
+		} `json:"distribution"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode failed: %v", err)
+	}
+	if body.Strategy != "round_robin" || body.Total != 6 || body.Success != 6 || body.Failed != 0 {
+		t.Fatalf("unexpected lb summary: %+v", body)
+	}
+	if len(body.Distribution) != 2 || body.Distribution[0].Count != 3 || body.Distribution[1].Count != 3 {
+		t.Fatalf("expected even distribution, got %+v", body.Distribution)
+	}
+}
+
+// TestLbTestHandlerEmptyBackends 验证 backends 为空时返回 400。
+func TestLbTestHandlerEmptyBackends(t *testing.T) {
+	grpcSrv := &testPrivacyServer{}
+	ts, _ := setupTestServer(t, grpcSrv)
+	defer ts.Close()
+
+	resp, err := http.Post(ts.URL+"/api/lb_test", "application/json", strings.NewReader(`{"backends":[],"num_requests":3,"strategy":"round_robin"}`))
+	if err != nil {
+		t.Fatalf("POST /api/lb_test failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", resp.StatusCode)
 	}
 }

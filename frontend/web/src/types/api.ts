@@ -89,3 +89,66 @@ export interface HistoryEntry {
   status: number;
   timestamp: number;
 }
+
+/** 数据文件隐私处理支持的操作类型。 */
+export type FileOperation = 'mask_dataframe' | 'k_anonymize' | 'classify_table';
+
+/** /api/upload 响应中 data 的处理结果。 */
+export interface UploadData {
+  operation: FileOperation;
+  /** 输入记录数 */
+  rows_in: number;
+  /** 输出记录数 */
+  rows_out: number;
+  /** 处理结果：脱敏/K-匿名为记录数组，分类为结果对象 */
+  result: any;
+}
+
+/** /api/upload 的统一响应包装（复用 ProxyResponse 结构）。 */
+export interface UploadResponse {
+  status: number;
+  duration_ms: number;
+  data: UploadData;
+}
+
+/** 负载均衡测试：单个目标后端节点。 */
+export interface LbBackend {
+  name: string;
+  url: string;
+}
+
+/** 负载均衡测试支持的策略。 */
+export type LbStrategy = 'round_robin' | 'random' | 'least_connections';
+
+/** 负载均衡测试请求体（发往 /api/lb_test）。 */
+export interface LbTestRequest {
+  backends: LbBackend[];
+  num_requests: number;
+  strategy: LbStrategy;
+  /** 探测路径，默认 /health */
+  probe_path?: string;
+  /** 提供时以 POST 发送该 JSON 体，否则用 GET */
+  probe_body?: Record<string, any> | null;
+}
+
+/** 负载均衡测试：单个节点的统计结果。 */
+export interface LbDistItem {
+  name: string;
+  url: string;
+  count: number;
+  success: number;
+  failed: number;
+  avg_latency_ms: number;
+  min_latency_ms: number;
+  max_latency_ms: number;
+}
+
+/** 负载均衡测试的汇总响应。 */
+export interface LbTestResponse {
+  strategy: LbStrategy;
+  total: number;
+  success: number;
+  failed: number;
+  duration_ms: number;
+  distribution: LbDistItem[];
+}

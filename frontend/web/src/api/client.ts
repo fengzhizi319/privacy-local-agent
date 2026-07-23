@@ -5,7 +5,7 @@
  *   - ``API_BASE`` 为可变基址，由 BackendSelector 切换后端时经 setBaseUrl 更新；
  *   - 默认值为空字符串（同源），生产环境下控制台与后端同域部署。
  */
-import type { ProxyRequest, ProxyResponse, ConsoleHealth, EndpointSample, BatchRequestItem, BatchResponse } from '@/types/api';
+import type { ProxyRequest, ProxyResponse, ConsoleHealth, EndpointSample, BatchRequestItem, BatchResponse, FileOperation, UploadResponse, LbTestRequest, LbTestResponse } from '@/types/api';
 
 /** 当前后端基址（空串表示同源）。 */
 let API_BASE = '';
@@ -56,6 +56,53 @@ export async function batchRequest(requests: BatchRequestItem[]): Promise<BatchR
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ requests }),
+  });
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(typeof err.detail === 'string' ? err.detail : JSON.stringify(err));
+  }
+
+  return res.json();
+}
+
+/**
+ * 数据文件隐私处理：以 multipart 上传文件并指定操作类型。
+ * 后端转发到 agent 的 process_file 端点，返回包装后的处理结果。
+ * 注意：不手动设置 Content-Type，由浏览器自动生成带 boundary 的 multipart 头。
+ */
+export async function uploadFile(
+  file: File,
+  operation: FileOperation,
+  params: Record<string, any>,
+): Promise<UploadResponse> {
+  const form = new FormData();
+  form.append('file', file);
+  form.append('operation', operation);
+  form.append('params', JSON.stringify(params));
+
+  const res = await fetch(`${API_BASE}/api/upload`, {
+    method: 'POST',
+    body: form,
+  });
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(typeof err.detail === 'string' ? err.detail : JSON.stringify(err));
+  }
+
+  return res.json();
+}
+
+/**
+ * 负载均衡测试：提交多个后端地址与策略，
+ * 后端按策略分发探测请求并返回各节点统计。
+ */
+export async function lbTest(req: LbTestRequest): Promise<LbTestResponse> {
+  const res = await fetch(`${API_BASE}/api/lb_test`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(req),
   });
 
   if (!res.ok) {
