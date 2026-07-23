@@ -124,12 +124,17 @@ omit = [
     "privacy_local_agent/privacy_pb2*",
     "privacy_local_agent/privacy_pb2_grpc*",
     "*/tests/*",
+    # 进程入口 / 模型下载脚本：仅含启动与网络下载逻辑，无法在单测中覆盖
+    "privacy_local_agent/server.py",
+    "privacy_local_agent/gateway/server.py",
+    "privacy_local_agent/privacy/download_model.py",
+    "privacy_local_agent/privacy/download_ner_model.py",
 ]
 
 [tool.coverage.report]
 show_missing = true
 skip_covered = true
-fail_under = 60
+fail_under = 80
 exclude_lines = [
     "pragma: no cover",
     "if TYPE_CHECKING:",

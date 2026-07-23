@@ -329,6 +329,7 @@ Address these before any hardened production deployment.
 | Build ml image | `make docker-ml` |
 | Run test console | `./frontend/start.sh` |
 | Run Go gRPC console | `./frontend/start-go.sh` |
+| Run Go gRPC console (mTLS) | `./frontend/start-go-mtls.sh` |
 | Run REST + gRPC | `python -m privacy_local_agent.server` |
 | Run test console backend | `cd frontend/backend && ./run.sh` |
 | Build test console frontend | `cd frontend/web && corepack pnpm install && corepack pnpm build` |

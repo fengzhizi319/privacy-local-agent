@@ -15,6 +15,12 @@
 //   | PRIVACY_CONSOLE_HOST            | 127.0.0.1     | 本代理 HTTP 监听地址               |
 //   | PRIVACY_CONSOLE_PORT            | 8081          | 本代理 HTTP 监听端口               |
 //   | PRIVACY_CONSOLE_STATIC_DIR      | ../web/dist   | 前端构建产物目录，设为空则禁用静态托管 |
+//   | PRIVACY_AGENT_TLS_ENABLED       | false         | 是否启用上游 gRPC 连接的 TLS/mTLS    |
+//   | PRIVACY_AGENT_TLS_CERT_FILE     | (空)          | 客户端证书文件（mTLS 双向认证）       |
+//   | PRIVACY_AGENT_TLS_KEY_FILE      | (空)          | 客户端私钥文件（mTLS 双向认证）       |
+//   | PRIVACY_AGENT_TLS_CA_FILE       | (空)          | 校验服务端证书的 CA 文件，TLS 启用时必填 |
+//   | PRIVACY_AGENT_TLS_SERVER_NAME   | (空)          | 服务端证书主机名覆盖值               |
+//   | PRIVACY_AGENT_TLS_INSECURE_SKIP_VERIFY | false  | 是否跳过服务端证书校验（仅测试）     |
 package config
 
 import (
@@ -22,6 +28,8 @@ import (
 	"os"
 	// strconv：用于字符串与整数之间的类型转换（端口号解析）
 	"strconv"
+	// strings：用于布尔环境变量的大小写归一化与去空白
+	"strings"
 )
 
 // Config 保存 Go gRPC 代理服务器运行时的所有配置项。
@@ -55,6 +63,36 @@ type Config struct {
 	// 当该目录存在时，Go 服务器同时托管 Console UI 静态文件；
 	// 设为空字符串则禁用静态托管，仅作为纯 API 代理。
 	StaticDistDir string
+
+	// AgentTLSEnabled：是否对上游 agent 的 gRPC 连接启用 TLS/mTLS。
+	// 对应环境变量 PRIVACY_AGENT_TLS_ENABLED，默认 false（使用非安全传输）。
+	// 启用后必须提供 CA 证书（AgentTLSCAFile）以校验服务端身份。
+	AgentTLSEnabled bool
+
+	// AgentTLSCertFile：本代理作为 gRPC 客户端的证书文件路径（PEM）。
+	// 对应环境变量 PRIVACY_AGENT_TLS_CERT_FILE，默认空。
+	// 与 AgentTLSKeyFile 配对使用，用于向服务端证明客户端身份（mTLS 双向认证）。
+	AgentTLSCertFile string
+
+	// AgentTLSKeyFile：本代理作为 gRPC 客户端的私钥文件路径（PEM）。
+	// 对应环境变量 PRIVACY_AGENT_TLS_KEY_FILE，默认空。
+	// 必须与 AgentTLSCertFile 同时提供，否则无法完成客户端身份认证。
+	AgentTLSKeyFile string
+
+	// AgentTLSCAFile：用于校验上游 agent 服务端证书的 CA 证书文件路径（PEM）。
+	// 对应环境变量 PRIVACY_AGENT_TLS_CA_FILE，默认空。
+	// TLS 启用时必填：客户端用它验证服务端证书是否由受信任 CA 签发。
+	AgentTLSCAFile string
+
+	// AgentTLSServerName：TLS 握手时用于校验服务端证书的主机名覆盖值。
+	// 对应环境变量 PRIVACY_AGENT_TLS_SERVER_NAME，默认空（使用连接目标地址）。
+	// 典型场景：连接 127.0.0.1 但证书 SAN 仅含 localhost 时，设为 "localhost"。
+	AgentTLSServerName string
+
+	// AgentTLSInsecureSkipVerify：是否跳过服务端证书校验（仅限测试）。
+	// 对应环境变量 PRIVACY_AGENT_TLS_INSECURE_SKIP_VERIFY，默认 false。
+	// 设为 true 时不校验服务端证书链与主机名，存在中间人攻击风险，生产环境严禁启用。
+	AgentTLSInsecureSkipVerify bool
 }
 
 // Load 从环境变量读取所有配置项，返回填充完毕的 Config 实例。
@@ -80,6 +118,18 @@ func Load() *Config {
 		ConsolePort: getEnvInt("PRIVACY_CONSOLE_PORT", 8081),
 		// 前端静态文件目录，使用 getEnvOptional 以支持"设为空即禁用"语义
 		StaticDistDir: getEnvOptional("PRIVACY_CONSOLE_STATIC_DIR", "../web/dist"),
+		// 是否启用上游 gRPC 连接的 TLS/mTLS，默认关闭（非安全传输）
+		AgentTLSEnabled: getEnvBool("PRIVACY_AGENT_TLS_ENABLED", false),
+		// 客户端证书文件（mTLS 双向认证），默认空
+		AgentTLSCertFile: getEnv("PRIVACY_AGENT_TLS_CERT_FILE", ""),
+		// 客户端私钥文件（mTLS 双向认证），默认空
+		AgentTLSKeyFile: getEnv("PRIVACY_AGENT_TLS_KEY_FILE", ""),
+		// 校验服务端证书的 CA 文件，TLS 启用时必填
+		AgentTLSCAFile: getEnv("PRIVACY_AGENT_TLS_CA_FILE", ""),
+		// 服务端证书主机名覆盖值，默认空（使用连接目标地址）
+		AgentTLSServerName: getEnv("PRIVACY_AGENT_TLS_SERVER_NAME", ""),
+		// 是否跳过服务端证书校验（仅测试用），默认关闭
+		AgentTLSInsecureSkipVerify: getEnvBool("PRIVACY_AGENT_TLS_INSECURE_SKIP_VERIFY", false),
 	}
 }
 
@@ -141,6 +191,30 @@ func getEnvInt(name string, defaultValue int) int {
 	}
 	// 解析成功，返回整数值
 	return i
+}
+
+// getEnvBool 读取环境变量并解析为 bool 类型，不存在或无法识别时返回默认值。
+//
+// 执行逻辑：
+//   1. 读取环境变量字符串值并转为小写
+//   2. 值为空则返回默认值
+//   3. 值为 "true"/"1"/"yes"/"on" 之一时返回 true，其余一律返回 false
+//
+// 适用场景：TLS 开关等布尔类型配置项。
+func getEnvBool(name string, defaultValue bool) bool {
+	// 读取环境变量原始值
+	v := os.Getenv(name)
+	// 未设置或为空字符串时直接返回默认值
+	if v == "" {
+		return defaultValue
+	}
+	// 统一转小写后匹配常见真值字面量，其余值（含 "false"/"0"）视为 false
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "true", "1", "yes", "on":
+		return true
+	default:
+		return false
+	}
 }
 
 // AgentAddress 拼接并返回上游 agent 的完整 gRPC 目标地址。

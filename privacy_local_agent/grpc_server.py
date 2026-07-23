@@ -446,4 +446,5 @@ def serve(port: int = 50051, max_workers: int = 10, wait_for_termination: bool =
 
 
 if __name__ == "__main__":
-    serve()
+    # 独立 gRPC 入口：与 server.py 保持一致，从环境变量读取端口（默认 50051）
+    serve(port=int(os.environ.get("PRIVACY_GRPC_PORT", "50051")))

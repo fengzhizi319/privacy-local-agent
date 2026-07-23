@@ -9,6 +9,12 @@ build/
 .venv/
 venv/
 
+# Coverage
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+
 # IDE
 .idea/
 *.iml

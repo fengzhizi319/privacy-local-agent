@@ -9,6 +9,9 @@ PID_DIR="$SCRIPT_DIR/.pids"
 
 AGENT_PID_FILE="$PID_DIR/agent-go.pid"
 CONSOLE_PID_FILE="$PID_DIR/console-go.pid"
+# mTLS 模式（start-go-mtls.sh）使用的 PID 文件
+AGENT_MTLS_PID_FILE="$PID_DIR/agent-go-mtls.pid"
+CONSOLE_MTLS_PID_FILE="$PID_DIR/console-go-mtls.pid"
 
 stop_by_pid_file() {
     local file="$1"
@@ -32,5 +35,7 @@ stop_by_pid_file() {
 
 stop_by_pid_file "$AGENT_PID_FILE" "privacy_local_agent"
 stop_by_pid_file "$CONSOLE_PID_FILE" "Go gRPC 代理后端"
+stop_by_pid_file "$AGENT_MTLS_PID_FILE" "privacy_local_agent (mTLS)"
+stop_by_pid_file "$CONSOLE_MTLS_PID_FILE" "Go gRPC 代理后端 (mTLS)"
 
 echo "所有由 start-go.sh 启动的服务已处理完毕。"

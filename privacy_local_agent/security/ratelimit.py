@@ -114,9 +114,10 @@ def rate_limit_for_path(path: str) -> Depends:
     """Return a FastAPI dependency enforcing rate limits for a specific path."""
 
     async def _checker(request: Request) -> None:
-        if not _settings.rate_limit_enabled:
+        settings = get_security_settings()
+        if not settings.rate_limit_enabled:
             return
-        if is_health_path_or_method(path) and _settings.health_no_rate_limit:
+        if is_health_path_or_method(path) and settings.health_no_rate_limit:
             return
         identity: Identity | None = getattr(request.state, "identity", None)
         if identity is None:

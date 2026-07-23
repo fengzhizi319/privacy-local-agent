@@ -1,3 +1,5 @@
 bin/
 *.log
 /server
+# mTLS 测试证书与私钥（由 scripts/gen-certs.sh 生成，不提交）
+certs/

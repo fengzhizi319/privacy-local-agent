@@ -51,6 +51,14 @@
 
 该脚本会启动 `privacy_local_agent`（同时监听 REST 与 gRPC）和 `frontend/backend-go` 中的 Go 代理服务，访问地址为 `http://127.0.0.1:8081`。
 
+若要以 **mTLS 双向认证** 模式运行（Go 代理到 agent 的 gRPC 链路全程加密并互验证书），可执行：
+
+```bash
+./frontend/start-go-mtls.sh
+```
+
+该脚本会在证书缺失时自动调用 `frontend/backend-go/scripts/gen-certs.sh` 生成一套自签名测试证书，随后同时以 mTLS 模式启动 agent 与 Go 代理。详见 [backend-go/docs/ops.md](backend-go/docs/ops.md) 第 5 节。
+
 若要**同时启动两个后端**（Python REST + Go gRPC），以便在前端顶部 Backend Selector 中随意切换，可执行：
 
 ```bash

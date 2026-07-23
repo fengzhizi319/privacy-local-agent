@@ -55,6 +55,8 @@ frontend/backend-go/
 ├── proto/                  # 生成的 protobuf 代码
 │   ├── privacy.pb.go
 │   └── privacy_grpc.pb.go
+├── scripts/                # 运维脚本
+│   └── gen-certs.sh        # 生成 mTLS 测试证书链（CA/服务端/客户端）
 ├── docs/                     # 设计、API、测试文档
 │   ├── design.md
 │   ├── api.md
@@ -97,7 +99,11 @@ frontend/backend-go/
 
 - **认证**：`agent.Client.WithAuth` 在 gRPC 元数据中附加 `authorization: Bearer <key>`；
   通过环境变量 `PRIVACY_AGENT_API_KEY` 启用。
-- **TLS/mTLS**：当前使用 `insecure.NewCredentials()`，生产环境应替换为 TLS 证书。
+- **TLS/mTLS**：`agent.buildTransportCredentials` 根据配置选择传输凭证：
+  默认 `insecure.NewCredentials()`（本地开发）；设置 `PRIVACY_AGENT_TLS_ENABLED=true` 后
+  加载 CA 校验服务端证书、强制最低 TLS 1.2，并可选加载客户端证书/私钥完成 mTLS 双向认证
+  （`PRIVACY_AGENT_TLS_CERT_FILE` / `_KEY_FILE` / `_CA_FILE` / `_SERVER_NAME`）。
+  证书生成与一键启动见 [ops.md](ops.md) 第 5 节。
 - **CORS**：`handlers` 中添加了宽松 CORS 中间件，方便本地 Vite 开发服务器调用。
 - **日志**：使用 Gin 默认日志与标准 `log` 包；生产环境可接入结构化日志。
 
