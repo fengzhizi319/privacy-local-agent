@@ -370,6 +370,14 @@ class ModelScopeSmallNerEngine(SmallNerEngine):
                 (Defaults to DAMO Academy RaNER medical NER fine-tuned model)
         """
         self.model_id = model_id
+        # 优先使用 download_ner_model.py 下载到本地的模型仓库目录，避免推理时
+        # 再次从 ModelScope Hub 拉取（离线/内网部署友好）。
+        # (Prefer the local snapshot downloaded by download_ner_model.py to avoid
+        #  re-fetching from the ModelScope Hub at inference time.)
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        project_root = os.path.dirname(os.path.dirname(current_dir))
+        local_model_dir = os.path.join(project_root, ".models", "raner_cmeee")
+        self.local_model_dir = local_model_dir
         self.pipeline = None
         self._initialized = False
         self._init_error = None
@@ -444,11 +452,17 @@ class ModelScopeSmallNerEngine(SmallNerEngine):
             from modelscope.pipelines import pipeline
             from modelscope.utils.constant import Tasks
 
+            # 优先加载本地已下载的模型目录，否则回退至 ModelScope Hub 模型 ID。
+            # (Load the locally downloaded model directory first; fall back to the Hub ID.)
+            model_ref = self.model_id
+            if os.path.isdir(self.local_model_dir):
+                model_ref = self.local_model_dir
+
             logger.info(
                 "modelscope_ner_pipeline_loading",
-                extra={"model_id": self.model_id},
+                extra={"model_id": self.model_id, "model_ref": model_ref},
             )
-            self.pipeline = pipeline(Tasks.named_entity_recognition, model=self.model_id)
+            self.pipeline = pipeline(Tasks.named_entity_recognition, model=model_ref)
             self._initialized = True
             logger.info(
                 "modelscope_ner_engine_initialized",

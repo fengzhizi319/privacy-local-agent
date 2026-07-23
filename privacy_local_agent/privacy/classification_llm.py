@@ -89,11 +89,6 @@ class Qwen2VLClassifier(LlmClassifier):
                     f"本地模型未找到，请先运行下载脚本或下载模型至: {self.model_path}"
                 )
 
-            logger.info(
-                "qwen2vl_model_loading",
-                extra={"model_path": self.model_path, "device": device},
-            )
-
             # 检测设备，优先使用 GPU CUDA，其次为 macOS ARM 的 MPS 硬件加速，最后为 CPU
             if torch.cuda.is_available():
                 device = "cuda"
@@ -101,6 +96,11 @@ class Qwen2VLClassifier(LlmClassifier):
                 device = "mps"
             else:
                 device = "cpu"
+
+            logger.info(
+                "qwen2vl_model_loading",
+                extra={"model_path": self.model_path, "device": device},
+            )
 
             torch_dtype = torch.float16 if device == "cuda" else torch.float32
 

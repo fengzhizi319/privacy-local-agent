@@ -115,6 +115,7 @@ testpaths = ["tests"]
 markers = [
     "integration: marks tests as integration tests (deselect with '-m \"not integration\"')",
     "slow: marks tests as slow-running",
+    "real_models: marks tests that require downloaded NER/Qwen2-VL models and ML deps (run in a separate process; auto-skip when unavailable)",
 ]
 addopts = "-q --tb=short"
 

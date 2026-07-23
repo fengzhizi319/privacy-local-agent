@@ -23,6 +23,7 @@ pluggable Small-NER and LLM classifiers, and multiple format adapters
 from __future__ import annotations
 
 import json
+import os
 import time
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
@@ -245,7 +246,6 @@ class ClassificationAPI:
 
         # Step 4: Auto-select Layer-2 Small-NER engine (ONNX > ModelScope > NoOp)
         if small_ner is None:
-            import os
             current_dir = os.path.dirname(os.path.abspath(__file__))
             project_root = os.path.dirname(os.path.dirname(current_dir))
             onnx_path = os.path.join(project_root, ".models", "raner_cmeee.onnx")

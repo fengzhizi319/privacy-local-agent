@@ -1,5 +1,13 @@
 # ML 扩展依赖（ml 镜像），在 core 基础上安装
 torch>=2.2.0
-transformers>=4.38.0
+# torchvision 为 qwen-vl-utils 多模态图片预处理的运行时依赖
+torchvision>=0.17.0
+transformers>=4.45.0,<5.0
+accelerate>=0.30.0
 onnxruntime>=1.17.0
 pillow>=10.2.0
+# Qwen2-VL 多模态图片预处理（可选，缺失时自动降级为直接传图）
+qwen-vl-utils>=0.0.8
+# ModelScope Small-NER 推理后端（可选，缺失时 NER 层自动降级；datasets 为其运行时依赖）
+modelscope>=1.20.0
+datasets>=4.0.0,<=4.8.4

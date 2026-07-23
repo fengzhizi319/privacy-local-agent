@@ -169,8 +169,17 @@ def test_readyz():
     assert response.json()["status"] == "ready"
 
 
-def test_readyz_llm():
-    """测试 /readyz/llm 在默认 NoOp LLM 下返回就绪。"""
+def test_readyz_llm(monkeypatch):
+    """测试 /readyz/llm 在 LLM 就绪时返回 200。
+
+    说明：本地存在真实 Qwen2-VL 模型时，默认 LLM 为未预热的
+    Qwen2VLClassifier（is_llm_ready 为 False）；无模型时为 NoOp（恒就绪）。
+    为使本用例不依赖运行环境是否下载了模型，这里 monkeypatch is_llm_ready
+    为 True，确定性地验证“就绪 → 200”分支（与 test_readyz_llm_not_ready 对称）。
+    """
+    from privacy_local_agent.main import service
+
+    monkeypatch.setattr(service.classification_api, "is_llm_ready", lambda: True)
     response = client.get("/readyz/llm")
     assert response.status_code == 200
     assert response.json()["llm_ready"] is True
