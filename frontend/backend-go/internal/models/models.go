@@ -36,10 +36,15 @@ type ProxyRequest struct {
 }
 
 // ProxyResponse is the unified JSON wrapper returned by /api/proxy.
+//
+// Via / Protocol 标识处理本请求的控制台后端（go-grpc）与其和 agent
+// 的通信协议（gRPC），供前端展示，便于验证后端切换是否生效。
 type ProxyResponse struct {
-	Status     int   `json:"status"`
-	DurationMs int64 `json:"duration_ms"`
-	Data       any   `json:"data"`
+	Status     int    `json:"status"`
+	DurationMs int64  `json:"duration_ms"`
+	Data       any    `json:"data"`
+	Via        string `json:"via"`
+	Protocol   string `json:"protocol"`
 }
 
 // ConsoleHealth is returned by GET /api/health.
@@ -49,6 +54,8 @@ type ConsoleHealth struct {
 	AgentURL  string `json:"agent_url"`
 	LatencyMs *int64 `json:"latency_ms,omitempty"`
 	Error     string `json:"error,omitempty"`
+	Via       string `json:"via"`
+	Protocol  string `json:"protocol"`
 }
 
 // SamplesResponse wraps the list of endpoint samples.
@@ -75,10 +82,12 @@ type BatchResultItem struct {
 
 // BatchResponse is the aggregated result returned by /api/batch.
 type BatchResponse struct {
-	Total   int               `json:"total"`
-	Passed  int               `json:"passed"`
-	Failed  int               `json:"failed"`
-	Results []BatchResultItem `json:"results"`
+	Total    int               `json:"total"`
+	Passed   int               `json:"passed"`
+	Failed   int               `json:"failed"`
+	Results  []BatchResultItem `json:"results"`
+	Via      string            `json:"via"`
+	Protocol string            `json:"protocol"`
 }
 
 // UploadData 是 /api/upload 包装在 ProxyResponse.Data 中的处理结果。

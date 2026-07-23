@@ -28,6 +28,14 @@ import (
 	pb "github.com/fengzhizi319/privacy-local-agent/frontend/backend-go/proto"
 )
 
+// 本控制台后端的身份标识，随每个响应下发给前端，
+// 用于在界面上明确展示“当前请求由哪个后端、以何种协议与 agent 通信”，
+// 从而让 Python REST / Go gRPC 两种通信方式的切换可被直观验证。
+const (
+	backendVia    = "go-grpc"
+	agentProtocol = "gRPC"
+)
+
 // Server aggregates the dependencies required by HTTP handlers.
 //
 // client 是对 agent 的 gRPC 客户端封装；
@@ -87,11 +95,15 @@ func (s *Server) registerStatic(r *gin.Engine) {
 	}
 
 	// SPA fallback：未匹配的路由（除 /api 外）均返回 index.html。
+	// index.html 不带内容哈希，必须禁止浏览器缓存（no-cache），
+	// 否则重新构建前端后浏览器仍会加载旧版本；
+	// 带哈希的 /assets/* 资源则由浏览器正常缓存（内容变则 URL 变）。
 	r.NoRoute(func(c *gin.Context) {
 		if strings.HasPrefix(c.Request.URL.Path, "/api/") {
 			c.JSON(http.StatusNotFound, gin.H{"detail": "Not Found", "status": http.StatusNotFound})
 			return
 		}
+		c.Header("Cache-Control", "no-cache, no-store, must-revalidate")
 		c.File(indexPath)
 	})
 	log.Printf("Console UI enabled, serving static files from %s", distDir)
@@ -132,6 +144,8 @@ func (s *Server) Health(c *gin.Context) {
 			AgentURL:  s.cfg.AgentAddress(),
 			LatencyMs: &latency,
 			Error:     err.Error(),
+			Via:       backendVia,
+			Protocol:  agentProtocol,
 		})
 		return
 	}
@@ -141,6 +155,8 @@ func (s *Server) Health(c *gin.Context) {
 		Agent:     map[string]string{"status": resp.Status, "namespace": resp.Namespace},
 		AgentURL:  s.cfg.AgentAddress(),
 		LatencyMs: &latency,
+		Via:       backendVia,
+		Protocol:  agentProtocol,
 	})
 }
 
@@ -194,6 +210,8 @@ func (s *Server) Proxy(c *gin.Context) {
 		Status:     http.StatusOK,
 		DurationMs: duration,
 		Data:       data,
+		Via:        backendVia,
+		Protocol:   agentProtocol,
 	})
 }
 
@@ -242,10 +260,12 @@ func (s *Server) Batch(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, models.BatchResponse{
-		Total:   len(results),
-		Passed:  passed,
-		Failed:  len(results) - passed,
-		Results: results,
+		Total:    len(results),
+		Passed:   passed,
+		Failed:   len(results) - passed,
+		Results:  results,
+		Via:      backendVia,
+		Protocol: agentProtocol,
 	})
 }
 
@@ -388,6 +408,8 @@ func (s *Server) Upload(c *gin.Context) {
 			RowsOut:   rowsOut,
 			Result:    result,
 		},
+		Via:      backendVia,
+		Protocol: agentProtocol,
 	})
 }
 

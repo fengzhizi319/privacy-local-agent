@@ -1,0 +1,6 @@
+# pnpm 11 项目级配置（v11 起 .npmrc 仅用于认证/注册源，其余配置需放在此文件）
+# 关闭供应链 minimumReleaseAge 限制（本地测试控制台，lockfile 由团队管理）
+minimumReleaseAge: 0
+# 批准 esbuild 的安装脚本（vite 构建必需）
+allowBuilds:
+  esbuild: true

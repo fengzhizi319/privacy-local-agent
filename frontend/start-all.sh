@@ -7,12 +7,20 @@
 #   - Python REST (8080)：经 Python FastAPI 代理调用 agent REST 接口；
 #   - Go gRPC    (8081)：经 Go 代理把请求转换为 gRPC 调用 agent。
 #
-# 用法：./frontend/start-all.sh
+# 用法：./frontend/start-all.sh [--rebuild]
+#   --rebuild  强制重新编译前端、后端与 agent（即使构建产物已存在）
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+REBUILD=false
+for arg in "$@"; do
+    case "$arg" in
+        --rebuild) REBUILD=true ;;
+    esac
+done
 
 AGENT_VENV="$PROJECT_ROOT/.venv"
 BACKEND_VENV="$SCRIPT_DIR/backend/.venv"
@@ -23,7 +31,7 @@ GO_CONSOLE_URL="http://127.0.0.1:8081"
 
 # ── 自动补全缺失的依赖 / 构建产物 ─────────────────────────────────────
 
-# 1. Agent 虚拟环境：缺失时自动创建并安装项目依赖
+# 1. Agent 虚拟环境：缺失或 --rebuild 时自动创建并安装项目依赖
 if [[ ! -d "$AGENT_VENV" ]]; then
     echo "未找到 agent 虚拟环境，自动创建并安装依赖：$AGENT_VENV"
     python3 -m venv "$AGENT_VENV"
@@ -34,9 +42,17 @@ if [[ ! -d "$AGENT_VENV" ]]; then
         pip install -e .
     )
     echo "agent 依赖安装完成。"
+elif [[ "$REBUILD" == true ]]; then
+    echo "--rebuild：重新安装 agent 依赖..."
+    (
+        source "$AGENT_VENV/bin/activate"
+        cd "$PROJECT_ROOT"
+        pip install -e .
+    )
+    echo "agent 依赖重装完成。"
 fi
 
-# 2. Python 控制台后端虚拟环境：缺失时自动创建并安装依赖
+# 2. Python 控制台后端虚拟环境：缺失或 --rebuild 时自动创建并安装依赖
 if [[ ! -d "$BACKEND_VENV" ]]; then
     echo "未找到 Python 后端虚拟环境，自动创建并安装依赖：$BACKEND_VENV"
     python3 -m venv "$BACKEND_VENV"
@@ -46,6 +62,13 @@ if [[ ! -d "$BACKEND_VENV" ]]; then
         pip install -r "$SCRIPT_DIR/backend/requirements.txt"
     )
     echo "Python 后端依赖安装完成。"
+elif [[ "$REBUILD" == true ]]; then
+    echo "--rebuild：重新安装 Python 后端依赖..."
+    (
+        source "$BACKEND_VENV/bin/activate"
+        pip install -r "$SCRIPT_DIR/backend/requirements.txt"
+    )
+    echo "Python 后端依赖重装完成。"
 fi
 
 # 3. Go 后端目录与工具链检查
@@ -59,7 +82,11 @@ if ! command -v go >/dev/null 2>&1; then
     exit 1
 fi
 
-# 4. 前端构建产物：缺失时自动执行 install + build（两个后端均基于该产物提供 UI）
+# 4. 前端构建产物：缺失或使用 --rebuild 时自动执行 install + build（两个后端均基于该产物提供 UI）
+if [[ "$REBUILD" == true && -d "$SCRIPT_DIR/web/dist" ]]; then
+    echo "--rebuild：删除旧的前端构建产物并重新构建..."
+    rm -rf "$SCRIPT_DIR/web/dist"
+fi
 if [[ ! -d "$SCRIPT_DIR/web/dist" ]]; then
     echo "未找到前端构建产物，自动构建：$SCRIPT_DIR/web/dist"
     (

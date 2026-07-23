@@ -35,6 +35,12 @@ from .client import agent_client
 from .config import settings
 from .fixtures.samples import get_samples
 
+# 本控制台后端的身份标识，随每个响应下发给前端，
+# 用于在界面上明确展示“当前请求由哪个后端、以何种协议与 agent 通信”，
+# 从而让 Python REST / Go gRPC 两种通信方式的切换可被直观验证。
+BACKEND_VIA = "python-rest"
+AGENT_PROTOCOL = "REST"
+
 
 class ProxyRequest(BaseModel):
     """通用代理端点 ``POST /api/proxy`` 的请求体。
@@ -65,6 +71,10 @@ class ProxyResponse(BaseModel):
     status: int
     duration_ms: float
     data: Any
+    # 处理本请求的控制台后端标识（python-rest）与其和 agent 的通信协议（REST），
+    # 供前端展示，便于验证后端切换是否生效。
+    via: str = Field(default=BACKEND_VIA)
+    protocol: str = Field(default=AGENT_PROTOCOL)
 
 
 class BatchRequestItem(BaseModel):
@@ -115,6 +125,9 @@ class BatchResponse(BaseModel):
     passed: int
     failed: int
     results: List[BatchResultItem]
+    # 同 ProxyResponse：标识处理请求的后端与通信协议。
+    via: str = Field(default=BACKEND_VIA)
+    protocol: str = Field(default=AGENT_PROTOCOL)
 
 
 class LbBackend(BaseModel):
@@ -224,6 +237,8 @@ async def health():
             "agent": agent_health,
             "agent_url": settings.privacy_agent_url,
             "latency_ms": round(duration_ms, 2),
+            "via": BACKEND_VIA,
+            "protocol": AGENT_PROTOCOL,
         }
     except HTTPException as exc:
         return JSONResponse(
@@ -233,6 +248,8 @@ async def health():
                 "agent": "unreachable",
                 "agent_url": settings.privacy_agent_url,
                 "error": exc.detail,
+                "via": BACKEND_VIA,
+                "protocol": AGENT_PROTOCOL,
             },
         )
 
@@ -498,10 +515,17 @@ if static_dir.exists() and static_dir.is_dir():
 
         该路由注册在最后，优先级最低，不会遮挡 ``/api/*`` 与 ``/assets/*``。
         index.html 不存在时返回 404（前端未构建）。
+
+        index.html 不带内容哈希，必须禁止浏览器缓存（no-cache），
+        否则重新构建前端后浏览器仍会加载旧版本。
+        带哈希的 /assets/* 资源则由浏览器正常缓存（内容变则 URL 变）。
         """
         index_file = static_dir / "index.html"
         if index_file.exists():
-            return FileResponse(str(index_file))
+            return FileResponse(
+                str(index_file),
+                headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
+            )
         raise HTTPException(status_code=404, detail="Frontend not built")
 
 

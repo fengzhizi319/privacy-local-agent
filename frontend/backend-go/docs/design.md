@@ -15,11 +15,10 @@
 
 ## 2. 总体架构
 
-```text
-┌─────────────────┐     HTTP/JSON      ┌──────────────────┐     gRPC     ┌─────────────────────┐
-│  React 前端     │ ──────────────────> │  Go gRPC 代理后端 │ ──────────> │ privacy-local-agent │
-│  (测试控制台)    │                     │  (frontend/backend-go)            │  (Python gRPC)      │
-└─────────────────┘                     └──────────────────┘              └─────────────────────┘
+```mermaid
+graph LR
+    A[React 前端<br/>测试控制台] -->|HTTP/JSON| B[Go gRPC 代理后端<br/>frontend/backend-go]
+    B -->|gRPC - Python| C[privacy-local-agent]
 ```
 
 Go 代理后端本身不实现隐私算法，只负责：

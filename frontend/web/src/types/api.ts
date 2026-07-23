@@ -41,6 +41,10 @@ export interface ProxyResponse {
   /** 转发耗时（毫秒） */
   duration_ms: number;
   data: any;
+  /** 处理本请求的控制台后端标识（python-rest / go-grpc） */
+  via?: string;
+  /** 该后端与 agent 的通信协议（REST / gRPC） */
+  protocol?: string;
 }
 
 /** 后端健康检查响应（/api/health）。 */
@@ -51,6 +55,10 @@ export interface ConsoleHealth {
   agent_url: string;
   latency_ms?: number;
   error?: string;
+  /** 处理本请求的控制台后端标识（python-rest / go-grpc） */
+  via?: string;
+  /** 该后端与 agent 的通信协议（REST / gRPC） */
+  protocol?: string;
 }
 
 /** 批量测试：单个请求项。 */
@@ -76,6 +84,10 @@ export interface BatchResponse {
   passed: number;
   failed: number;
   results: BatchResultItem[];
+  /** 处理本请求的控制台后端标识（python-rest / go-grpc） */
+  via?: string;
+  /** 该后端与 agent 的通信协议（REST / gRPC） */
+  protocol?: string;
 }
 
 /** 请求历史记录（存于 localStorage）。 */
@@ -109,6 +121,10 @@ export interface UploadResponse {
   status: number;
   duration_ms: number;
   data: UploadData;
+  /** 处理本请求的控制台后端标识（python-rest / go-grpc） */
+  via?: string;
+  /** 该后端与 agent 的通信协议（REST / gRPC） */
+  protocol?: string;
 }
 
 /** 负载均衡测试：单个目标后端节点。 */

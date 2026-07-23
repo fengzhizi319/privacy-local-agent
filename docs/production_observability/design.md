@@ -15,21 +15,17 @@
 
 ## 3. 架构设计
 
-```text
-                Request
-                   │
-    ┌──────────────┼──────────────┐
-    ▼              ▼              ▼
- REST Router   gRPC Interceptor  /metrics
-    │              │              │
-    ▼              ▼              ▼
-RequestContext  RequestContext  prometheus-client
-    │              │
-    ▼              ▼
-Structured Log   Structured Log
-    │
-    ▼
-OpenTelemetry (optional)
+```mermaid
+graph TD
+    REQ[Request] --> REST[REST Router]
+    REQ --> GRPC[gRPC Interceptor]
+    REQ --> METRICS[/metrics]
+    REST --> RC1[RequestContext]
+    GRPC --> RC2[RequestContext]
+    METRICS --> PC[prometheus-client]
+    RC1 --> SL1[Structured Log]
+    RC2 --> SL2[Structured Log]
+    SL1 --> OTEL[OpenTelemetry - optional]
 ```
 
 可观测层贯穿 REST 与 gRPC：

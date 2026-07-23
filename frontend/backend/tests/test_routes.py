@@ -48,6 +48,9 @@ def test_health_ok(client: TestClient, mock_agent_client: AsyncMock) -> None:
     assert body["agent"]["status"] == "ok"
     assert body["agent_url"] == "http://127.0.0.1:8079"
     assert "latency_ms" in body
+    # 后端身份标识：Python 后端恒为 python-rest / REST，供前端验证切换生效。
+    assert body["via"] == "python-rest"
+    assert body["protocol"] == "REST"
 
 
 def test_health_agent_unreachable(client: TestClient, mock_agent_client: AsyncMock) -> None:
@@ -63,6 +66,9 @@ def test_health_agent_unreachable(client: TestClient, mock_agent_client: AsyncMo
     assert body["backend"] == "ok"
     assert body["agent"] == "unreachable"
     assert "error" in body
+    # 即使 agent 不可达，身份标识仍应下发。
+    assert body["via"] == "python-rest"
+    assert body["protocol"] == "REST"
 
 
 def test_samples(client: TestClient) -> None:
@@ -94,6 +100,9 @@ def test_proxy_json(client: TestClient, mock_agent_client: AsyncMock) -> None:
     assert body["status"] == 200
     assert body["data"]["result"] == "a***@example.com"
     assert "duration_ms" in body
+    # 后端身份标识随代理响应一同下发。
+    assert body["via"] == "python-rest"
+    assert body["protocol"] == "REST"
 
 
 def test_proxy_invalid_body(client: TestClient) -> None:

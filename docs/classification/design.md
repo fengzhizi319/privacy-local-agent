@@ -31,18 +31,13 @@
 
 ### 3.1 三层漏斗分类架构
 
-```text
-Layer 1 RULE        → 规则匹配，置信度 1.0
-   ↓ (level <= L3 或未命中且启用 Small-NER)
-Layer 2 SMALL_NER   → 医学实体识别，可选升级 / 人工复核
-   ↓ (启用 LLM 或置信度 < 0.6)
-Layer 3 LLM         → 零样本语义分类，结构化 JSON 输出
-   ↓
-Composite Rules     → 跨字段组合后处理，升级敏感度
-   ↓
-manual_override     → 字段级最终等级覆盖
-   ↓
-Review Store        → 收集 needsHumanReview 样本
+```mermaid
+graph TD
+    A[Layer 1 RULE<br/>规则匹配，置信度 1.0] -->|level ≤ L3 或未命中且启用 Small-NER| B[Layer 2 SMALL_NER<br/>医学实体识别，可选升级/人工复核]
+    B -->|启用 LLM 或置信度 < 0.6| C[Layer 3 LLM<br/>零样本语义分类，结构化 JSON 输出]
+    C --> D[Composite Rules<br/>跨字段组合后处理，升级敏感度]
+    D --> E[manual_override<br/>字段级最终等级覆盖]
+    E --> F[Review Store<br/>收集 needsHumanReview 样本]
 ```
 
 #### 3.1.1 规则引擎（Layer 1）
@@ -144,46 +139,33 @@ manual_override > request params > YAML profile > template defaults > default
 
 ### 4.1 整体架构
 
-```text
-REST /v1/privacy/classify/*          gRPC ClassifyField/ClassifyRecord/ClassifyTable
-            │                                    │
-            └────────────┬───────────────────────┘
-                         ▼
-      privacy_local_agent.classification_service.ClassificationService
-                         │
-                         ▼
-           privacy_local_agent.privacy.classification.ClassificationAPI
-                         │
-         ┌───────────────┼───────────────┬───────────────┬───────────────┐
-         ▼               ▼               ▼               ▼               ▼
-   DefaultRuleEngine  Small-NER        LLM Classifier  CompositeRules  ReviewStore
-   (Layer 1 RULE)     (Layer 2)        (Layer 3)       (Post-process)  (Feedback)
-         │               │               │               │               │
-         └───────────────┴───────────────┴───────────────┘               │
-                         ▼                                               │
-              SecurityTag / Result Models                                 │
-                         ▼                                               │
-              Sync Response / Async Job                                   │
-                         ▼                                               │
-                   Review Export → Fine-tuning
+```mermaid
+graph TD
+    REST["REST /v1/privacy/classify/*"] --> CS
+    GRPC["gRPC ClassifyField/ClassifyRecord/ClassifyTable"] --> CS
+    CS[ClassificationService] --> API[ClassificationAPI]
+    API --> DRE[DefaultRuleEngine<br/>Layer 1 RULE]
+    API --> SN[Small-NER<br/>Layer 2]
+    API --> LLM[LLM Classifier<br/>Layer 3]
+    API --> CR[CompositeRules<br/>Post-process]
+    API --> RS[ReviewStore<br/>Feedback]
+    DRE --> SM[SecurityTag / Result Models]
+    SN --> SM
+    LLM --> SM
+    CR --> SM
+    SM --> SR[Sync Response / Async Job]
+    RS --> SR
+    SR --> RE[Review Export → Fine-tuning]
 ```
 
 ### 4.2 异步推理架构
 
-```text
-Client → POST /v1/privacy/classify/table/async
-              │
-              ▼
-   AsyncLlmManager.submit(classify_table, ...)
-              │
-              ▼
-   ThreadPoolExecutor.submit(...)
-              │
-              ▼
-   Memory job store[job_id] = ClassificationJob
-              │
-              ▼
-   Client → GET /v1/privacy/classify/jobs/{job_id}
+```mermaid
+graph TD
+    A["Client → POST /v1/privacy/classify/table/async"] --> B[AsyncLlmManager.submit]
+    B --> C[ThreadPoolExecutor.submit]
+    C --> D["Memory job_store[job_id] = ClassificationJob"]
+    D --> E["Client → GET /v1/privacy/classify/jobs/{job_id}"]
 ```
 
 - 异步任务不阻塞 REST/gRPC 主线程。
@@ -192,20 +174,12 @@ Client → POST /v1/privacy/classify/table/async
 
 ### 4.3 复核闭环架构
 
-```text
-classify_table/record
-       │
-       ▼
-needs_human_review=True?
-       │
-       ▼
-ReviewStore.add(record_result)
-       │
-       ▼
-POST /v1/privacy/classify/review/confirm
-       │
-       ▼
-POST /v1/privacy/classify/review/export → JSONL/CSV → Fine-tuning
+```mermaid
+graph TD
+    A[classify_table/record] --> B{needs_human_review=True?}
+    B --> C[ReviewStore.add]
+    C --> D["POST /v1/privacy/classify/review/confirm"]
+    D --> E["POST /v1/privacy/classify/review/export → JSONL/CSV → Fine-tuning"]
 ```
 
 ## 5. 数据模型

@@ -17,7 +17,10 @@ interface HeaderProps {
   onHome?: () => void;
 }
 
-/** 健康状态徽章：绿色圆点表示正常，红色表示不可达。 */
+/** 健康状态徽章：绿色圆点表示正常，红色表示不可达。
+ *
+ * 同时展示后端与 agent 的通信协议（REST / gRPC），
+ * 切换 Python REST / Go gRPC 后该标识随之变化，可直观验证切换生效。 */
 function HealthPill({ health, loading }: { health: ConsoleHealth | null; loading: boolean }) {
   if (loading && !health) {
     return (
@@ -36,10 +39,15 @@ function HealthPill({ health, loading }: { health: ConsoleHealth | null; loading
         'inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-medium',
         ok ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-700',
       ].join(' ')}
-      title={health.agent_url}
+      title={`${health.agent_url}${health.protocol ? ` · ${health.protocol}` : ''}`}
     >
       <span className={['h-1.5 w-1.5 rounded-full', ok ? 'bg-emerald-500' : 'bg-red-500'].join(' ')} />
       Agent {ok ? '正常' : '不可达'}
+      {health.protocol && (
+        <span className="ml-0.5 rounded bg-white/60 px-1 py-px text-[10px] font-semibold">
+          {health.protocol}
+        </span>
+      )}
     </span>
   );
 }

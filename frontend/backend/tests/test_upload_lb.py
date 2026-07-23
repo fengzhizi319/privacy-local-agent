@@ -59,6 +59,9 @@ def test_upload_forwards_multipart(client: TestClient, mock_multipart: AsyncMock
     assert body["data"]["operation"] == "mask_dataframe"
     assert body["data"]["rows_out"] == 2
     assert "duration_ms" in body
+    # 后端身份标识随上传响应一同下发，供前端验证切换生效。
+    assert body["via"] == "python-rest"
+    assert body["protocol"] == "REST"
 
     # 验证转发参数：目标路径与表单字段
     args, kwargs = mock_multipart.call_args

@@ -135,14 +135,34 @@ export default function ResponsePanel({ response, error, duration, path = 'respo
 
   // 成功状态
   const jsonText = JSON.stringify(response?.data, null, 2);
+  // 后端身份标识：via 为处理请求的控制台后端，protocol 为其与 agent 的通信协议。
+  // 切换 Python REST / Go gRPC 后，该徽章随之变化，可直观验证切换生效。
+  const via = response?.via;
+  const protocol = response?.protocol;
   return (
     <div className="flex h-full flex-col">
       <div className="flex items-center justify-between border-b border-gray-100 px-4 py-2.5">
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-semibold text-emerald-700">
             <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
             {response?.status ?? 200}
           </span>
+          {via && (
+            <span
+              className="inline-flex items-center rounded-full bg-indigo-50 px-2 py-0.5 text-xs font-semibold text-indigo-700"
+              title="处理本请求的控制台后端"
+            >
+              {via}
+            </span>
+          )}
+          {protocol && (
+            <span
+              className="inline-flex items-center rounded-full bg-sky-50 px-2 py-0.5 text-xs font-semibold text-sky-700"
+              title="后端与 agent 的通信协议"
+            >
+              {protocol}
+            </span>
+          )}
           <span className="text-xs text-gray-400">
             {response?.duration_ms !== undefined
               ? `${response.duration_ms.toFixed(2)} ms`

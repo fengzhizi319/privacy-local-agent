@@ -26,18 +26,17 @@
 
 ## 4. 总体架构
 
-```text
-┌─────────────────────────────────────────────────────────────┐
-│                    privacy-local-agent                       │
-│  ┌──────────────┐  ┌──────────────┐  ┌─────────────────────┐│
-│  │   FastAPI    │  │    gRPC      │  │   Security Layer    ││
-│  │   (REST)     │  │   Server     │  │ config/tls/auth/rl  ││
-│  └──────┬───────┘  └──────┬───────┘  └─────────────────────┘│
-│         │                  │                                 │
-│    TLS + Auth + RL    TLS + Auth + RL                       │
-│         │                  │                                 │
-│      /v1/privacy/*      PrivacyService.*                    │
-└─────────────────────────────────────────────────────────────┘
+```mermaid
+graph TD
+    subgraph privacy-local-agent
+        REST[FastAPI<br/>REST]
+        GRPC[gRPC Server]
+        SEC[Security Layer<br/>config/tls/auth/rl]
+        REST --> TLS1[TLS + Auth + RL]
+        GRPC --> TLS2[TLS + Auth + RL]
+        TLS1 --> R1["/v1/privacy/*"]
+        TLS2 --> R2["PrivacyService.*"]
+    end
 ```
 
 安全层对 REST 与 gRPC 共享同一套配置与身份模型：

@@ -145,6 +145,10 @@ func TestHealthHandler(t *testing.T) {
 	if !ok || agent["status"] != "healthy" {
 		t.Fatalf("unexpected agent status: %+v", body["agent"])
 	}
+	// 后端身份标识：Go 后端恒为 go-grpc / gRPC，供前端验证切换生效。
+	if body["via"] != "go-grpc" || body["protocol"] != "gRPC" {
+		t.Fatalf("expected via=go-grpc protocol=gRPC, got via=%v protocol=%v", body["via"], body["protocol"])
+	}
 }
 
 func TestSamplesHandler(t *testing.T) {
@@ -209,6 +213,10 @@ func TestProxyHandlerMask(t *testing.T) {
 	data, ok := body["data"].(map[string]any)
 	if !ok || data["result"] != "***@example.com" {
 		t.Fatalf("unexpected proxy response: %+v", body)
+	}
+	// 后端身份标识随代理响应一同下发。
+	if body["via"] != "go-grpc" || body["protocol"] != "gRPC" {
+		t.Fatalf("expected via=go-grpc protocol=gRPC, got via=%v protocol=%v", body["via"], body["protocol"])
 	}
 }
 
@@ -340,10 +348,12 @@ func TestBatchHandler(t *testing.T) {
 	}
 
 	var body struct {
-		Total   int `json:"total"`
-		Passed  int `json:"passed"`
-		Failed  int `json:"failed"`
-		Results []struct {
+		Total    int `json:"total"`
+		Passed   int `json:"passed"`
+		Failed   int `json:"failed"`
+		Via      string `json:"via"`
+		Protocol string `json:"protocol"`
+		Results  []struct {
 			Path   string `json:"path"`
 			Status int    `json:"status"`
 			Error  string `json:"error"`
@@ -354,6 +364,9 @@ func TestBatchHandler(t *testing.T) {
 	}
 	if body.Total != 2 || body.Passed != 1 || body.Failed != 1 {
 		t.Fatalf("unexpected batch summary: total=%d passed=%d failed=%d", body.Total, body.Passed, body.Failed)
+	}
+	if body.Via != "go-grpc" || body.Protocol != "gRPC" {
+		t.Fatalf("expected via=go-grpc protocol=gRPC, got via=%q protocol=%q", body.Via, body.Protocol)
 	}
 	if body.Results[0].Status != http.StatusOK {
 		t.Fatalf("expected first result 200, got %d", body.Results[0].Status)
@@ -440,8 +453,10 @@ func TestUploadHandlerMask(t *testing.T) {
 	}
 
 	var body struct {
-		Status int `json:"status"`
-		Data   struct {
+		Status   int    `json:"status"`
+		Via      string `json:"via"`
+		Protocol string `json:"protocol"`
+		Data     struct {
 			Operation string              `json:"operation"`
 			RowsIn    int                 `json:"rows_in"`
 			RowsOut   int                 `json:"rows_out"`
@@ -453,6 +468,9 @@ func TestUploadHandlerMask(t *testing.T) {
 	}
 	if body.Data.Operation != "mask_dataframe" || body.Data.RowsIn != 2 || body.Data.RowsOut != 2 {
 		t.Fatalf("unexpected upload data: %+v", body.Data)
+	}
+	if body.Via != "go-grpc" || body.Protocol != "gRPC" {
+		t.Fatalf("expected via=go-grpc protocol=gRPC, got via=%q protocol=%q", body.Via, body.Protocol)
 	}
 	if body.Data.Result[0]["email"] != "a***@example.com" {
 		t.Fatalf("unexpected masked result: %+v", body.Data.Result)
