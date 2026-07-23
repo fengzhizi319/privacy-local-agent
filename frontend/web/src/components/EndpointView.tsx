@@ -13,6 +13,7 @@ import { loadHistory, addHistory, removeHistory, clearHistory } from '@/lib/hist
 import { Icon } from '@/components/icons';
 import ResponsePanel from '@/components/ResponsePanel';
 import HistoryPanel from '@/components/HistoryPanel';
+import ClassifyCasePanel from '@/components/ClassifyCasePanel';
 
 interface EndpointViewProps {
   sample: EndpointSample;
@@ -116,6 +117,29 @@ export default function EndpointView({ sample, onBack, agentUrl }: EndpointViewP
     setMethod(sample.method);
     setBodyText(formatJson(sample.body ?? {}));
     setResponse(null);
+    setError(null);
+  };
+
+  // 是否为单字段分类端点：仅此端点提供「文本 / 图片病例」快捷输入。
+  const isClassifyField = path.includes('/v1/privacy/classify/field');
+
+  /**
+   * 将选中的病例值回填到请求体 ``value`` 字段。
+   *
+   * 图片为 base64 data URI，field_name 设为 ``medical_image``；
+   * 文本则设为 ``medical_text``，保证请求语义一致。其余字段尽量保留。
+   */
+  const applyCaseValue = (value: string, isImage: boolean) => {
+    let obj: Record<string, any> = {};
+    try {
+      obj = JSON.parse(bodyText);
+    } catch {
+      obj = {};
+    }
+    obj.field_name = isImage ? 'medical_image' : 'medical_text';
+    obj.value = value;
+    if (obj.params === undefined) obj.params = {};
+    setBodyText(JSON.stringify(obj, null, 2));
     setError(null);
   };
 
@@ -232,6 +256,7 @@ export default function EndpointView({ sample, onBack, agentUrl }: EndpointViewP
           </div>
 
           <div className="flex flex-1 flex-col overflow-hidden p-4">
+            {isClassifyField && <ClassifyCasePanel onApply={applyCaseValue} />}
             <textarea
               value={bodyText}
               onChange={(e) => setBodyText(e.target.value)}

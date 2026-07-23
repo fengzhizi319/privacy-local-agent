@@ -30,6 +30,9 @@ Thumbs.db
 # Downloaded models
 .models/
 
+# Downloaded CJK fonts (used by scripts/gen_medical_images.py)
+.fonts/
+
 # Local tooling
 .bin/
 

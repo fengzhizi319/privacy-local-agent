@@ -194,7 +194,7 @@ func List() []models.EndpointSample {
 		// Classification
 		{
 			Method: "POST", Path: "/v1/privacy/classify/field", Label: "Classify Field", Category: "Classification",
-			Description: "单字段分类",
+			Description: "单字段分类（控制台支持一键填入文本 / 图片病例，图片走多模态大模型 OCR 定级）",
 			Body: raw(`{"field_name":"email","value":"alice@example.com","params_json":"{}"}`), Backend: "grpc",
 		},
 		{
