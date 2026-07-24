@@ -21,9 +21,9 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
 
-	"github.com/fengzhizi319/privacy-local-agent/frontend/backend-go/internal/agent"
-	"github.com/fengzhizi319/privacy-local-agent/frontend/backend-go/internal/config"
-	pb "github.com/fengzhizi319/privacy-local-agent/frontend/backend-go/proto"
+	"github.com/fengzhizi319/privacy-local-agent/console/backend-go/internal/agent"
+	"github.com/fengzhizi319/privacy-local-agent/console/backend-go/internal/config"
+	pb "github.com/fengzhizi319/privacy-local-agent/console/backend-go/proto"
 )
 
 // testPrivacyServer 是一个只实现 Health 和 Mask 的伪造 gRPC 服务器。

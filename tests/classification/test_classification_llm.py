@@ -8,6 +8,7 @@ import os
 import sys
 from io import BytesIO
 from unittest.mock import MagicMock, patch
+
 import pytest
 
 # 模拟 torch 模块以在无 PyTorch 环境下支持单元测试运行
@@ -21,8 +22,10 @@ try:
 except ImportError:
     HAS_PILLOW = False
 
-from privacy_local_agent.privacy.classification.classification_llm import Qwen2VLClassifier
-from privacy_local_agent.privacy.classification.classification_models import SensitivityLevel
+# The following imports must stay after the torch mock and Pillow availability
+# check so that heavy ML modules are stubbed/optional handling is applied.
+from privacy_local_agent.privacy.classification.classification_llm import Qwen2VLClassifier  # noqa: E402
+from privacy_local_agent.privacy.classification.classification_models import SensitivityLevel  # noqa: E402
 
 
 @pytest.mark.skipif(not HAS_PILLOW, reason="需要 Pillow 库来测试图像加载与解码")
@@ -84,7 +87,7 @@ def test_classify_success(mock_lazy_init):
     mock_processor.return_value = {"input_ids": MagicMock()}
     # 模拟大模型输出标准的 JSON 定级响应
     mock_processor.batch_decode.return_value = [
-        '{\n  "final_level": "L4",\n  "sub_category": "MEDICAL_HIV",\n  "confidence": 0.95,\n  "reasoning": "含有抗艾滋病用药，确认为L4",\n  "needs_human_review": false\n}'
+        '{\n  "final_level": "L4",\n  "sub_category": "MEDICAL_HIV",\n  "confidence": 0.95,\n  "reasoning": "含有抗艾滋病用药，确认为L4",\n  "needs_human_review": false\n}'  # noqa: E501
     ]
 
     classifier._model = mock_model
@@ -122,10 +125,10 @@ def test_classify_handwritten_medical_note(mock_lazy_init):
     mock_processor = MagicMock()
     mock_processor.apply_chat_template.return_value = "<prompt>"
     mock_processor.return_value = {"input_ids": MagicMock()}
-    
+
     # 模拟手写病历识别出的 JSON 返回结构，识别出的手写字迹包含发热及扁桃体炎诊断
     mock_processor.batch_decode.return_value = [
-        '{\n  "final_level": "L3",\n  "sub_category": "MEDICAL_OUTPATIENT",\n  "confidence": 0.90,\n  "reasoning": "OCR 识别出手写病历字迹：主诉发热3天，诊断为急性扁桃体炎，签名包含医生李某。判定为普通门诊诊疗记录，定级为 L3 级中风险数据",\n  "needs_human_review": false\n}'
+        '{\n  "final_level": "L3",\n  "sub_category": "MEDICAL_OUTPATIENT",\n  "confidence": 0.90,\n  "reasoning": "OCR 识别出手写病历字迹：主诉发热3天，诊断为急性扁桃体炎，签名包含医生李某。判定为普通门诊诊疗记录，定级为 L3 级中风险数据",\n  "needs_human_review": false\n}'  # noqa: E501
     ]
 
     classifier._model = mock_model
@@ -152,10 +155,10 @@ def test_classify_printed_structured_report(mock_lazy_init):
     mock_processor = MagicMock()
     mock_processor.apply_chat_template.return_value = "<prompt>"
     mock_processor.return_value = {"input_ids": MagicMock()}
-    
+
     # 模拟表格排版印刷报告的 JSON 返回结构，识别出白细胞等化验常规指标
     mock_processor.batch_decode.return_value = [
-        '{\n  "final_level": "L3",\n  "sub_category": "MEDICAL_LAB_REPORT",\n  "confidence": 0.94,\n  "reasoning": "OCR 识别出印刷体血常规结构化表格：白细胞计数 11.2 (10^9/L)，高于参考区间，判定为常规检验指标数值，定级为 L3 级中风险数据",\n  "needs_human_review": false\n}'
+        '{\n  "final_level": "L3",\n  "sub_category": "MEDICAL_LAB_REPORT",\n  "confidence": 0.94,\n  "reasoning": "OCR 识别出印刷体血常规结构化表格：白细胞计数 11.2 (10^9/L)，高于参考区间，判定为常规检验指标数值，定级为 L3 级中风险数据",\n  "needs_human_review": false\n}'  # noqa: E501
     ]
 
     classifier._model = mock_model
@@ -176,8 +179,6 @@ def test_classify_printed_structured_report(mock_lazy_init):
     assert res["confidence"] == 0.94
     assert "印刷体" in res["reasoning"]
     assert res["sub_category"] == "MEDICAL_LAB_REPORT"
-
-from unittest.mock import patch
 
 
 def test_qwen_classifier_not_ready_by_default():

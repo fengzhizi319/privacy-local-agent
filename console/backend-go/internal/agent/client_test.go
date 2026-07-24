@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/fengzhizi319/privacy-local-agent/frontend/backend-go/internal/config"
+	"github.com/fengzhizi319/privacy-local-agent/console/backend-go/internal/config"
 )
 
 // testCerts 保存测试用证书/密钥的临时文件路径。

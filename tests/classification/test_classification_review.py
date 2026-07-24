@@ -22,7 +22,6 @@ import json
 import pytest
 
 from privacy_local_agent.privacy.classification import ClassificationAPI
-from privacy_local_agent.privacy.classification.classification_models import SensitivityLevel
 from privacy_local_agent.privacy.classification.classification_review import ReviewStore
 
 
@@ -38,7 +37,7 @@ def test_review_entries_collected_for_genomic_hint(api):
     Test that high-sensitivity combinations automatically trigger review entry collection.
     """
     # NER 可能将 GENOMIC_HINT 标记为需人工复核；若 NER 为 No-Op，使用 manual override
-    result = api.classify_table(
+    api.classify_table(
         schema=["gene_marker"],
         rows=[{"gene_marker": "BRCA1 c.5266dupC"}],
     )

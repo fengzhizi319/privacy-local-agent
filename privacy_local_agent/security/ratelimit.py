@@ -11,7 +11,7 @@ multi-replica deployments.
 from __future__ import annotations
 
 import math
-from typing import Any, Callable
+from typing import TYPE_CHECKING, Any
 
 import grpc
 from fastapi import Depends, HTTPException, Request
@@ -20,6 +20,9 @@ from limits import RateLimitItemPerSecond, storage, strategies
 from ..observability.middleware import record_auth_denial
 from .config import SecuritySettings, get_security_settings
 from .identity import Identity, is_health_path_or_method
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 
 class Limiter:
@@ -110,7 +113,7 @@ async def rate_limit_dependency(request: Request) -> None:
         raise HTTPException(status_code=429, detail="Rate limit exceeded")
 
 
-def rate_limit_for_path(path: str) -> Depends:
+def rate_limit_for_path(path: str) -> Any:
     """Return a FastAPI dependency enforcing rate limits for a specific path."""
 
     async def _checker(request: Request) -> None:

@@ -11,7 +11,6 @@
 """
 
 import os
-from typing import Dict
 
 from fastapi import Depends, HTTPException
 
@@ -32,7 +31,7 @@ MAX_UPLOAD_BYTES = int(os.environ.get("PRIVACY_MAX_UPLOAD_BYTES", str(10 * 1024 
 service = PrivacyService(profile_path=PROFILE_PATH, namespace=NAMESPACE)
 
 # Per-namespace PrivacyService cache to avoid re-initializing on every recommend request
-_service_cache: Dict[str, PrivacyService] = {NAMESPACE: service}
+_service_cache: dict[str, PrivacyService] = {NAMESPACE: service}
 
 # Module-level logger for unexpected server errors
 logger = get_logger(__name__)

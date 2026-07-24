@@ -22,12 +22,15 @@ and Polars. SecretFlow dependencies are optional and degrade gracefully.
 
 from __future__ import annotations
 
-from typing import Any, Dict, Iterable, List, Optional, Union
+from typing import TYPE_CHECKING, Any, cast
 
 import numpy as np
 
 from ..observability.logging_config import get_logger
 from ..observability.metrics import DATA_EXTRACTION_TOTAL
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable
 
 # Module-level structured logger for data adapter events
 logger = get_logger(__name__)
@@ -48,8 +51,8 @@ def _is_secretflow_available() -> bool:
 
 def _extract_from_secretflow(
     data: Any,
-    column: Optional[str] = None,
-    party: Optional[str] = None,
+    column: str | None = None,
+    party: str | None = None,
 ) -> np.ndarray:
     """从 SecretFlow 数据结构中抽取目标列 / Extract Column from SecretFlow Data.
 
@@ -92,8 +95,8 @@ def _extract_from_secretflow(
 
 def _extract_from_sf_dataframe(
     data: Any,
-    column: Optional[str] = None,
-    party: Optional[str] = None,
+    column: str | None = None,
+    party: str | None = None,
 ) -> np.ndarray:
     """从 SecretFlow 联邦 DataFrame 中提取数据 / Extract from SecretFlow Federated DataFrame.
 
@@ -139,7 +142,7 @@ def _extract_from_sf_dataframe(
 def _extract_from_hdataframe(
     data: Any,
     column: str,
-    party: Optional[str] = None,
+    party: str | None = None,
 ) -> np.ndarray:
     """从 HDataFrame 中提取指定列 / Extract Column from HDataFrame.
 
@@ -218,7 +221,7 @@ def _is_sparse_matrix(data: Any) -> bool:
     try:
         import scipy.sparse as sp
 
-        return sp.issparse(data)
+        return bool(sp.issparse(data))
     except ImportError:
         return False
 
@@ -292,9 +295,9 @@ def _to_2d_numpy_array(data: Any) -> Any:
 
 def extract_values(
     data: Any,
-    column: Optional[str] = None,
-    party: Optional[str] = None,
-) -> Union[np.ndarray, Any]:
+    column: str | None = None,
+    party: str | None = None,
+) -> np.ndarray | Any:
     """从多种数据格式中提取数值或类别数组 / Extract Values from Multiple Data Formats.
 
     中文说明：
@@ -400,7 +403,7 @@ def extract_values(
     raise TypeError(f"Unsupported data type for DP values: {type(data)}")
 
 
-def parse_arrow_ipc_bytes(b: bytes, column: Optional[str] = None) -> np.ndarray:
+def parse_arrow_ipc_bytes(b: bytes | bytearray, column: str | None = None) -> np.ndarray:
     """从 PyArrow IPC Stream 字节流解析数据 / Parse PyArrow IPC Stream Bytes.
 
     中文说明：
@@ -428,7 +431,6 @@ def parse_arrow_ipc_bytes(b: bytes, column: Optional[str] = None) -> np.ndarray:
     Raises:
         ValueError: 指定列不存在 / Specified column not found.
     """
-    import pyarrow as pa
     import pyarrow.ipc as ipc
 
     reader = ipc.RecordBatchStreamReader(b)
@@ -473,14 +475,14 @@ def table_to_arrow_ipc_bytes(table: Any) -> bytes:
     sink = pa.BufferOutputStream()
     with ipc.new_stream(sink, table.schema) as writer:
         writer.write_table(table)
-    return sink.getvalue().to_pybytes()
+    return cast("bytes", sink.getvalue().to_pybytes())
 
 
 def extract_chunks(
     chunks: Iterable[Any],
-    column: Optional[str] = None,
-    party: Optional[str] = None,
-) -> List[np.ndarray]:
+    column: str | None = None,
+    party: str | None = None,
+) -> list[np.ndarray]:
     """对分块输入逐块提取数值 / Extract Values from Chunked Input.
 
     中文说明：
@@ -546,8 +548,8 @@ def _extract_dataframe_partition(data: Any) -> Any:
 
 def to_records(
     data: Any,
-    party: Optional[str] = None,
-) -> List[Dict[str, Any]]:
+    party: str | None = None,
+) -> list[dict[str, Any]]:
     """将多种表格型输入统一转换为记录列表 / Convert Tabular Input to Record List.
 
     中文说明：
@@ -587,7 +589,7 @@ def to_records(
         import pandas as pd
 
         if isinstance(data, pd.DataFrame):
-            return data.to_dict(orient="records")
+            return cast("list[dict[str, Any]]", data.to_dict(orient="records"))
     except ImportError:
         pass
 
@@ -595,15 +597,15 @@ def to_records(
     if _is_secretflow_available():
         pdf = _extract_dataframe_partition(data)
         if isinstance(pdf, pd.DataFrame):
-            return pdf.to_dict(orient="records")
+            return cast("list[dict[str, Any]]", pdf.to_dict(orient="records"))
         # SecretFlow 本地 DataFrame 可能直接是 pandas-like
-        return pdf.to_dict(orient="records")
+        return cast("list[dict[str, Any]]", pdf.to_dict(orient="records"))
 
     raise TypeError(f"Unsupported table input type: {type(data)}")
 
 
 def from_records(
-    records: List[Dict[str, Any]], original: Any
+    records: list[dict[str, Any]], original: Any
 ) -> Any:
     """根据原始输入类型将 records 转换回对应格式 / Convert Records Back to Original Format.
 

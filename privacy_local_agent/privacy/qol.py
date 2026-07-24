@@ -25,9 +25,8 @@ Built-in input validation, structured logging, and Prometheus metrics instrument
 from __future__ import annotations
 
 import random  # 伪随机数生成器，用于 Dummy 查询抽样和真实查询插入位置随机化
-from dataclasses import dataclass, field  # dataclass 装饰器，自动生成 __init__/__repr__ 等
+from dataclasses import dataclass  # dataclass 装饰器，自动生成 __init__/__repr__ 等
 from enum import Enum  # 枚举基类，用于 ObfuscationDomain/ObfuscationStrategy
-from typing import Any, List, Optional, Union  # 类型注解工具
 
 # 从可观测性子包导入结构化日志工厂和 Prometheus Counter 指标实例
 from ..observability.logging_config import get_logger
@@ -141,7 +140,7 @@ class QoLResult:
         num_dummies: 生成的 Dummy 虚假查询数量。
     """
 
-    queries: List[str]       # 混淆后的查询列表（真实查询 + Dummy 查询混合排列）
+    queries: list[str]       # 混淆后的查询列表（真实查询 + Dummy 查询混合排列）
     real_query_index: int    # 真实查询在列表中的位置索引（调用方据此提取真实查询）
     domain: str              # 混淆领域标识（对应 ObfuscationDomain 枚举值）
     num_dummies: int         # 生成的 Dummy 查询数量（不含真实查询）
@@ -154,7 +153,8 @@ class QoLResult:
         2. 将元数据编码存入 Schema Metadata Key `b"qol_metadata"`。
         3. 构建 `queries` 列并生成 PyArrow Table 导出。
         """
-        import json       # 延迟导入：仅在实际调用 to_arrow 时才加载，避免模块加载开销
+        import json  # 延迟导入：仅在实际调用 to_arrow 时才加载，避免模块加载开销
+
         import pyarrow as pa  # 延迟导入：PyArrow 为可选依赖，未安装时不影响其他功能
 
         # 构建混淆元数据字典，全部转为字符串以确保 JSON 可序列化
@@ -236,14 +236,14 @@ GENERIC_DUMMY = [
 
 # 医疗领域实体词库（疾病名称）—— 用于匹配医疗查询中的疾病关键词
 DISEASES = [
-    "高血压", "糖尿病", "冠心病", "流感", "胃溃疡", 
+    "高血压", "糖尿病", "冠心病", "流感", "胃溃疡",
     "哮喘", "脑梗塞", "痛风", "失眠", "骨质疏松", "脂肪肝",
     "肺炎", "甲状腺结节", "过敏性鼻炎", "颈椎病"
 ]
 
 # 通用领域实体词库（公共服务实体）—— 用于匹配通用查询中的服务/证件关键词
 ENTITIES = [
-    "社保卡", "医保", "公积金", "健康档案", "体检报告", 
+    "社保卡", "医保", "公积金", "健康档案", "体检报告",
     "居住证", "天气预报", "市民卡", "数字证书", "身份证"
 ]
 
@@ -252,11 +252,11 @@ def obfuscate_query(
     query: str,
     num_dummies: int = 3,
     domain: str = "medical",
-    medical_pool: List[str] = None,
-    generic_pool: List[str] = None,
-    seed: Optional[int] = None,
+    medical_pool: list[str] | None = None,
+    generic_pool: list[str] | None = None,
+    seed: int | None = None,
     return_details: bool = False,
-) -> Union[List[str], QoLResult]:
+) -> list[str] | QoLResult:
     """对单个查询进行混淆 / Obfuscate a Single Query with Dummy Queries.
 
     执行步骤 / Execution Steps:
@@ -302,7 +302,7 @@ def obfuscate_query(
     if pool is None:
         pool = (MEDICAL_DUMMY if is_medical else GENERIC_DUMMY)  # 未自定义则用内置词库
 
-    dummies: List[str] = []       # 存储生成的 Dummy 查询列表
+    dummies: list[str] = []       # 存储生成的 Dummy 查询列表
     rng = random.Random(seed)     # 创建独立随机数生成器（seed 保证可复现性，不污染全局 random）
     strategy_used = ObfuscationStrategy.LENGTH_SIMILARITY.value  # 默认策略：长度相近抽样
 
@@ -387,14 +387,14 @@ def obfuscate_query(
 
 
 def obfuscate_query_batch(
-    queries: List[str],
+    queries: list[str],
     num_dummies: int = 3,
     domain: str = "medical",
-    medical_pool: List[str] = None,
-    generic_pool: List[str] = None,
-    seed: Optional[int] = None,
+    medical_pool: list[str] | None = None,
+    generic_pool: list[str] | None = None,
+    seed: int | None = None,
     return_details: bool = False,
-) -> Union[List[List[str]], List[QoLResult]]:
+) -> list[list[str]] | list[QoLResult]:
     """批量对查询进行混淆 / Batch Obfuscate Queries with Dummy Queries.
 
     执行步骤 / Execution Steps:
@@ -455,4 +455,6 @@ def obfuscate_query_batch(
         extra={"num_queries": len(queries), "domain": domain},
     )
 
-    return results  # 返回混淆结果列表（List[List[str]] 或 List[QoLResult]）
+    if return_details:
+        return [r for r in results if isinstance(r, QoLResult)]
+    return [r for r in results if isinstance(r, list)]

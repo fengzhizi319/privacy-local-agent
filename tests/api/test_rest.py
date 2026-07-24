@@ -241,9 +241,10 @@ def test_recommend_and_apply_personalized_profile(monkeypatch, tmp_path):
 
     # 2. 检查生成的个性化配置文件是否确实存在并包含对应内容
     import os
+
     import yaml
     assert os.path.exists(profile_file)
-    with open(profile_file, "r", encoding="utf-8") as f:
+    with open(profile_file, encoding="utf-8") as f:
         data = yaml.safe_load(f)
     assert "default" in data
     assert "dp" in data["default"]
@@ -383,6 +384,7 @@ def test_dp_arrow_ipc_rest():
     """测试 REST 端点 PyArrow IPC Stream 二进制二进制传输。"""
     import pyarrow as pa
     import pyarrow.ipc as ipc
+
     from privacy_local_agent.privacy.data_adapters import table_to_arrow_ipc_bytes
 
     input_table = pa.Table.from_arrays([pa.array([10.0, 20.0, 30.0, 40.0])], names=["value"])
@@ -408,6 +410,7 @@ def test_dp_arrow_ipc_vector_sum():
     """测试 Arrow IPC 端点的 vector_sum 聚合与 max_norm 参数。"""
     import pyarrow as pa
     import pyarrow.ipc as ipc
+
     from privacy_local_agent.privacy.data_adapters import table_to_arrow_ipc_bytes
 
     # 构造 3 条 4 维向量
@@ -436,6 +439,7 @@ def test_dp_arrow_ipc_vector_mean():
     """测试 Arrow IPC 端点的 vector_mean 聚合。"""
     import pyarrow as pa
     import pyarrow.ipc as ipc
+
     from privacy_local_agent.privacy.data_adapters import table_to_arrow_ipc_bytes
 
     vectors = [[1.0, 2.0], [3.0, 4.0], [5.0, 6.0], [7.0, 8.0], [9.0, 10.0]]
@@ -461,6 +465,7 @@ def test_dp_arrow_ipc_vector_mean():
 def test_dp_arrow_ipc_unsupported_aggregation():
     """测试 Arrow IPC 端点对不支持的聚合类型返回 400。"""
     import pyarrow as pa
+
     from privacy_local_agent.privacy.data_adapters import table_to_arrow_ipc_bytes
 
     input_table = pa.Table.from_arrays([pa.array([1.0, 2.0])], names=["v"])

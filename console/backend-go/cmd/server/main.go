@@ -33,11 +33,11 @@ import (
 	"github.com/gin-gonic/gin"
 
 	// agent：封装到 privacy-local-agent 的 gRPC 客户端连接
-	"github.com/fengzhizi319/privacy-local-agent/frontend/backend-go/internal/agent"
+	"github.com/fengzhizi319/privacy-local-agent/console/backend-go/internal/agent"
 	// config：从环境变量加载代理后端配置
-	"github.com/fengzhizi319/privacy-local-agent/frontend/backend-go/internal/config"
+	"github.com/fengzhizi319/privacy-local-agent/console/backend-go/internal/config"
 	// handlers：HTTP 处理器与路由注册，负责将 REST 请求转发为 gRPC 调用
-	"github.com/fengzhizi319/privacy-local-agent/frontend/backend-go/internal/handlers"
+	"github.com/fengzhizi319/privacy-local-agent/console/backend-go/internal/handlers"
 )
 
 // main 是程序入口函数，按以下步骤顺序执行：

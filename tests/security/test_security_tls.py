@@ -13,8 +13,7 @@ import socket
 import threading
 import time
 from concurrent import futures
-from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import grpc
 import httpx
@@ -27,6 +26,9 @@ from privacy_local_agent.main import app
 from privacy_local_agent.security.config import get_security_settings
 from privacy_local_agent.security.tls import grpc_server_credentials, uvicorn_ssl_kwargs
 from tests.security_certs import generate_test_certs
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 def _free_port() -> int:
@@ -75,7 +77,7 @@ class _RestServer:
                     if resp.status_code == 200:
                         return
                     last_error = f"unexpected status {resp.status_code}"
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 last_error = f"{type(exc).__name__}: {exc}"
                 time.sleep(0.05)
         raise RuntimeError(f"REST server did not start in time: {last_error}")
@@ -115,18 +117,19 @@ def _rest_tls_server(certs: dict[str, Path], client_auth: str = "none"):
 
 def test_rest_tls_trusted_ca(certs: dict[str, Path]):
     """使用受信 CA 可成功访问 HTTPS 健康检查。"""
-    with _rest_tls_server(certs) as port:
-        with httpx.Client(verify=str(certs["ca_cert"])) as client:
-            resp = client.get(f"https://127.0.0.1:{port}/health")
-            assert resp.status_code == 200
+    with _rest_tls_server(certs) as port, httpx.Client(verify=str(certs["ca_cert"])) as client:
+        resp = client.get(f"https://127.0.0.1:{port}/health")
+        assert resp.status_code == 200
 
 
 def test_rest_tls_untrusted_ca_fails(certs: dict[str, Path]):
     """使用不受信 CA 访问 HTTPS 时握手失败。"""
-    with _rest_tls_server(certs) as port:
-        with httpx.Client(verify=str(certs["bad_ca_cert"])) as client:
-            with pytest.raises(httpx.ConnectError):
-                client.get(f"https://127.0.0.1:{port}/health")
+    with (
+        _rest_tls_server(certs) as port,
+        httpx.Client(verify=str(certs["bad_ca_cert"])) as client,
+        pytest.raises(httpx.ConnectError),
+    ):
+        client.get(f"https://127.0.0.1:{port}/health")
 
 
 # ---------------------------------------------------------------------------
@@ -192,28 +195,28 @@ def _grpc_channel(
 
 def test_grpc_tls_trusted_ca(certs: dict[str, Path]):
     """使用受信 CA 可成功建立 gRPCs 连接并调用 Health。"""
-    with _grpc_tls_server(certs) as port:
-        with _grpc_channel(port, ca_cert=certs["ca_cert"]) as channel:
-            stub = privacy_pb2_grpc.PrivacyServiceStub(channel)
-            resp = stub.Health(privacy_pb2.HealthRequest())
-            assert resp.status == "ok"
+    with _grpc_tls_server(certs) as port, _grpc_channel(port, ca_cert=certs["ca_cert"]) as channel:
+        stub = privacy_pb2_grpc.PrivacyServiceStub(channel)
+        resp = stub.Health(privacy_pb2.HealthRequest())
+        assert resp.status == "ok"
 
 
 def test_grpc_tls_untrusted_ca_fails(certs: dict[str, Path]):
     """使用不受信 CA 时 gRPCs 连接失败。"""
-    with _grpc_tls_server(certs) as port:
-        with pytest.raises(grpc.FutureTimeoutError):
-            with _grpc_channel(port, ca_cert=certs["bad_ca_cert"]) as channel:
-                pass
+    with (
+        _grpc_tls_server(certs) as port,
+        pytest.raises(grpc.FutureTimeoutError),
+        _grpc_channel(port, ca_cert=certs["bad_ca_cert"]),
+    ):
+        pass
 
 
 def test_grpc_mtls_require_client_cert(certs: dict[str, Path]):
     """gRPC mTLS require 模式下必须提供受信客户端证书。"""
     with _grpc_tls_server(certs, client_auth="require") as port:
         # No client cert -> handshake fails.
-        with pytest.raises(grpc.FutureTimeoutError):
-            with _grpc_channel(port, ca_cert=certs["ca_cert"]) as channel:
-                pass
+        with pytest.raises(grpc.FutureTimeoutError), _grpc_channel(port, ca_cert=certs["ca_cert"]) as channel:
+            pass
 
         # Trusted client cert -> succeeds.
         with _grpc_channel(

@@ -12,26 +12,26 @@ from .metrics import (
     BUDGET_REMAINING,
     CLASSIFICATION_TOTAL,
     DP_QUERIES_TOTAL,
-    REQUESTS_TOTAL,
     REQUEST_DURATION,
+    REQUESTS_TOTAL,
     make_asgi_app,
 )
 from .tracing import get_tracer, init_tracing, start_span
 
 __all__ = [
-    "RequestContext",
-    "get_request_context",
-    "set_request_context",
-    "configure_logging",
-    "get_logger",
     "AUTH_DENIALS_TOTAL",
     "BUDGET_REMAINING",
     "CLASSIFICATION_TOTAL",
     "DP_QUERIES_TOTAL",
     "REQUESTS_TOTAL",
     "REQUEST_DURATION",
-    "make_asgi_app",
+    "RequestContext",
+    "configure_logging",
+    "get_logger",
+    "get_request_context",
     "get_tracer",
     "init_tracing",
+    "make_asgi_app",
+    "set_request_context",
     "start_span",
 ]

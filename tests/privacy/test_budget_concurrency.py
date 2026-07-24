@@ -6,14 +6,11 @@
 
 from __future__ import annotations
 
-import os
-import tempfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import pytest
 
 from privacy_local_agent.privacy.budget import (
-    BudgetRegistry,
     PrivacyBudgetExhausted,
     default_registry,
 )

@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import json
 import os
-from pathlib import Path
+from pathlib import Path  # noqa: TC003 - needed at runtime for Pydantic model annotations
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field, model_validator
@@ -74,13 +74,12 @@ class SecuritySettings(BaseModel):
     health_no_rate_limit: bool = Field(default=True)
 
     @model_validator(mode="after")
-    def _check_tls_consistency(self) -> "SecuritySettings":
+    def _check_tls_consistency(self) -> SecuritySettings:
         """Validate that TLS settings are mutually consistent."""
-        if self.tls_enabled:
-            if not self.tls_cert_file or not self.tls_key_file:
-                raise ValueError(
-                    "PRIVACY_TLS_CERT_FILE and PRIVACY_TLS_KEY_FILE are required when TLS is enabled."
-                )
+        if self.tls_enabled and (not self.tls_cert_file or not self.tls_key_file):
+            raise ValueError(
+                "PRIVACY_TLS_CERT_FILE and PRIVACY_TLS_KEY_FILE are required when TLS is enabled."
+            )
         if self.tls_client_auth in ("optional", "require") and not self.tls_ca_file:
             raise ValueError(
                 "PRIVACY_TLS_CA_FILE is required when tls_client_auth is optional or require."
@@ -102,7 +101,7 @@ def _load_json_env(name: str, default: dict[str, Any]) -> dict[str, Any]:
     try:
         parsed = json.loads(value)
     except json.JSONDecodeError as exc:
-        raise ValueError(f"Environment variable {name} contains invalid JSON: {exc}")
+        raise ValueError(f"Environment variable {name} contains invalid JSON: {exc}") from exc
     if not isinstance(parsed, dict):
         raise ValueError(f"Environment variable {name} must be a JSON object.")
     return parsed

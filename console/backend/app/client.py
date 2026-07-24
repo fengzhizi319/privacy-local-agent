@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import base64
 import io
-from typing import Any, Dict, Optional
+from typing import Any
 
 import httpx
 from fastapi import HTTPException
@@ -34,7 +34,7 @@ class PrivacyAgentClient:
         # 可选的认证 API Key（agent 开启 auth 时才需要）
         self.api_key = settings.privacy_agent_api_key
         # 懒初始化的异步 HTTP 客户端（连接池）
-        self._client: Optional[httpx.AsyncClient] = None
+        self._client: httpx.AsyncClient | None = None
 
     async def _get_client(self) -> httpx.AsyncClient:
         """获取（必要时创建）底层 ``httpx.AsyncClient``。
@@ -55,15 +55,15 @@ class PrivacyAgentClient:
             )
         return self._client
 
-    def _headers(self) -> Dict[str, str]:
+    def _headers(self) -> dict[str, str]:
         """构造请求头：配置了 API Key 时附加 ``Authorization: Bearer``。"""
-        headers: Dict[str, str] = {}
+        headers: dict[str, str] = {}
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
         return headers
 
     @staticmethod
-    def _parse_arrow_response(response: httpx.Response) -> Dict[str, Any]:
+    def _parse_arrow_response(response: httpx.Response) -> dict[str, Any]:
         """解析 Arrow IPC 流响应，返回记录列表 + schema 元数据。
 
         agent 的 ``/v1/privacy/dp/arrow_ipc`` 等端点返回二进制 Arrow 流，
@@ -80,7 +80,10 @@ class PrivacyAgentClient:
         metadata = {}
         if table.schema.metadata:
             # Arrow 元数据的键值均为 bytes，统一解码为 str 以便 JSON 序列化。
-            metadata = {k.decode() if isinstance(k, bytes) else k: v.decode() if isinstance(v, bytes) else v for k, v in table.schema.metadata.items()}
+            metadata = {
+                k.decode() if isinstance(k, bytes) else k: v.decode() if isinstance(v, bytes) else v
+                for k, v in table.schema.metadata.items()
+            }
 
         # 返回 JSON 友好结构：内容类型标记 + 元数据 + 记录列表。
         return {
@@ -94,9 +97,9 @@ class PrivacyAgentClient:
         self,
         method: str,
         path: str,
-        body: Optional[Any] = None,
-        raw_content: Optional[bytes] = None,
-        content_type: Optional[str] = None,
+        body: Any | None = None,
+        raw_content: bytes | None = None,
+        content_type: str | None = None,
     ) -> Any:
         """转发一个请求到 privacy agent 并返回其响应。
 
@@ -163,8 +166,8 @@ class PrivacyAgentClient:
     async def request_multipart(
         self,
         path: str,
-        files: Dict[str, Any],
-        data: Optional[Dict[str, Any]] = None,
+        files: dict[str, Any],
+        data: dict[str, Any] | None = None,
     ) -> Any:
         """以 multipart/form-data 转发请求到 privacy agent 并返回其响应。
 
@@ -229,7 +232,7 @@ class PrivacyAgentClient:
                 return str(data["detail"])
             # 是 JSON 但无 detail 字段：直接字符串化整个体。
             return str(data)
-        except Exception:  # noqa: BLE001
+        except Exception:
             # 解析失败（非 JSON 响应）：降级为原始文本或 HTTP reason phrase。
             return response.text or response.reason_phrase
 

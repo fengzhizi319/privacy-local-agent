@@ -1,6 +1,6 @@
 .PHONY: proto build run test lint clean
 
-MODULE := github.com/fengzhizi319/privacy-local-agent/frontend/backend-go
+MODULE := github.com/fengzhizi319/privacy-local-agent/console/backend-go
 PROTOC := /tmp/protoc-install/bin/protoc
 
 # Generate Go gRPC stubs from the shared proto file.

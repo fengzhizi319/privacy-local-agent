@@ -9,14 +9,15 @@ primitives (masking, differential privacy, K-anonymity, query obfuscation) and
 resolving parameters from profile/config.
 """
 
-from typing import Any, Dict, List, Optional
+from typing import Any, cast
 
 from .privacy.budget import BudgetRegistry, default_registry
 from .privacy.classification import ClassificationAPI
-from .privacy.dp import DPApi, LocalDPApi
-from .privacy.kano import BUILTIN_HIERARCHIES, anonymize_record
-from .privacy.kano_table import k_anonymize_dataframe, k_anonymize_table
+from .privacy.dp import DPApi, DPResult, LocalDPApi
+from .privacy.kano import BUILTIN_HIERARCHIES, KAnonymityRecordResult, anonymize_record
+from .privacy.kano_table import KAnonymityResult, k_anonymize_dataframe, k_anonymize_table
 from .privacy.masking import (
+    MaskingResult,
     hash_value,
     mask_dataframe,
     mask_record,
@@ -24,7 +25,7 @@ from .privacy.masking import (
     mask_value_batch,
     truncate,
 )
-from .privacy.profile import ParameterResolver, get_resolver
+from .privacy.profile import get_resolver
 from .privacy.qol import obfuscate_query, obfuscate_query_batch
 
 
@@ -43,12 +44,12 @@ class PrivacyService:
 
     def __init__(
         self,
-        profile_path: str = None,
+        profile_path: str | None = None,
         namespace: str = "default",
-        registry: Optional[BudgetRegistry] = None,
-        epsilon_total: Optional[float] = None,
-        delta_total: Optional[float] = None,
-        window_seconds: Optional[float] = None,
+        registry: BudgetRegistry | None = None,
+        epsilon_total: float | None = None,
+        delta_total: float | None = None,
+        window_seconds: float | None = None,
     ):
         """初始化 PrivacyService。
 
@@ -73,7 +74,7 @@ class PrivacyService:
         self.classification_api = ClassificationAPI(resolver=self.resolver)
         self.local_dp_api = LocalDPApi()
 
-    def mask(self, field_name: str, value: str, context: str = "") -> str:
+    def mask(self, field_name: str, value: str, context: str = "") -> str | MaskingResult:
         """对单个字段值进行脱敏。
 
         Args:
@@ -86,7 +87,7 @@ class PrivacyService:
         """
         return mask_value(field_name, value, context)
 
-    def mask_record(self, record: Dict[str, str], context: str = "") -> Dict[str, str]:
+    def mask_record(self, record: dict[str, str], context: str = "") -> dict[str, str] | MaskingResult:
         """对整条记录进行脱敏。
 
         Args:
@@ -99,13 +100,13 @@ class PrivacyService:
         return mask_record(record, context)
 
     def mask_batch(
-        self, field_names: List[str], values: List[str], context: str = ""
-    ) -> List[str]:
+        self, field_names: list[str], values: list[str], context: str = ""
+    ) -> list[str] | MaskingResult:
         """批量对字段值进行脱敏。"""
         return mask_value_batch(field_names, values, context)
 
     def mask_dataframe(
-        self, df: Any, columns: Optional[List[str]] = None, context: str = ""
+        self, df: Any, columns: list[str] | None = None, context: str = ""
     ) -> Any:
         """对 DataFrame 进行脱敏。
 
@@ -119,7 +120,7 @@ class PrivacyService:
         """
         return mask_dataframe(df, columns=columns, context=context)
 
-    def hash(self, value: str, salt: str) -> str:
+    def hash(self, value: str, salt: str) -> str | MaskingResult:
         """对字符串进行 HMAC 哈希。
 
         Args:
@@ -131,7 +132,7 @@ class PrivacyService:
         """
         return hash_value(value, salt)
 
-    def truncate(self, value: str, keep_prefix: int) -> str:
+    def truncate(self, value: str, keep_prefix: int) -> str | MaskingResult:
         """截断字符串，保留指定前缀。
 
         Args:
@@ -144,9 +145,9 @@ class PrivacyService:
         return truncate(value, keep_prefix)
 
     @staticmethod
-    def _dp_format_kwargs(params: Dict[str, Any]) -> Dict[str, Any]:
+    def _dp_format_kwargs(params: dict[str, Any] | None) -> dict[str, Any]:
         """从 params 中提取数据格式相关的 column / party 参数。"""
-        kwargs: Dict[str, Any] = {}
+        kwargs: dict[str, Any] = {}
         if params:
             if "column" in params:
                 kwargs["column"] = params["column"]
@@ -154,7 +155,7 @@ class PrivacyService:
                 kwargs["party"] = params["party"]
         return kwargs
 
-    def dp_count(self, values: Any, params: Dict[str, Any] = None) -> float:
+    def dp_count(self, values: Any, params: dict[str, Any] | None = None) -> float | DPResult:
         """差分隐私计数。
 
         Args:
@@ -173,7 +174,7 @@ class PrivacyService:
             **self._dp_format_kwargs(params),
         )
 
-    def dp_sum(self, values: Any, params: Dict[str, Any] = None) -> float:
+    def dp_sum(self, values: Any, params: dict[str, Any] | None = None) -> float | DPResult:
         """差分隐私求和。
 
         Args:
@@ -194,7 +195,7 @@ class PrivacyService:
             **self._dp_format_kwargs(params),
         )
 
-    def dp_mean(self, values: Any, params: Dict[str, Any] = None) -> float:
+    def dp_mean(self, values: Any, params: dict[str, Any] | None = None) -> float | DPResult:
         """差分隐私均值。
 
         Args:
@@ -217,8 +218,8 @@ class PrivacyService:
         )
 
     def dp_histogram(
-        self, values: Any, categories: List[Any], params: Dict[str, Any] = None
-    ) -> Dict[Any, float]:
+        self, values: Any, categories: list[Any], params: dict[str, Any] | None = None
+    ) -> dict[Any, float] | DPResult:
         """差分隐私直方图计数（使用联合敏感度为 1）。
 
         Args:
@@ -239,7 +240,7 @@ class PrivacyService:
             **self._dp_format_kwargs(params),
         )
 
-    def dp_noisy_count(self, true_count: float, params: Dict[str, Any] = None) -> float:
+    def dp_noisy_count(self, true_count: float, params: dict[str, Any] | None = None) -> float | DPResult:
         """对已经聚合好的计数结果注入 DP 噪声。
 
         Args:
@@ -257,7 +258,7 @@ class PrivacyService:
             str(p.get("mechanism", "laplace")),
         )
 
-    def dp_noisy_sum(self, true_sum: float, params: Dict[str, Any] = None) -> float:
+    def dp_noisy_sum(self, true_sum: float, params: dict[str, Any] | None = None) -> float | DPResult:
         """对已经聚合好的求和结果注入 DP 噪声。
 
         Args:
@@ -287,7 +288,7 @@ class PrivacyService:
             str(p.get("mechanism", "laplace")),
         )
 
-    def dp_aggregate(self, df: Any, specs: Dict[str, Any], params: Dict[str, Any] = None) -> Dict[str, Any]:
+    def dp_aggregate(self, df: Any, specs: dict[str, Any], params: dict[str, Any] | None = None) -> dict[str, Any]:
         """Table-Level 原位表格 DP 聚合。"""
         p = self.resolver.resolve("dp", params, namespace=self.namespace)
         return self.dp_api.dp_aggregate(
@@ -299,7 +300,7 @@ class PrivacyService:
             return_details=bool(p.get("return_details", False)),
         )
 
-    def dp_vector_sum(self, vectors: Any, params: Dict[str, Any] = None) -> Any:
+    def dp_vector_sum(self, vectors: Any, params: dict[str, Any] | None = None) -> Any:
         """高维向量 / 梯度 $L_2$ 范数截断与加噪。"""
         p = self.resolver.resolve("dp", params, namespace=self.namespace)
         max_norm = float(p.get("max_norm", 1.0))
@@ -312,7 +313,7 @@ class PrivacyService:
             return_details=bool(p.get("return_details", False)),
         )
 
-    def dp_vector_mean(self, vectors: Any, params: Dict[str, Any] = None) -> Any:
+    def dp_vector_mean(self, vectors: Any, params: dict[str, Any] | None = None) -> Any:
         """高维向量 DP 均值：L2 范数截断 + 各向同性加噪 + noisy_count 归一化。"""
         p = self.resolver.resolve("dp", params, namespace=self.namespace)
         max_norm = float(p.get("max_norm", 1.0))
@@ -326,7 +327,7 @@ class PrivacyService:
             return_details=bool(p.get("return_details", False)),
         )
 
-    def dp_adaptive_clip(self, values: Any, params: Dict[str, Any] = None) -> tuple[float, float]:
+    def dp_adaptive_clip(self, values: Any, params: dict[str, Any] | None = None) -> tuple[float, float]:
         """差分隐私自适应二分搜索估计 [0, clip_upper] 上下界。"""
         p = self.resolver.resolve("dp", params, namespace=self.namespace)
         return self.dp_api.adaptive_clip(
@@ -343,8 +344,8 @@ class PrivacyService:
         group_col: str,
         target_col: str,
         agg: str,
-        params: Dict[str, Any] = None,
-    ) -> Dict[str, Any]:
+        params: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         """Tau-Thresholding 差分隐私 SQL Group-By 过滤。"""
         p = self.resolver.resolve("dp", params, namespace=self.namespace)
         return self.dp_api.dp_groupby(
@@ -364,8 +365,8 @@ class PrivacyService:
         self,
         true_sum: float,
         true_count: float,
-        params: Dict[str, Any] = None,
-    ) -> float:
+        params: dict[str, Any] | None = None,
+    ) -> float | DPResult:
         """对已经聚合好的 sum/count 注入 DP 噪声后得到均值。
 
         Args:
@@ -399,8 +400,8 @@ class PrivacyService:
         )
 
     def dp_noisy_histogram(
-        self, true_counts: Dict[Any, Any], params: Dict[str, Any] = None
-    ) -> Dict[Any, float]:
+        self, true_counts: dict[Any, Any], params: dict[str, Any] | None = None
+    ) -> dict[Any, float] | DPResult:
         """对已经聚合好的直方图计数注入 DP 噪声。
 
         Args:
@@ -419,8 +420,8 @@ class PrivacyService:
         )
 
     def dp_chunked_count(
-        self, chunks: List[Any], params: Dict[str, Any] = None
-    ) -> float:
+        self, chunks: list[Any], params: dict[str, Any] | None = None
+    ) -> float | DPResult:
         """分块流式差分隐私计数。
 
         Args:
@@ -440,8 +441,8 @@ class PrivacyService:
         )
 
     def dp_chunked_sum(
-        self, chunks: List[Any], params: Dict[str, Any] = None
-    ) -> float:
+        self, chunks: list[Any], params: dict[str, Any] | None = None
+    ) -> float | DPResult:
         """分块流式差分隐私求和。
 
         Args:
@@ -463,8 +464,8 @@ class PrivacyService:
         )
 
     def dp_chunked_mean(
-        self, chunks: List[Any], params: Dict[str, Any] = None
-    ) -> float:
+        self, chunks: list[Any], params: dict[str, Any] | None = None
+    ) -> float | DPResult:
         """分块流式差分隐私均值。
 
         Args:
@@ -488,10 +489,10 @@ class PrivacyService:
 
     def dp_chunked_histogram(
         self,
-        chunks: List[Any],
-        categories: List[Any],
-        params: Dict[str, Any] = None,
-    ) -> Dict[Any, float]:
+        chunks: list[Any],
+        categories: list[Any],
+        params: dict[str, Any] | None = None,
+    ) -> dict[Any, float] | DPResult:
         """分块流式差分隐私直方图计数。
 
         Args:
@@ -513,23 +514,23 @@ class PrivacyService:
         )
 
 
-    def perturb_binary_batch(self, values: List[int], epsilon: float) -> List[int]:
+    def perturb_binary_batch(self, values: list[int], epsilon: float) -> list[int]:
         """批量对二值数据进行本地 DP 扰动。"""
-        return self.local_dp_api.perturb_binary_batch(values, epsilon).tolist()
+        return cast("list[int]", self.local_dp_api.perturb_binary_batch(values, epsilon).tolist())
 
     def perturb_categorical_batch(
-        self, values: List[Any], categories: List[Any], epsilon: float
-    ) -> List[Any]:
+        self, values: list[Any], categories: list[Any], epsilon: float
+    ) -> list[Any]:
         """批量对类别型数据进行本地 DP 扰动。"""
-        return self.local_dp_api.perturb_categorical_batch(values, categories, epsilon).tolist()
+        return cast("list[Any]", self.local_dp_api.perturb_categorical_batch(values, categories, epsilon).tolist())
 
-    def estimate_binary_frequency(self, reported_values: List[int], epsilon: float) -> float:
+    def estimate_binary_frequency(self, reported_values: list[int], epsilon: float) -> float:
         """根据扰动后的二值样本估计真实比例为 1 的频率。"""
         return self.local_dp_api.estimate_binary_frequency(reported_values, epsilon)
 
     def estimate_categorical_histogram(
-        self, reported_values: List[Any], categories: List[Any], epsilon: float
-    ) -> Dict[Any, float]:
+        self, reported_values: list[Any], categories: list[Any], epsilon: float
+    ) -> dict[Any, float]:
         """根据扰动后的类别样本估计各类别的真实频率。"""
         return self.local_dp_api.estimate_categorical_histogram(
             reported_values, categories, epsilon
@@ -537,11 +538,11 @@ class PrivacyService:
 
     def k_anonymize_record(
         self,
-        record: Dict[str, Any],
-        qi_cols: List[str],
+        record: dict[str, Any],
+        qi_cols: list[str],
         k: int = 5,
-        hierarchies: Dict[str, Any] = None,
-    ) -> Dict[str, Any]:
+        hierarchies: dict[str, Any] | None = None,
+    ) -> dict[str, Any] | KAnonymityRecordResult:
         """对单条记录执行 K-匿名泛化。
 
         Args:
@@ -562,11 +563,11 @@ class PrivacyService:
 
     def k_anonymize_table(
         self,
-        rows: List[Dict[str, Any]],
-        qi_cols: List[str],
+        rows: list[dict[str, Any]],
+        qi_cols: list[str],
         k: int = 5,
         max_depth: int = 10,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]] | KAnonymityResult:
         """对整张表执行 K-匿名泛化。
 
         Args:
@@ -590,7 +591,7 @@ class PrivacyService:
     def k_anonymize_dataframe(
         self,
         df: Any,
-        qi_cols: List[str],
+        qi_cols: list[str],
         k: int = 5,
         max_depth: int = 10,
     ) -> Any:
@@ -619,10 +620,10 @@ class PrivacyService:
         query: str,
         num_dummies: int = 3,
         domain: str = "medical",
-        medical_pool: Optional[List[str]] = None,
-        generic_pool: Optional[List[str]] = None,
-        seed: Optional[int] = None,
-    ) -> List[str]:
+        medical_pool: list[str] | None = None,
+        generic_pool: list[str] | None = None,
+        seed: int | None = None,
+    ) -> list[str]:
         """对查询进行混淆。
 
         Args:
@@ -636,7 +637,7 @@ class PrivacyService:
         Returns:
             混淆后的查询列表。
         """
-        request_params = {"num_dummies": num_dummies}
+        request_params: dict[str, Any] = {"num_dummies": num_dummies}
         if medical_pool is not None:
             request_params["medical_pool"] = medical_pool
         if generic_pool is not None:
@@ -646,7 +647,7 @@ class PrivacyService:
         resolved_num_dummies = params.get("num_dummies", num_dummies)
         resolved_medical_pool = params.get("medical_pool")
         resolved_generic_pool = params.get("generic_pool")
-        return obfuscate_query(
+        result = obfuscate_query(
             query,
             resolved_num_dummies,
             domain,
@@ -654,18 +655,19 @@ class PrivacyService:
             generic_pool=resolved_generic_pool,
             seed=seed,
         )
+        return result if isinstance(result, list) else result.queries
 
     def obfuscate_query_batch(
         self,
-        queries: List[str],
+        queries: list[str],
         num_dummies: int = 3,
         domain: str = "medical",
-        medical_pool: Optional[List[str]] = None,
-        generic_pool: Optional[List[str]] = None,
-        seed: Optional[int] = None,
-    ) -> List[List[str]]:
+        medical_pool: list[str] | None = None,
+        generic_pool: list[str] | None = None,
+        seed: int | None = None,
+    ) -> list[list[str]]:
         """批量对查询进行混淆。"""
-        request_params = {"num_dummies": num_dummies}
+        request_params: dict[str, Any] = {"num_dummies": num_dummies}
         if medical_pool is not None:
             request_params["medical_pool"] = medical_pool
         if generic_pool is not None:
@@ -675,7 +677,7 @@ class PrivacyService:
         resolved_num_dummies = params.get("num_dummies", num_dummies)
         resolved_medical_pool = params.get("medical_pool")
         resolved_generic_pool = params.get("generic_pool")
-        return obfuscate_query_batch(
+        raw_results = obfuscate_query_batch(
             queries,
             resolved_num_dummies,
             domain,
@@ -683,16 +685,17 @@ class PrivacyService:
             generic_pool=resolved_generic_pool,
             seed=seed,
         )
+        return [r if isinstance(r, list) else r.queries for r in raw_results]
 
     def recommend_and_save_params(
         self,
-        values: List[float] = None,
-        rows: List[Dict[str, Any]] = None,
-        qi_cols: List[str] = None,
-    ) -> Dict[str, Any]:
+        values: list[float] | None = None,
+        rows: list[dict[str, Any]] | None = None,
+        qi_cols: list[str] | None = None,
+    ) -> dict[str, Any]:
         """根据数据特点，自动推荐 DP 和 K-Anonymity 隐私参数并保存起来。"""
         from .privacy.profile import save_personalized_params
-        recommendations = {}
+        recommendations: dict[str, Any] = {}
 
         # 1. 推荐差分隐私（DP）参数
         if values:
@@ -734,7 +737,7 @@ class PrivacyService:
 
         return recommendations
 
-    def budget_remaining(self) -> Dict[str, float]:
+    def budget_remaining(self) -> dict[str, float]:
         """查询当前命名空间下剩余隐私预算。
 
         Returns:
@@ -743,16 +746,16 @@ class PrivacyService:
         return self.registry.get_or_create(self.namespace).remaining()
 
     def classify_field(
-        self, field_name: str, value: Any, params: Dict[str, Any] = None
-    ) -> Dict[str, Any]:
+        self, field_name: str, value: Any, params: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
         """对单个字段进行分类。"""
         return self.classification_api.classify_field(
             field_name, value, params
         ).model_dump(by_alias=True)
 
     def classify_record(
-        self, record: Dict[str, Any], params: Dict[str, Any] = None
-    ) -> Dict[str, Any]:
+        self, record: dict[str, Any], params: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
         """对单条记录进行分类。"""
         return self.classification_api.classify_record(record, params).model_dump(
             by_alias=True
@@ -760,42 +763,42 @@ class PrivacyService:
 
     def classify_table(
         self,
-        schema: List[str],
-        rows: List[Dict[str, Any]],
-        params: Dict[str, Any] = None,
-    ) -> Dict[str, Any]:
+        schema: list[str],
+        rows: list[dict[str, Any]],
+        params: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         """对整张表进行分类。"""
         return self.classification_api.classify_table(schema, rows, params).model_dump(
             by_alias=True
         )
 
     def classify_json(
-        self, json_input: Any, params: Dict[str, Any] = None
-    ) -> Dict[str, Any]:
+        self, json_input: Any, params: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
         """解析 JSON 字符串或字典并分类。"""
         return self.classification_api.classify_json(json_input, params).model_dump(
             by_alias=True
         )
 
     def classify_dataframe(
-        self, df: Any, params: Dict[str, Any] = None
-    ) -> Dict[str, Any]:
+        self, df: Any, params: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
         """对 pandas DataFrame 进行分类。"""
         return self.classification_api.classify_dataframe(df, params).model_dump(
             by_alias=True
         )
 
     def classify_arrow(
-        self, table: Any, params: Dict[str, Any] = None
-    ) -> Dict[str, Any]:
+        self, table: Any, params: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
         """对 pyarrow Table 进行分类。"""
         return self.classification_api.classify_arrow(table, params).model_dump(
             by_alias=True
         )
 
     def classify_sql_result(
-        self, result_set: List[Dict[str, Any]], params: Dict[str, Any] = None
-    ) -> Dict[str, Any]:
+        self, result_set: list[dict[str, Any]], params: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
         """对 SQL 结果集进行分类。"""
         return self.classification_api.classify_sql_result(result_set, params).model_dump(
             by_alias=True

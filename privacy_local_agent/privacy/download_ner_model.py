@@ -93,18 +93,17 @@ def download_file(url: str, target_path: str) -> bool:
         headers["Authorization"] = f"Bearer {hf_token}"
         print("[*] 已携带本地 HF_TOKEN 进行授权访问。")
 
-    req = urllib.request.Request(url, headers=headers)
+    req = urllib.request.Request(url, headers=headers)  # noqa: S310 trusted model-download endpoint
 
     try:
-        with urllib.request.urlopen(req) as response:
-            with open(target_path, "wb") as out_file:
-                # 采用 1MB 分块读取，防止大文件下载时内存溢出
-                chunk_size = 1024 * 1024
-                while True:
-                    chunk = response.read(chunk_size)
-                    if not chunk:
-                        break
-                    out_file.write(chunk)
+        with urllib.request.urlopen(req) as response, open(target_path, "wb") as out_file:  # noqa: S310
+            # 采用 1MB 分块读取，防止大文件下载时内存溢出
+            chunk_size = 1024 * 1024
+            while True:
+                chunk = response.read(chunk_size)
+                if not chunk:
+                    break
+                out_file.write(chunk)
         print(f"[+] 下载完成并保存: {target_path}")
         return True
     except Exception as e:

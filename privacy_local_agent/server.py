@@ -30,14 +30,45 @@ GRPC_PORT = int(os.environ.get("PRIVACY_GRPC_PORT", "50051"))
 def main():
     """主入口函数。
 
-    配置并启动 REST 与 gRPC 服务器，注册系统关闭信号处理器实现优雅关闭。
+    解析命令行参数，配置并启动 REST 与 gRPC 服务器，注册系统关闭信号处理器实现优雅关闭。
+    命令行参数优先级高于环境变量。
     """
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        prog="privacy_local_agent.server",
+        description="SecretFlow Local Privacy Agent REST + gRPC server.",
+    )
+    parser.add_argument(
+        "--rest-host",
+        default=os.environ.get("PRIVACY_REST_HOST", REST_HOST),
+        help=f"REST server host (default: {REST_HOST} or PRIVACY_REST_HOST).",
+    )
+    parser.add_argument(
+        "--rest-port",
+        type=int,
+        default=int(os.environ.get("PRIVACY_REST_PORT", str(REST_PORT))),
+        help=f"REST server port (default: {REST_PORT} or PRIVACY_REST_PORT).",
+    )
+    parser.add_argument(
+        "--grpc-host",
+        default=os.environ.get("PRIVACY_GRPC_HOST", GRPC_HOST),
+        help=f"gRPC server host (default: {GRPC_HOST} or PRIVACY_GRPC_HOST).",
+    )
+    parser.add_argument(
+        "--grpc-port",
+        type=int,
+        default=int(os.environ.get("PRIVACY_GRPC_PORT", str(GRPC_PORT))),
+        help=f"gRPC server port (default: {GRPC_PORT} or PRIVACY_GRPC_PORT).",
+    )
+    args = parser.parse_args()
+
     # 1. 配置 REST 隐式启动
     ssl_kwargs = uvicorn_ssl_kwargs(get_security_settings())
     config = uvicorn.Config(
         app,
-        host=REST_HOST,
-        port=REST_PORT,
+        host=args.rest_host,
+        port=args.rest_port,
         log_level="info",
         **ssl_kwargs,
     )
@@ -52,7 +83,7 @@ def main():
     rest_thread.start()
 
     # 3. 启动 gRPC 服务（非阻塞模式，使其返回 server 对象）
-    grpc_server = grpc_serve(port=GRPC_PORT, wait_for_termination=False)
+    grpc_server = grpc_serve(host=args.grpc_host, port=args.grpc_port, wait_for_termination=False)
 
     # 4. 信号处理逻辑
     shutdown_event = threading.Event()

@@ -7,17 +7,18 @@ import asyncio
 import socket
 import threading
 import time
-import pytest
-from fastapi.testclient import TestClient
-import grpc
-import uvicorn
 
+import grpc
+import pytest
+import uvicorn
+from fastapi.testclient import TestClient
+
+from privacy_local_agent import privacy_pb2
 from privacy_local_agent.gateway.balancer import LoadBalancer
-from privacy_local_agent.gateway.http_proxy import create_http_gateway_app
 from privacy_local_agent.gateway.grpc_proxy import GatewayGrpcServicer
-from privacy_local_agent import privacy_pb2, privacy_pb2_grpc
-from privacy_local_agent.main import app as rest_app
+from privacy_local_agent.gateway.http_proxy import create_http_gateway_app
 from privacy_local_agent.grpc_server import serve as grpc_serve
+from privacy_local_agent.main import app as rest_app
 
 
 def find_free_port() -> int:
@@ -281,7 +282,7 @@ def test_http_retry_and_passive_failover(backend_agent):
     assert res.json()["result"] == "138****5678"
 
     # 验证故障节点已被被动标记为不健康
-    bad_node = [n for n in balancer.nodes if "59999" in n.http_url][0]
+    bad_node = next(n for n in balancer.nodes if "59999" in n.http_url)
     assert bad_node.is_healthy is False
 
     loop = asyncio.new_event_loop()
@@ -319,7 +320,7 @@ def test_grpc_retry_and_passive_failover(backend_agent):
     try:
         loop.run_until_complete(run_test())
         # 验证故障节点已下线
-        bad_node = [n for n in balancer.nodes if "59999" in n.grpc_address][0]
+        bad_node = next(n for n in balancer.nodes if "59999" in n.grpc_address)
         assert bad_node.is_healthy is False
     finally:
         loop.run_until_complete(balancer.close_all())

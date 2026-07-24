@@ -8,11 +8,12 @@ required mutual TLS.
 from __future__ import annotations
 
 import ssl
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import grpc
 
-from .config import SecuritySettings
+if TYPE_CHECKING:
+    from .config import SecuritySettings
 
 
 def _map_client_auth(mode: str) -> int:

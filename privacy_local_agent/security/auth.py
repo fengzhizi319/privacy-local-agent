@@ -12,7 +12,7 @@ per-method permission checks.
 
 from __future__ import annotations
 
-from typing import Any, Callable
+from typing import TYPE_CHECKING, Any
 
 import grpc
 from fastapi import Depends, HTTPException, Request
@@ -26,6 +26,9 @@ from .identity import (
     permission_for_grpc_method,
     permission_for_rest_path,
 )
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 
 def _extract_bearer_token(header_value: str | None) -> str | None:
@@ -134,7 +137,7 @@ async def get_current_identity(request: Request) -> Identity:
     return identity
 
 
-def require_permission(permission: str) -> Depends:
+def require_permission(permission: str) -> Any:
     """Return a FastAPI dependency that enforces a specific permission.
 
     Usage:
@@ -149,7 +152,7 @@ def require_permission(permission: str) -> Depends:
     return Depends(_checker)
 
 
-def require_rest_path_permission(path: str) -> Depends:
+def require_rest_path_permission(path: str) -> Any:
     """Convenience wrapper that enforces the permission for a REST path."""
     return require_permission(permission_for_rest_path(path))
 
@@ -172,6 +175,7 @@ class AuthInterceptor(grpc.ServerInterceptor):
         if identity is None:
             record_auth_denial("unauthenticated")
             context.abort(grpc.StatusCode.UNAUTHENTICATED, "Missing or invalid credentials")
+        assert identity is not None
         permission = permission_for_grpc_method(method)
         if not identity.has_permission(permission):
             record_auth_denial("forbidden")
@@ -230,4 +234,5 @@ def get_identity_from_grpc_context(
         # The auth interceptor would have already rejected; this fallback avoids
         # leaking anonymous rate-limit budget if called in isolation.
         context.abort(grpc.StatusCode.UNAUTHENTICATED, "Missing or invalid credentials")
+    assert identity is not None
     return identity

@@ -4,7 +4,7 @@
 这些模型与 ``main.py`` 拆分前的定义保持完全一致，确保接口契约不变。
 """
 
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from pydantic import BaseModel
 
@@ -24,15 +24,15 @@ class MaskRequest(BaseModel):
 class MaskRecordRequest(BaseModel):
     """整记录脱敏请求模型。"""
 
-    record: Dict[str, str]
+    record: dict[str, str]
     context: str = ""
 
 
 class MaskBatchRequest(BaseModel):
     """批量字段脱敏请求模型。"""
 
-    field_names: List[str]
-    values: List[str]
+    field_names: list[str]
+    values: list[str]
     context: str = ""
 
 
@@ -43,8 +43,8 @@ class MaskDataFrameRequest(BaseModel):
     columns 指定需要脱敏的列；未指定则对所有字符串列脱敏。
     """
 
-    data: List[Dict[str, Any]]
-    columns: Optional[List[str]] = None
+    data: list[dict[str, Any]]
+    columns: list[str] | None = None
     context: str = ""
 
 
@@ -66,23 +66,23 @@ class DPRequest(BaseModel):
     values 为输入数据列表；params 为可选参数，用于覆盖默认或 profile 中的配置。
     """
 
-    values: List[float]
-    params: Dict[str, object] = {}
+    values: list[float]
+    params: dict[str, object] = {}
 
 
 class DPHistogramRequest(BaseModel):
     """差分隐私直方图请求模型。"""
 
-    values: List[str]
-    categories: List[str]
-    params: Dict[str, object] = {}
+    values: list[str]
+    categories: list[str]
+    params: dict[str, object] = {}
 
 
 class DPNoisyCountRequest(BaseModel):
     """对已聚合计数进行 DP 加噪的请求模型。"""
 
     true_count: float
-    params: Dict[str, object] = {}
+    params: dict[str, object] = {}
 
 
 class DPNoisySumRequest(BaseModel):
@@ -92,7 +92,7 @@ class DPNoisySumRequest(BaseModel):
     """
 
     true_sum: float
-    params: Dict[str, object] = {}
+    params: dict[str, object] = {}
 
 
 class DPNoisyMeanRequest(BaseModel):
@@ -100,75 +100,75 @@ class DPNoisyMeanRequest(BaseModel):
 
     true_sum: float
     true_count: float
-    params: Dict[str, object] = {}
+    params: dict[str, object] = {}
 
 
 class DPNoisyHistogramRequest(BaseModel):
     """对已聚合直方图计数进行 DP 加噪的请求模型。"""
 
-    true_counts: Dict[str, float]
-    params: Dict[str, object] = {}
+    true_counts: dict[str, float]
+    params: dict[str, object] = {}
 
 
 class DPChunkedCountRequest(BaseModel):
     """分块流式 DP 计数请求模型。"""
 
-    chunks: List[List[float]]
-    params: Dict[str, object] = {}
+    chunks: list[list[float]]
+    params: dict[str, object] = {}
 
 
 class DPChunkedSumRequest(BaseModel):
     """分块流式 DP 求和请求模型。"""
 
-    chunks: List[List[float]]
-    params: Dict[str, object] = {}
+    chunks: list[list[float]]
+    params: dict[str, object] = {}
 
 
 class DPChunkedMeanRequest(BaseModel):
     """分块流式 DP 均值请求模型。"""
 
-    chunks: List[List[float]]
-    params: Dict[str, object] = {}
+    chunks: list[list[float]]
+    params: dict[str, object] = {}
 
 
 class DPAggregateRequest(BaseModel):
     """表格级原位 DP 聚合请求模型。"""
 
-    rows: List[Dict[str, Any]]
-    specs: Dict[str, Any]
-    params: Dict[str, object] = {}
+    rows: list[dict[str, Any]]
+    specs: dict[str, Any]
+    params: dict[str, object] = {}
 
 
 class DPVectorSumRequest(BaseModel):
     """高维向量 / 梯度 $L_2$ 范数截断加噪请求模型。"""
 
-    vectors: List[List[float]]
-    params: Dict[str, object] = {}
+    vectors: list[list[float]]
+    params: dict[str, object] = {}
 
 
 class DPAdaptiveClipRequest(BaseModel):
     """差分隐私自适应二分搜索估计上下界请求模型。"""
 
-    values: List[float]
-    params: Dict[str, object] = {}
+    values: list[float]
+    params: dict[str, object] = {}
 
 
 class DPGroupByRequest(BaseModel):
     """Tau-Thresholding 差分隐私 SQL Group-By 请求模型。"""
 
-    rows: List[Dict[str, Any]]
+    rows: list[dict[str, Any]]
     group_col: str
     target_col: str
     agg: str
-    params: Dict[str, object] = {}
+    params: dict[str, object] = {}
 
 
 class DPChunkedHistogramRequest(BaseModel):
     """分块流式 DP 直方图请求模型。"""
 
-    chunks: List[List[str]]
-    categories: List[str]
-    params: Dict[str, object] = {}
+    chunks: list[list[str]]
+    categories: list[str]
+    params: dict[str, object] = {}
 
 
 # --------------------------------------------------------------------------- #
@@ -179,16 +179,16 @@ class DPChunkedHistogramRequest(BaseModel):
 class KAnonRequest(BaseModel):
     """K-匿名单条记录请求模型。"""
 
-    record: Dict[str, object]
-    qi_cols: List[str]
+    record: dict[str, object]
+    qi_cols: list[str]
     k: int = 5
 
 
 class KAnonTableRequest(BaseModel):
     """K-匿名整张表请求模型。"""
 
-    rows: List[Dict[str, object]]
-    qi_cols: List[str]
+    rows: list[dict[str, object]]
+    qi_cols: list[str]
     k: int = 5
     max_depth: int = 10
 
@@ -199,8 +199,8 @@ class KAnonDataFrameRequest(BaseModel):
     data 为 records 列表（可来自 pandas/SecretFlow DataFrame）。
     """
 
-    data: List[Dict[str, Any]]
-    qi_cols: List[str]
+    data: list[dict[str, Any]]
+    qi_cols: list[str]
     k: int = 5
     max_depth: int = 10
 
@@ -216,20 +216,20 @@ class QolRequest(BaseModel):
     query: str
     num_dummies: int = 3
     domain: str = "medical"
-    medical_pool: Optional[List[str]] = None
-    generic_pool: Optional[List[str]] = None
-    seed: Optional[int] = None
+    medical_pool: list[str] | None = None
+    generic_pool: list[str] | None = None
+    seed: int | None = None
 
 
 class QolBatchRequest(BaseModel):
     """批量查询混淆请求模型。"""
 
-    queries: List[str]
+    queries: list[str]
     num_dummies: int = 3
     domain: str = "medical"
-    medical_pool: Optional[List[str]] = None
-    generic_pool: Optional[List[str]] = None
-    seed: Optional[int] = None
+    medical_pool: list[str] | None = None
+    generic_pool: list[str] | None = None
+    seed: int | None = None
 
 
 # --------------------------------------------------------------------------- #
@@ -240,30 +240,30 @@ class QolBatchRequest(BaseModel):
 class LdpPerturbBinaryRequest(BaseModel):
     """二值本地 DP 扰动请求模型。"""
 
-    values: List[int]
+    values: list[int]
     epsilon: float
 
 
 class LdpPerturbCategoricalRequest(BaseModel):
     """类别型本地 DP 扰动请求模型。"""
 
-    values: List[str]
-    categories: List[str]
+    values: list[str]
+    categories: list[str]
     epsilon: float
 
 
 class LdpEstimateBinaryRequest(BaseModel):
     """二值本地 DP 估计请求模型。"""
 
-    reported_values: List[int]
+    reported_values: list[int]
     epsilon: float
 
 
 class LdpEstimateCategoricalRequest(BaseModel):
     """类别型本地 DP 估计请求模型。"""
 
-    reported_values: List[str]
-    categories: List[str]
+    reported_values: list[str]
+    categories: list[str]
     epsilon: float
 
 
@@ -276,6 +276,6 @@ class RecommendRequest(BaseModel):
     """隐私参数推荐请求模型。"""
 
     namespace: str
-    values: Optional[List[float]] = None
-    rows: Optional[List[Dict[str, object]]] = None
-    qi_cols: Optional[List[str]] = None
+    values: list[float] | None = None
+    rows: list[dict[str, object]] | None = None
+    qi_cols: list[str] | None = None

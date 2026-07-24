@@ -16,7 +16,14 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
-from app.main import LbBackend, LbTestRequest, _lb_pick_backends, _run_lb_test, _validate_lb_url, app
+from app.main import (
+    LbBackend,
+    LbTestRequest,
+    _lb_pick_backends,
+    _run_lb_test,
+    _validate_lb_url,
+    app,
+)
 
 
 @pytest.fixture

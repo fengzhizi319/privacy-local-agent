@@ -2,6 +2,8 @@ version: "3.9"
 
 services:
   privacy-local-agent:
+    # 这里直接从仓库根目录构建 core 镜像，适合本地联调和快速启动。
+    # 如果需要完整 ML 能力，应改用 Dockerfile 的 `ml` target。
     build:
       context: ../..
       dockerfile: Dockerfile
@@ -9,9 +11,14 @@ services:
     image: privacy-local-agent:0.1.0
     container_name: privacy-local-agent
     ports:
+      # 对外暴露 REST 和 gRPC 端口；若部署到不可信网络，请配合 TLS / Auth 使用。
       - "8079:8079"
       - "50051:50051"
     environment:
+      # 这些环境变量对应仓库内统一的运行时配置接口：
+      # - `PRIVACY_REST_*` / `PRIVACY_GRPC_*` 控制监听地址
+      # - `PRIVACY_PROFILE` 指向 YAML 预设，容器内会被挂载到只读路径
+      # - `PRIVACY_LOG_*` 控制日志格式，便于本地调试或接入日志系统
       PRIVACY_REST_HOST: "0.0.0.0"
       PRIVACY_REST_PORT: "8079"
       PRIVACY_GRPC_HOST: "0.0.0.0"
@@ -19,16 +26,21 @@ services:
       PRIVACY_PROFILE: "/etc/privacy-local-agent/privacy-profile.yaml"
       PRIVACY_LOG_LEVEL: "INFO"
       PRIVACY_LOG_FORMAT: "text"
-      # 如需启用 TLS/认证，取消下面注释并挂载对应文件
+      # 如需启用 TLS/认证，取消下面注释并挂载对应文件。
+      # `PRIVACY_AUTH_EXTERNAL_KEYS_JSON` 采用 JSON 字符串，键名是 API key 标识，
+      # 值里可写入 `name` / `scopes` 等元数据；生产环境建议改为 Secret 注入。
       # PRIVACY_TLS_ENABLED: "true"
       # PRIVACY_TLS_CERT_FILE: "/certs/tls.crt"
       # PRIVACY_TLS_KEY_FILE: "/certs/tls.key"
       # PRIVACY_AUTH_ENABLED: "true"
       # PRIVACY_AUTH_EXTERNAL_KEYS_JSON: '{"dev-key":{"name":"local","scopes":["*"]}}'
     volumes:
+      # 预设配置文件只读挂载，避免容器内被意外修改。
       - ./privacy-profile.yaml:/etc/privacy-local-agent/privacy-profile.yaml:ro
+      # 如启用 TLS，请把证书目录以只读方式挂载进容器。
       # - ./certs:/certs:ro
     healthcheck:
+      # 健康检查直接探测 REST /health，方便 compose 依赖判断和本地排障。
       test: ["CMD", "wget", "-qO-", "http://localhost:8079/health"]
       interval: 10s
       timeout: 5s

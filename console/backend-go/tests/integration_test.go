@@ -13,10 +13,10 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 
-	"github.com/fengzhizi319/privacy-local-agent/frontend/backend-go/internal/agent"
-	"github.com/fengzhizi319/privacy-local-agent/frontend/backend-go/internal/config"
-	"github.com/fengzhizi319/privacy-local-agent/frontend/backend-go/internal/handlers"
-	pb "github.com/fengzhizi319/privacy-local-agent/frontend/backend-go/proto"
+	"github.com/fengzhizi319/privacy-local-agent/console/backend-go/internal/agent"
+	"github.com/fengzhizi319/privacy-local-agent/console/backend-go/internal/config"
+	"github.com/fengzhizi319/privacy-local-agent/console/backend-go/internal/handlers"
+	pb "github.com/fengzhizi319/privacy-local-agent/console/backend-go/proto"
 )
 
 const realAgentAddr = "127.0.0.1:50051"

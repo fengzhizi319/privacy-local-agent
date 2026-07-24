@@ -45,6 +45,10 @@ def ldp_estimate_binary(req: LdpEstimateBinaryRequest):
 def ldp_estimate_categorical(req: LdpEstimateCategoricalRequest):
     """类别型本地 DP 估计接口。"""
     try:
-        return {"estimated_histogram": service.estimate_categorical_histogram(req.reported_values, req.categories, req.epsilon)}
+        return {
+            "estimated_histogram": service.estimate_categorical_histogram(
+                req.reported_values, req.categories, req.epsilon
+            )
+        }
     except Exception as e:
         handle_request_exception(e)

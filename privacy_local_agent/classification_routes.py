@@ -5,7 +5,7 @@
 """
 
 import os
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
@@ -36,28 +36,28 @@ class ClassifyFieldRequest(BaseModel):
 
     field_name: str
     value: Any
-    params: Dict[str, Any] = {}
+    params: dict[str, Any] = {}
 
 
 class ClassifyRecordRequest(BaseModel):
     """单条记录分类请求模型。"""
 
-    record: Dict[str, Any]
-    params: Dict[str, Any] = {}
+    record: dict[str, Any]
+    params: dict[str, Any] = {}
 
 
 class ClassifyTableRequest(BaseModel):
     """整张表分类请求模型。"""
 
-    schema_: List[str] = Field(alias="schema")
-    rows: List[Dict[str, Any]]
-    params: Dict[str, Any] = {}
+    schema_: list[str] = Field(alias="schema")
+    rows: list[dict[str, Any]]
+    params: dict[str, Any] = {}
 
 
 class ClassifySecretFlowRequest(BaseModel):
     """SecretFlow 分类请求模型。"""
 
-    party: Optional[str] = None
+    party: str | None = None
     params_json: str = "{}"
     data_json: str = "{}"
 

@@ -16,10 +16,13 @@ This module combines three capabilities:
 from __future__ import annotations
 
 import hashlib
-import logging
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any
 
 from ...observability.logging_config import get_logger
+from ..data_adapters import to_records
+
+if TYPE_CHECKING:
+    import logging
 
 # Module-level structured logger for classification utils events
 logger = get_logger(__name__)
@@ -124,7 +127,7 @@ def safe_log(
         msg: 日志消息模板 / Log message template.
         **fields: 需要格式化的字段 / Fields to format (strings auto-redacted).
     """
-    safe_fields: Dict[str, Any] = {}
+    safe_fields: dict[str, Any] = {}
     for key, value in fields.items():
         if isinstance(value, str):
             safe_fields[key] = redact(value)
@@ -133,7 +136,7 @@ def safe_log(
     logger.log(level, msg, safe_fields)
 
 
-def mask_record_values(record: Optional[Dict[str, Any]]) -> Dict[str, str]:
+def mask_record_values(record: dict[str, Any] | None) -> dict[str, str]:
     """将记录中的所有字段值脱敏 / Mask All Field Values in Record.
 
     中文说明：用于复核导出等场景。
@@ -191,7 +194,7 @@ _JRT0197_FIELD_PATTERNS = [
     "balance",
 ]
 
-TEMPLATES: Dict[str, Dict[str, Any]] = {
+TEMPLATES: dict[str, dict[str, Any]] = {
     "gbt35273": {
         "version": "gbt35273-1.0.0",
         "default_level": "L3",
@@ -240,7 +243,7 @@ TEMPLATES: Dict[str, Dict[str, Any]] = {
 }
 
 
-def get_template_params(template: Optional[str]) -> Dict[str, Any]:
+def get_template_params(template: str | None) -> dict[str, Any]:
     """获取指定合规模板的默认参数 / Get Compliance Template Default Parameters.
 
     Args:
@@ -259,14 +262,11 @@ def get_template_params(template: Optional[str]) -> Dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-from ..data_adapters import to_records
-
-
 def classify_secretflow(
     api: Any,
     sf_data: Any,
-    params: Optional[Dict[str, Any]] = None,
-    party: Optional[str] = None,
+    params: dict[str, Any] | None = None,
+    party: str | None = None,
 ) -> Any:
     """对 SecretFlow 数据结构进行分类 / Classify SecretFlow Data Structure.
 
@@ -292,12 +292,12 @@ def classify_secretflow(
 
 
 __all__ = [
-    "redact",
-    "hash_value",
-    "should_log_value",
-    "safe_log",
-    "mask_record_values",
     "TEMPLATES",
-    "get_template_params",
     "classify_secretflow",
+    "get_template_params",
+    "hash_value",
+    "mask_record_values",
+    "redact",
+    "safe_log",
+    "should_log_value",
 ]

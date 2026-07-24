@@ -2,6 +2,11 @@
 # 一键启动隐私测试控制台：同时启动 privacy_local_agent 和前端代理后端
 # 用法：./console/start.sh [--rebuild]
 #   --rebuild  强制重新编译前端、后端与 agent（即使构建产物已存在）
+#
+# 设计目标：
+# - 尽量“开箱即用”，减少首次启动时的手工准备步骤
+# - 在依赖缺失时优雅降级，而不是直接失败
+# - 启动后先等待关键健康检查通过，再提示用户访问地址
 
 set -euo pipefail
 
@@ -21,9 +26,29 @@ BACKEND_VENV="$SCRIPT_DIR/backend/.venv"
 AGENT_URL="http://127.0.0.1:8079"
 CONSOLE_URL="http://127.0.0.1:8080"
 
+# ── 端口占用预检 ───────────────────────────────────────────────────────
+check_port_available() {
+    local port="$1"
+    local name="$2"
+    python3 - <<PY
+import socket, sys
+s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+try:
+    s.bind(("127.0.0.1", $port))
+except OSError:
+    print("错误：端口 " + str($port) + " 已被占用（$name），请先释放或修改环境变量。", file=sys.stderr)
+    sys.exit(1)
+finally:
+    s.close()
+PY
+}
+
 # ── 自动补全缺失的依赖 / 构建产物 ─────────────────────────────────────
 
 # 1. Agent 虚拟环境：缺失或 --rebuild 时自动创建并安装项目依赖
+# 这里使用项目根目录的 `.venv`，让控制台脚本和主包共享同一套运行时依赖，
+# 避免重复安装和版本漂移。
 if [[ ! -d "$AGENT_VENV" ]]; then
     echo "未找到 agent 虚拟环境，自动创建并安装依赖：$AGENT_VENV"
     python3 -m venv "$AGENT_VENV"
@@ -45,6 +70,7 @@ elif [[ "$REBUILD" == true ]]; then
 fi
 
 # 2. 控制台后端虚拟环境：缺失或 --rebuild 时自动创建并安装依赖
+# 控制台后端保留独立虚拟环境，方便它和主 agent 分开升级、调试和回滚。
 if [[ ! -d "$BACKEND_VENV" ]]; then
     echo "未找到后端虚拟环境，自动创建并安装依赖：$BACKEND_VENV"
     python3 -m venv "$BACKEND_VENV"
@@ -64,6 +90,8 @@ elif [[ "$REBUILD" == true ]]; then
 fi
 
 # 3. 前端构建产物：缺失或 --rebuild 时自动执行 install + build
+# 前端依赖优先使用 pnpm，其次回退到 npm；如果两者都不存在，则仅保留 API 模式，
+# 这样即使本机没有完整 Node 环境，也能继续调试后端。
 if [[ "$REBUILD" == true && -d "$SCRIPT_DIR/web/dist" ]]; then
     echo "--rebuild：删除旧的前端构建产物并重新构建..."
     rm -rf "$SCRIPT_DIR/web/dist"
@@ -112,7 +140,11 @@ cleanup() {
 }
 trap cleanup INT TERM EXIT
 
+check_port_available 8079 "privacy_local_agent REST"
+check_port_available 8080 "Python REST 代理后端"
+
 # 启动 privacy_local_agent
+# 先启动主 agent，再启动控制台后端；后者会通过 REST 访问前者，所以顺序不能反过来。
 echo "启动 privacy_local_agent (REST: $AGENT_URL)..."
 (
     source "$AGENT_VENV/bin/activate"
@@ -124,6 +156,7 @@ PIDS+=("$AGENT_PID")
 write_pid "$AGENT_PID_FILE" "$AGENT_PID"
 
 # 启动前端后端
+# 控制台后端提供给 Web UI 和 smoke test 使用的 API，因此必须在提示页面前完成启动。
 echo "启动测试控制台后端 (Console: $CONSOLE_URL)..."
 (
     source "$BACKEND_VENV/bin/activate"
@@ -135,6 +168,8 @@ PIDS+=("$CONSOLE_PID")
 write_pid "$CONSOLE_PID_FILE" "$CONSOLE_PID"
 
 # 等待服务就绪
+# 这里轮询 health 接口，避免脚本“进程已启动但服务还没 ready”时误导用户。
+# 只有主 agent 和控制台后端都通过健康检查后，才会打印可访问地址。
 wait_for_service() {
     local url="$1"
     local name="$2"

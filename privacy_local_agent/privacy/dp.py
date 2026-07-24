@@ -26,13 +26,17 @@ import secrets
 import statistics
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Union
+from typing import TYPE_CHECKING, Any
+
 import numpy as np
 
 from ..observability.logging_config import get_logger
 from ..observability.metrics import DP_QUERIES_TOTAL
 from .budget import BudgetRegistry, PrivacyBudgetExhausted, RDPAccountant, default_registry
-from .data_adapters import _is_sparse_matrix, _to_2d_numpy_array, extract_chunks, extract_values
+from .data_adapters import _is_sparse_matrix, _to_2d_numpy_array, extract_values
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable, Sequence
 
 # Module-level structured logger for DP query and budget events
 logger = get_logger(__name__)
@@ -92,10 +96,10 @@ class Accumulator:
 
     count: float = 0.0
     sum: float = 0.0
-    histogram: Dict[Any, float] = field(default_factory=dict)
+    histogram: dict[Any, float] = field(default_factory=dict)
     sensitivity: float = 1.0
 
-    def __add__(self, other: "Accumulator") -> "Accumulator":
+    def __add__(self, other: Accumulator) -> Accumulator:
         # 合并两个 Accumulator 的局部统计量（count/sum 相加，histogram 合并，sensitivity 取最大值）
         """合并两个 Accumulator 对象的局部统计量（加法结合律）/ Combine two Accumulators (Additive Law)."""
         # Reject non-Accumulator operands to preserve type safety
@@ -129,7 +133,7 @@ class Accumulator:
         return json.dumps(data).encode("utf-8")
 
     @classmethod
-    def deserialize(cls, b: bytes) -> "Accumulator":
+    def deserialize(cls, b: bytes) -> Accumulator:
         # 从 UTF-8 字节串反序列化重建 Accumulator 实例，用于 Master 节点接收 Worker 数据
         """从 UTF-8 字节串反序列化重建 Accumulator 实例 / Deserialize bytes back to Accumulator."""
         import json
@@ -163,14 +167,15 @@ class DPResult:
 
     value: Any
     noise_mechanism: str
-    noise_scale: Union[float, List[float], np.ndarray]
+    noise_scale: float | list[float] | np.ndarray
     epsilon_spent: float
     delta_spent: float
-    confidence_interval: Union[tuple[float, float], list[tuple[float, float]], Dict[Any, tuple[float, float]]]
+    confidence_interval: tuple[float, float] | list[tuple[float, float]] | dict[Any, tuple[float, float]]
 
     def to_arrow(self) -> Any:
         # 将 DPResult 转换为附带 DP 隐私 Metadata 的 PyArrow Table，支持零拷贝列式传输
-        """将 DPResult 包装转换为附带 DP 隐私 Metadata 的 PyArrow Table / Export to PyArrow Table with Embedded DP Metadata.
+        """将 DPResult 包装转换为附带 DP 隐私 Metadata 的 PyArrow Table /
+        Export to PyArrow Table with Embedded DP Metadata.
 
         执行步骤 / Execution Steps:
         1. 提取 DPResult 的隐私元数据，构造 JSON 可序列化字典。
@@ -183,6 +188,7 @@ class DPResult:
            (Construct pyarrow.Table and attach schema metadata)
         """
         import json
+
         import pyarrow as pa
 
         # Ensure all fields are JSON-serializable native Python types (no numpy objects)
@@ -357,7 +363,7 @@ def calibrate_analytic_gaussian(epsilon: float, delta: float, sensitivity: float
 
     执行步骤：
     1. 校验敏感度，若敏感度为 0 则直接返回噪声标准差 0.0。
-    2. 定义标准正态累积分布函数 Phi(t) 与辅助方程 Delta(v)。
+    2. 定义标准正态累积分布函数 phi(t) 与辅助方程 delta(v)。
     3. 利用二分查找在 [0, 1] 找到临界点 v_star，使得 Delta(v_star) == 0。
     4. 根据敏感度与求解得到的比例值计算并返回校准后的高斯噪声标准差 sigma。
     """
@@ -365,20 +371,20 @@ def calibrate_analytic_gaussian(epsilon: float, delta: float, sensitivity: float
     if sensitivity == 0.0:
         return 0.0
 
-    # Standard normal CDF: Phi(t) = 0.5 * (1 + erf(t / sqrt(2)))
-    def Phi(t: float) -> float:
+    # Standard normal CDF: phi(t) = 0.5 * (1 + erf(t / sqrt(2)))
+    def phi(t: float) -> float:
         """标准正态分布累积分布函数 / Standard normal CDF."""
         return 0.5 * (1.0 + math.erf(float(t) / math.sqrt(2.0)))
 
     # Case A helper: delta as a function of the ratio s when delta >= delta_threshold
-    def caseA(eps: float, s: float) -> float:
+    def case_a(eps: float, s: float) -> float:
         """解析高斯 Case A 辅助函数（delta >= delta_threshold 时使用）。"""
-        return Phi(math.sqrt(eps * s)) - math.exp(eps) * Phi(-math.sqrt(eps * (s + 2.0)))
+        return phi(math.sqrt(eps * s)) - math.exp(eps) * phi(-math.sqrt(eps * (s + 2.0)))
 
     # Case B helper: delta as a function of the ratio s when delta < delta_threshold
-    def caseB(eps: float, s: float) -> float:
+    def case_b(eps: float, s: float) -> float:
         """解析高斯 Case B 辅助函数（delta < delta_threshold 时使用）。"""
-        return Phi(-math.sqrt(eps * s)) - math.exp(eps) * Phi(-math.sqrt(eps * (s + 2.0)))
+        return phi(-math.sqrt(eps * s)) - math.exp(eps) * phi(-math.sqrt(eps * (s + 2.0)))
 
     # Doubling trick: exponentially expand the search interval [s_inf, s_sup] until predicate is met
     def doubling_trick(predicate_stop, s_inf: float, s_sup: float) -> tuple[float, float]:
@@ -401,29 +407,36 @@ def calibrate_analytic_gaussian(epsilon: float, delta: float, sensitivity: float
         return s_mid
 
     # Compute the threshold delta that separates Case A and Case B
-    delta_thr = caseA(epsilon, 0.0)
+    delta_thr = case_a(epsilon, 0.0)
     if delta == delta_thr:
         # Exact threshold: alpha = 1 (boundary case)
         alpha = 1.0
     else:
         if delta > delta_thr:
-            # Case A: use caseA function for doubling + binary search
-            predicate_stop_DT = lambda s: caseA(epsilon, s) >= delta
-            function_s_to_delta = lambda s: caseA(epsilon, s)
-            predicate_left_BS = lambda s: function_s_to_delta(s) > delta
+            # Case A: use case_a function for doubling + binary search
+            def predicate_stop_dt(s):
+                return case_a(epsilon, s) >= delta
+            def function_s_to_delta(s):
+                return case_a(epsilon, s)
+            def predicate_left_bs(s):
+                return function_s_to_delta(s) > delta
         else:
-            # Case B: use caseB function for doubling + binary search
-            predicate_stop_DT = lambda s: caseB(epsilon, s) <= delta
-            function_s_to_delta = lambda s: caseB(epsilon, s)
-            predicate_left_BS = lambda s: function_s_to_delta(s) < delta
+            # Case B: use case_b function for doubling + binary search
+            def predicate_stop_dt(s):
+                return case_b(epsilon, s) <= delta
+            def function_s_to_delta(s):
+                return case_b(epsilon, s)
+            def predicate_left_bs(s):
+                return function_s_to_delta(s) < delta
 
         # Stop binary search when the delta gap is within tolerance
-        predicate_stop_BS = lambda s: abs(function_s_to_delta(s) - delta) <= tol
+        def predicate_stop_bs(s):
+            return abs(function_s_to_delta(s) - delta) <= tol
 
         # Phase 1: find an interval containing s_final via doubling
-        s_inf, s_sup = doubling_trick(predicate_stop_DT, 0.0, 1.0)
+        s_inf, s_sup = doubling_trick(predicate_stop_dt, 0.0, 1.0)
         # Phase 2: binary search within [s_inf, s_sup] to pinpoint s_final
-        s_final = binary_search(predicate_stop_BS, predicate_left_BS, s_inf, s_sup)
+        s_final = binary_search(predicate_stop_bs, predicate_left_bs, s_inf, s_sup)
 
         # Convert the optimal ratio s_final to the noise multiplier alpha
         if delta > delta_thr:
@@ -509,12 +522,12 @@ class DPApi:
     def __init__(
         self,
         namespace: str = "default",
-        random_state: Optional[int] = None,
-        registry: Optional[BudgetRegistry] = None,
-        epsilon_total: Optional[float] = None,
-        delta_total: Optional[float] = None,
-        window_seconds: Optional[float] = None,
-        rdp_accountant: Optional[RDPAccountant] = None,
+        random_state: int | None = None,
+        registry: BudgetRegistry | None = None,
+        epsilon_total: float | None = None,
+        delta_total: float | None = None,
+        window_seconds: float | None = None,
+        rdp_accountant: RDPAccountant | None = None,
     ):
         # 初始化 DPApi：创建关联 namespace 的预算账户和安全随机数生成器
         """初始化 DPApi。
@@ -556,7 +569,7 @@ class DPApi:
             self.rng.seed(random_state)
 
     @classmethod
-    def from_seed(cls, namespace: str = "default", seed: Optional[int] = None) -> "DPApi":
+    def from_seed(cls, namespace: str = "default", seed: int | None = None) -> DPApi:
         # 兼容旧接口的工厂方法：通过 seed 创建 DPApi 实例
         """兼容旧构造方式：通过 seed 创建 DPApi 实例。"""
         # Delegate to __init__ with random_state parameter
@@ -662,8 +675,8 @@ class DPApi:
     def _resolve_clip_bounds(
         self,
         values: np.ndarray,
-        clip_lower: Optional[float],
-        clip_upper: Optional[float],
+        clip_lower: float | None,
+        clip_upper: float | None,
         mechanism: str,
     ) -> tuple[float, float]:
         # 解析 clip 上下界：Gaussian 必须显式提供，Laplace 允许数据推断（带警告）
@@ -705,7 +718,7 @@ class DPApi:
         self,
         epsilon: float,
         delta: float = 0.0,
-        confidence_level: Optional[float] = None,
+        confidence_level: float | None = None,
     ) -> None:
         """统一校验公共输入参数，确保失败时快速抛出清晰错误。
 
@@ -801,7 +814,7 @@ class DPApi:
         round_int: bool = False,
         clip_non_negative: bool = False,
         sensitivity: float = 1.0,
-    ) -> Union[float, DPResult]:
+    ) -> float | DPResult:
         """执行标量 DP 查询的公共模板：预算扣减、噪声采样、后处理、置信区间。
 
         集中处理单次 (epsilon, delta) 标量查询的公共流程，减少 noisy_*/chunked_*
@@ -858,7 +871,7 @@ class DPApi:
 
     def _execute_histogram_query(
         self,
-        true_counts: Dict[Any, float],
+        true_counts: dict[Any, float],
         epsilon: float,
         delta: float,
         mechanism: str,
@@ -867,7 +880,7 @@ class DPApi:
         confidence_level: float,
         round_int: bool = False,
         clip_non_negative: bool = True,
-    ) -> Union[Dict[Any, float], DPResult]:
+    ) -> dict[Any, float] | DPResult:
         """执行直方图 DP 查询的公共模板：单次预算为所有分桶加噪。
 
         直方图各分桶互斥，联合敏感度为 1，因此只扣减一次预算。
@@ -887,8 +900,8 @@ class DPApi:
             raise
 
         DP_QUERIES_TOTAL.labels(mechanism=mechanism, aggregation="histogram").inc()
-        res_dict: Dict[Any, float] = {}
-        ci_dict: Dict[Any, tuple[float, float]] = {}
+        res_dict: dict[Any, float] = {}
+        ci_dict: dict[Any, tuple[float, float]] = {}
         for c in true_counts:
             noise = self._sample_count_noise(epsilon, delta, mechanism)
             raw_val = float(true_counts[c]) + noise
@@ -932,16 +945,16 @@ class DPApi:
         epsilon: float,
         delta: float = 0.0,
         mechanism: str = "laplace",
-        column: Optional[str] = None,
-        party: Optional[str] = None,
+        column: str | None = None,
+        party: str | None = None,
         round_int: bool = False,
         clip_non_negative: bool = True,
         return_details: bool = False,
         confidence_level: float = 0.95,
-        user_ids: Optional[Sequence[Any]] = None,
+        user_ids: Sequence[Any] | None = None,
         max_contributions: int = 1,
         discrete: bool = False,
-    ) -> Union[float, DPResult]:
+    ) -> float | DPResult:
         # 执行差分隐私计数查询：提取数据 → 扣减预算 → 计算真实计数 → 注入 DP 噪声 → 后处理
         """差分隐私计数查询 / Differentially Private Count Query.
 
@@ -1062,17 +1075,17 @@ class DPApi:
         epsilon: float,
         delta: float = 0.0,
         mechanism: str = "laplace",
-        clip_lower: Optional[float] = None,
-        clip_upper: Optional[float] = None,
-        column: Optional[str] = None,
-        party: Optional[str] = None,
+        clip_lower: float | None = None,
+        clip_upper: float | None = None,
+        column: str | None = None,
+        party: str | None = None,
         round_int: bool = False,
         clip_non_negative: bool = False,
         return_details: bool = False,
         confidence_level: float = 0.95,
-        user_ids: Optional[Sequence[Any]] = None,
+        user_ids: Sequence[Any] | None = None,
         max_contributions: int = 1,
-    ) -> Union[float, DPResult]:
+    ) -> float | DPResult:
         # 执行差分隐私求和查询：提取数据 → clip 截断 → 扣减预算 → 注入 calibrated 噪声
         """差分隐私求和查询 / Differentially Private Sum Query.
 
@@ -1190,16 +1203,16 @@ class DPApi:
         epsilon: float,
         delta: float = 0.0,
         mechanism: str = "laplace",
-        clip_lower: Optional[float] = None,
-        clip_upper: Optional[float] = None,
+        clip_lower: float | None = None,
+        clip_upper: float | None = None,
         min_count: float = 5.0,
-        column: Optional[str] = None,
-        party: Optional[str] = None,
+        column: str | None = None,
+        party: str | None = None,
         round_int: bool = False,
         clip_non_negative: bool = False,
         return_details: bool = False,
         confidence_level: float = 0.95,
-    ) -> Union[float, DPResult]:
+    ) -> float | DPResult:
         # 执行差分隐私均值查询：组合定理拆分预算，分别计算 noisy_count 和 noisy_sum 后求比值
         """差分隐私均值查询。
 
@@ -1319,7 +1332,7 @@ class DPApi:
         clip_non_negative: bool = True,
         return_details: bool = False,
         confidence_level: float = 0.95,
-    ) -> Union[np.ndarray, DPResult]:
+    ) -> np.ndarray | DPResult:
         # 多列/2D 矩阵批量 DP 计数：按列独立加噪，预算按组合定理乘以列数
         """多列 / 2D 矩阵批量差分隐私计数 (按列 axis=0 计算)。
 
@@ -1398,15 +1411,15 @@ class DPApi:
         self,
         data: Any,
         epsilon: float,
-        clip_lower: Union[float, Sequence[float]],
-        clip_upper: Union[float, Sequence[float]],
+        clip_lower: float | Sequence[float],
+        clip_upper: float | Sequence[float],
         delta: float = 0.0,
         mechanism: str = "laplace",
         round_int: bool = False,
         clip_non_negative: bool = False,
         return_details: bool = False,
         confidence_level: float = 0.95,
-    ) -> Union[np.ndarray, DPResult]:
+    ) -> np.ndarray | DPResult:
         # 多列/2D 矩阵批量 DP 求和：每列独立 clip 并以各自敏感度加噪
         """多列 / 2D 矩阵批量差分隐私求和 (按列 axis=0 计算)。
 
@@ -1518,13 +1531,13 @@ class DPApi:
         epsilon: float,
         delta: float = 0.0,
         mechanism: str = "laplace",
-        column: Optional[str] = None,
-        party: Optional[str] = None,
+        column: str | None = None,
+        party: str | None = None,
         round_int: bool = False,
         clip_non_negative: bool = True,
         return_details: bool = False,
         confidence_level: float = 0.95,
-    ) -> Union[Dict[Any, float], DPResult]:
+    ) -> dict[Any, float] | DPResult:
         # DP 直方图计数：利用互斥分类的联合敏感度为 1，所有 Bin 共享一次预算
         """差分隐私直方图计数（基于联合敏感度为 1）。
 
@@ -1547,7 +1560,7 @@ class DPApi:
         DP_QUERIES_TOTAL.labels(mechanism=mechanism, aggregation="histogram").inc()
 
         # Step 3: Compute true (noise-free) count for each category bin
-        counts = {c: 0.0 for c in categories}
+        counts = dict.fromkeys(categories, 0.0)
         if _is_sparse_matrix(arr):
             # Sparse matrix: densify to 1D array and count occurrences
             arr_arr = arr.toarray().ravel()
@@ -1618,7 +1631,7 @@ class DPApi:
         clip_non_negative: bool = True,
         return_details: bool = False,
         confidence_level: float = 0.95,
-    ) -> Union[float, DPResult]:
+    ) -> float | DPResult:
         # 对已聚合好的预计算计数直接注入 DP 噪声（用于分布式/流式场景）
         """对已经聚合好的计数结果直接注入 DP 噪声。"""
         # Validate mechanism and delta compatibility
@@ -1657,7 +1670,7 @@ class DPApi:
         clip_non_negative: bool = False,
         return_details: bool = False,
         confidence_level: float = 0.95,
-    ) -> Union[float, DPResult]:
+    ) -> float | DPResult:
         # 对已聚合好的预计算求和直接注入 DP 噪声（用于分布式/流式场景）
         """对已经聚合好的求和结果直接注入 DP 噪声。"""
         # Validate mechanism and delta compatibility
@@ -1703,7 +1716,7 @@ class DPApi:
         clip_non_negative: bool = False,
         return_details: bool = False,
         confidence_level: float = 0.95,
-    ) -> Union[float, DPResult]:
+    ) -> float | DPResult:
         # 对已聚合好的 sum/count 分别加噪后计算比值均值（Delta 方法估计方差）
         """对已经聚合好的 sum/count 分别注入 DP 噪声后得到均值。"""
         # Validate mechanism and delta compatibility
@@ -1780,7 +1793,7 @@ class DPApi:
 
     def noisy_histogram(
         self,
-        true_counts: Dict[Any, float],
+        true_counts: dict[Any, float],
         epsilon: float,
         delta: float = 0.0,
         mechanism: str = "laplace",
@@ -1788,7 +1801,7 @@ class DPApi:
         clip_non_negative: bool = True,
         return_details: bool = False,
         confidence_level: float = 0.95,
-    ) -> Union[Dict[Any, float], DPResult]:
+    ) -> dict[Any, float] | DPResult:
         # 对已聚合好的直方图各 Bin 计数直接注入 DP 噪声
         """对已经聚合好的直方图计数直接注入 DP 噪声。"""
         # Validate mechanism and delta compatibility
@@ -1820,13 +1833,13 @@ class DPApi:
         epsilon: float,
         delta: float = 0.0,
         mechanism: str = "laplace",
-        column: Optional[str] = None,
-        party: Optional[str] = None,
+        column: str | None = None,
+        party: str | None = None,
         round_int: bool = False,
         clip_non_negative: bool = True,
         return_details: bool = False,
         confidence_level: float = 0.95,
-    ) -> Union[float, DPResult]:
+    ) -> float | DPResult:
         # 分块流式 DP 计数：增量聚合多个 chunk 的真实计数，最后只加一次噪声
         """分块流式差分隐私计数。
 
@@ -1896,15 +1909,15 @@ class DPApi:
         epsilon: float,
         delta: float = 0.0,
         mechanism: str = "laplace",
-        clip_lower: Optional[float] = None,
-        clip_upper: Optional[float] = None,
-        column: Optional[str] = None,
-        party: Optional[str] = None,
+        clip_lower: float | None = None,
+        clip_upper: float | None = None,
+        column: str | None = None,
+        party: str | None = None,
         round_int: bool = False,
         clip_non_negative: bool = False,
         return_details: bool = False,
         confidence_level: float = 0.95,
-    ) -> Union[float, DPResult]:
+    ) -> float | DPResult:
         # 分块流式 DP 求和：按块 clip 并累加局部和，最终只消耗一次预算
         """分块流式差分隐私求和。
 
@@ -1987,16 +2000,16 @@ class DPApi:
         epsilon: float,
         delta: float = 0.0,
         mechanism: str = "laplace",
-        clip_lower: Optional[float] = None,
-        clip_upper: Optional[float] = None,
+        clip_lower: float | None = None,
+        clip_upper: float | None = None,
         min_count: float = 5.0,
-        column: Optional[str] = None,
-        party: Optional[str] = None,
+        column: str | None = None,
+        party: str | None = None,
         round_int: bool = False,
         clip_non_negative: bool = False,
         return_details: bool = False,
         confidence_level: float = 0.95,
-    ) -> Union[float, DPResult]:
+    ) -> float | DPResult:
         # 分块流式 DP 均值：组合定理拆分预算，内存占用与总数据量解耦
         """分块流式差分隐私均值。
 
@@ -2091,13 +2104,13 @@ class DPApi:
         epsilon: float,
         delta: float = 0.0,
         mechanism: str = "laplace",
-        column: Optional[str] = None,
-        party: Optional[str] = None,
+        column: str | None = None,
+        party: str | None = None,
         round_int: bool = False,
         clip_non_negative: bool = True,
         return_details: bool = False,
         confidence_level: float = 0.95,
-    ) -> Union[Dict[Any, float], DPResult]:
+    ) -> dict[Any, float] | DPResult:
         # 分块流式 DP 直方图：按块统计各分类计数并合并，只消耗一次预算
         """分块流式差分隐私直方图计数。
 
@@ -2108,7 +2121,7 @@ class DPApi:
         # Validate common numeric inputs (epsilon, delta, confidence_level)
         self._validate_inputs(epsilon, delta, confidence_level)
         # Initialize per-category bin counts to zero
-        counts = {c: 0.0 for c in categories}
+        counts = dict.fromkeys(categories, 0.0)
 
         # Step 2: Iterate over chunks, merging per-chunk counts into global bins
         for chunk in chunks:
@@ -2153,19 +2166,20 @@ class DPApi:
     def dp_aggregate(
         self,
         df: Any,
-        specs: Dict[str, Any],
+        specs: dict[str, Any],
         epsilon: float,
         delta: float = 0.0,
         mechanism: str = "laplace",
         return_details: bool = False,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         # Table-Level 原位表格 DP 聚合：按组合定理均分预算到各列，分发调用对应聚合方法
         """Table-Level 原位表格差分隐私聚合。
 
         执行步骤：
         1. 获取待聚合规格 `num_specs = len(specs)`。
            (Determine number of aggregation specs for budget splitting)
-        2. 根据预算组合定理，将总预算均匀切分为 `eps_per_col = epsilon / num_specs` 与 `delta_per_col = delta / num_specs`。
+        2. 根据预算组合定理，将总预算均匀切分为 `eps_per_col = epsilon / num_specs`
+           与 `delta_per_col = delta / num_specs`。
            (Split total budget equally across columns)
         3. 遍历 `specs` 配置字典（列名 -> 聚合类型及特定参数 tuple/str）。
            (Iterate over specs dict)
@@ -2225,8 +2239,8 @@ class DPApi:
         target_quantile: float = 0.95,
         num_iterations: int = 15,
         initial_clip: float = 10.0,
-        column: Optional[str] = None,
-        party: Optional[str] = None,
+        column: str | None = None,
+        party: str | None = None,
     ) -> tuple[float, float]:
         # DP 自适应二分搜索估计 clip 上界：通过 DP 分位数估计确定安全截断范围
         """差分隐私自适应二分搜索估计 [0.0, clip_upper] 上下界。
@@ -2285,11 +2299,11 @@ class DPApi:
     def create_accumulator(
         self,
         values: Any,
-        column: Optional[str] = None,
-        party: Optional[str] = None,
-        clip_lower: Optional[float] = None,
-        clip_upper: Optional[float] = None,
-        categories: Optional[Sequence[Any]] = None,
+        column: str | None = None,
+        party: str | None = None,
+        clip_lower: float | None = None,
+        clip_upper: float | None = None,
+        categories: Sequence[Any] | None = None,
     ) -> Accumulator:
         # 构建分布式 Worker 节点的无噪 Accumulator，供 Master 合并后统一注入 DP 噪声
         """构建分布式 Worker 节点的无噪流式 Accumulator。
@@ -2327,7 +2341,7 @@ class DPApi:
         hist = {}
         if categories:
             # Initialize all category bins to zero
-            hist = {c: 0.0 for c in categories}
+            hist = dict.fromkeys(categories, 0.0)
             if size > 0:
                 from collections import Counter
 
@@ -2350,7 +2364,7 @@ class DPApi:
         delta: float = 0.0,
         mechanism: str = "laplace",
         return_details: bool = False,
-    ) -> Union[float, Dict[Any, float], DPResult]:
+    ) -> float | dict[Any, float] | DPResult:
         # Master 节点对合并后的 Accumulator 统一注入一次 DP 噪声并导出结果
         """Master/Combine 节点对合并后的 Accumulator 统一注入一次 DP 噪声。
 
@@ -2378,7 +2392,13 @@ class DPApi:
         elif aggregation == AggregationType.MEAN:
             # Compute noisy mean from accumulated sum/count with budget splitting
             return self.noisy_mean(
-                accumulator.sum, accumulator.count, accumulator.sensitivity, epsilon, delta, mechanism, return_details=return_details
+                accumulator.sum,
+                accumulator.count,
+                accumulator.sensitivity,
+                epsilon,
+                delta,
+                mechanism,
+                return_details=return_details,
             )
         elif aggregation == AggregationType.HISTOGRAM:
             # Inject noise into each histogram bin
@@ -2397,7 +2417,7 @@ class DPApi:
         mechanism: str = "gaussian",
         return_details: bool = False,
         confidence_level: float = 0.95,
-    ) -> Union[np.ndarray, DPResult]:
+    ) -> np.ndarray | DPResult:
         # 高维向量 L2 范数截断与各向同性加噪（DP-SGD 基础逻辑），敏感度为 max_norm
         """高维向量 / 梯度 L2 范数截断与各向同性加噪 (DP-SGD 基础逻辑)。
 
@@ -2466,7 +2486,7 @@ class DPApi:
         min_count: float = 5.0,
         return_details: bool = False,
         confidence_level: float = 0.95,
-    ) -> Union[np.ndarray, DPResult]:
+    ) -> np.ndarray | DPResult:
         # DP 向量均值：L2 clip + 各向同性加噪 + noisy_count 归一化，用于 DP-SGD 平均梯度
         """高维向量 / 梯度 DP 均值：L2 范数截断 + 各向同性加噪 + noisy_count 归一化。
 
@@ -2551,11 +2571,11 @@ class DPApi:
         agg: str,
         epsilon: float,
         delta: float = 1e-5,
-        clip_lower: Optional[float] = None,
-        clip_upper: Optional[float] = None,
+        clip_lower: float | None = None,
+        clip_upper: float | None = None,
         mechanism: str = "laplace",
         return_details: bool = False,
-    ) -> Dict[Any, Any]:
+    ) -> dict[Any, Any]:
         # Tau-Thresholding DP GroupBy：按噪声计数阈值过滤罕见分组，防范存在性泄露
         """Tau-Thresholding 差分隐私 SQL Group-By 过滤。
 
@@ -2641,7 +2661,7 @@ class LocalDPApi:
     3. 服务端/收集端接收扰动后的统计结果，使用无偏估计（Debias）公式还原真实分布。
     """
 
-    def __init__(self, seed: Optional[int] = None):
+    def __init__(self, seed: int | None = None):
         # 初始化 LocalDPApi，绑定随机数种子以保证可复现性
         """初始化 LocalDPApi，绑定随机数种子。"""
         # Create a seeded PRNG for reproducible randomized response
@@ -2754,7 +2774,7 @@ class LocalDPApi:
         reported_values: Sequence[Any],
         categories: Sequence[Any],
         epsilon: float,
-    ) -> Dict[Any, float]:
+    ) -> dict[Any, float]:
         # 根据扰动后的类别样本，使用无偏纠偏公式估计各类别的真实直方图分布
         """根据扰动后的类别样本估计各类别的真实无偏直方图分布。
 
@@ -2780,14 +2800,14 @@ class LocalDPApi:
         denominator = p - q
 
         # Step 2: Count occurrences of each category in reported data
-        counts: Dict[Any, int] = {c: 0 for c in categories}
+        counts: dict[Any, int] = dict.fromkeys(categories, 0)
         for v in reported_values:
             if v in counts:
                 counts[v] += 1
 
         # Step 3: Apply unbiased debiasing estimator for each category
         # hat_f_j = (f_reported_j - q) / (p - q)
-        estimates: Dict[Any, float] = {}
+        estimates: dict[Any, float] = {}
         for c in categories:
             f_reported = counts[c] / n if n > 0 else 0.0
             est = (f_reported - q) / denominator if denominator != 0 else 1.0 / k
@@ -2796,10 +2816,9 @@ class LocalDPApi:
 
         # Step 4: Normalize estimates so they sum to 1.0 (valid probability distribution)
         total = sum(estimates.values())
-        if total > 0:
-            estimates = {c: v / total for c, v in estimates.items()}
-        else:
-            # All estimates are 0: fall back to uniform distribution
-            estimates = {c: 1.0 / k for c in categories}
+        estimates = (
+            {c: v / total for c, v in estimates.items()} if total > 0
+            else dict.fromkeys(categories, 1.0 / k)
+        )
 
         return estimates

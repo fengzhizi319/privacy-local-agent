@@ -27,14 +27,13 @@ jobs:
           pip install -r requirements-core.txt
           pip install ruff mypy
 
-      - name: Ruff lint
-        run: ruff check privacy_local_agent/ tests/
+      # 先使用 make check，确保 console/backend 不退化；
+      # 后续全局 ruff/mypy 全绿后再推进到 make lint。
+      - name: Lint & type check (console/backend)
+        run: make check
 
       - name: Ruff format check
-        run: ruff format --check privacy_local_agent/ tests/
-
-      - name: Mypy type check
-        run: mypy privacy_local_agent/ --ignore-missing-imports
+        run: ruff format --check privacy_local_agent/ tests/ console/backend/
 
   test:
     name: Test

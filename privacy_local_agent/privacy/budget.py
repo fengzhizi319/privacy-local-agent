@@ -13,13 +13,13 @@ budget is exhausted. Supports optional time-window based reset to prevent
 long-running sidecars from permanently exhausting their budget.
 """
 
+import contextlib
 import hashlib
 import hmac
 import os
 import sqlite3
 import threading
 import time
-from typing import Dict, Optional
 
 from ..observability.logging_config import get_logger
 from ..observability.metrics import BUDGET_REMAINING
@@ -35,7 +35,7 @@ class BudgetAuditLogger:
     生产环境务必通过环境变量设置高强度随机密钥。
     """
 
-    def __init__(self, secret_key: Optional[bytes] = None, log_file: Optional[str] = None) -> None:
+    def __init__(self, secret_key: bytes | None = None, log_file: str | None = None) -> None:
         """初始化审计日志器。
 
         Args:
@@ -55,7 +55,9 @@ class BudgetAuditLogger:
                 },
             )
             self.secret_key = b"privacy-local-agent-default-audit-key"
-        self.log_file = log_file or os.environ.get("PRIVACY_BUDGET_AUDIT_LOG", "/tmp/budget_audit.log")
+        # Default audit path; configurable via PRIVACY_BUDGET_AUDIT_LOG env var.
+        default_path = "/tmp/budget_audit.log"  # noqa: S108
+        self.log_file = log_file or os.environ.get("PRIVACY_BUDGET_AUDIT_LOG", default_path)
         self._lock = threading.Lock()
 
     def log_spend(
@@ -89,7 +91,7 @@ class BudgetAuditLogger:
             return signature
 
 
-class PrivacyBudgetExhausted(Exception):
+class PrivacyBudgetExhausted(Exception):  # noqa: N818
     """隐私预算已耗尽异常。
 
     当某命名空间下的 epsilon 或 delta 累计消耗超过预设上限时抛出。
@@ -135,9 +137,9 @@ class BudgetAccountant:
     def __new__(
         cls,
         namespace: str,
-        epsilon_total: Optional[float] = None,
-        delta_total: Optional[float] = None,
-        window_seconds: Optional[float] = None,
+        epsilon_total: float | None = None,
+        delta_total: float | None = None,
+        window_seconds: float | None = None,
     ) -> "BudgetAccountant":
         """禁止直接构造。
 
@@ -159,9 +161,9 @@ class BudgetAccountant:
     def __init__(
         self,
         namespace: str,
-        epsilon_total: Optional[float] = None,
-        delta_total: Optional[float] = None,
-        window_seconds: Optional[float] = None,
+        epsilon_total: float | None = None,
+        delta_total: float | None = None,
+        window_seconds: float | None = None,
     ) -> None:
         """空操作保护。
 
@@ -175,7 +177,7 @@ class BudgetAccountant:
         namespace: str,
         epsilon_total: float = 10.0,
         delta_total: float = 1e-4,
-        window_seconds: Optional[float] = None,
+        window_seconds: float | None = None,
     ) -> None:
         """内部初始化方法（由 BudgetRegistry 创建实例时调用）。"""
         self.namespace = namespace
@@ -223,10 +225,8 @@ class BudgetAccountant:
         """关闭当前线程的 SQLite 连接（线程退出或重置时调用）。"""
         conn = getattr(self._thread_local, "conn", None)
         if conn is not None:
-            try:
+            with contextlib.suppress(Exception):
                 conn.close()
-            except Exception:
-                pass
             self._thread_local.conn = None
 
     def _init_db(self) -> None:
@@ -263,7 +263,8 @@ class BudgetAccountant:
                     # 预插入/更新当前的 budget 信息（如果尚未存在）
                     conn.execute(
                         "INSERT OR IGNORE INTO privacy_budgets "
-                        "(namespace, epsilon_total, delta_total, epsilon_spent, delta_spent, window_seconds, window_start) "
+                        "(namespace, epsilon_total, delta_total, "
+                        "epsilon_spent, delta_spent, window_seconds, window_start) "
                         "VALUES (?, ?, ?, 0.0, 0.0, ?, ?)",
                         (
                             self.namespace,
@@ -286,7 +287,7 @@ class BudgetAccountant:
         """返回当前 UNIX 时间戳（便于测试时 mock）。"""
         return time.time()
 
-    def _window_expired(self, window_start: Optional[float]) -> bool:
+    def _window_expired(self, window_start: float | None) -> bool:
         """判断当前窗口是否已经过期。"""
         if self.window_seconds is None or self.window_seconds <= 0:
             return False
@@ -351,7 +352,8 @@ class BudgetAccountant:
                         db_window_start = self._window_start
                         conn.execute(
                             "INSERT INTO privacy_budgets "
-                            "(namespace, epsilon_total, delta_total, epsilon_spent, delta_spent, window_seconds, window_start) "
+                            "(namespace, epsilon_total, delta_total, "
+                            "epsilon_spent, delta_spent, window_seconds, window_start) "
                             "VALUES (?, ?, ?, 0.0, 0.0, ?, ?)",
                             (self.namespace, eps_total, del_total, self.window_seconds, self._window_start),
                         )
@@ -449,7 +451,7 @@ class BudgetAccountant:
             delta_total - delta_spent
         )
 
-    def remaining(self) -> Dict[str, float]:
+    def remaining(self) -> dict[str, float]:
         """查询剩余隐私预算。
 
         若配置了时间窗口且窗口已到期，会先自动重置已消耗预算，再返回剩余量。
@@ -543,15 +545,15 @@ class BudgetRegistry:
     """
 
     def __init__(self) -> None:
-        self._instances: Dict[str, BudgetAccountant] = {}
+        self._instances: dict[str, BudgetAccountant] = {}
         self._lock = threading.Lock()
 
     def get_or_create(
         self,
         namespace: str,
-        epsilon_total: Optional[float] = None,
-        delta_total: Optional[float] = None,
-        window_seconds: Optional[float] = None,
+        epsilon_total: float | None = None,
+        delta_total: float | None = None,
+        window_seconds: float | None = None,
     ) -> BudgetAccountant:
         """获取已有实例，或在不存在时创建新实例。
 
@@ -595,12 +597,12 @@ class BudgetRegistry:
             self._instances[namespace] = accountant
             return accountant
 
-    def get(self, namespace: str) -> Optional[BudgetAccountant]:
+    def get(self, namespace: str) -> BudgetAccountant | None:
         """获取已有实例，不存在则返回 None。"""
         with self._lock:
             return self._instances.get(namespace)
 
-    def remove(self, namespace: str) -> Optional[BudgetAccountant]:
+    def remove(self, namespace: str) -> BudgetAccountant | None:
         """销毁指定 namespace 的实例。"""
         with self._lock:
             return self._instances.pop(namespace, None)
@@ -617,9 +619,9 @@ default_registry = BudgetRegistry()
 
 def get_budget(
     namespace: str,
-    epsilon_total: Optional[float] = None,
-    delta_total: Optional[float] = None,
-    window_seconds: Optional[float] = None,
+    epsilon_total: float | None = None,
+    delta_total: float | None = None,
+    window_seconds: float | None = None,
 ) -> BudgetAccountant:
     """获取或创建指定命名空间的 BudgetAccountant 实例。
 
@@ -661,7 +663,7 @@ class RDPAccountant:
         self.target_delta = target_delta
         # 记录各 order alpha 下累积的 RDP epsilon
         self.rdp_orders = [1.5, 2.0, 3.0, 5.0, 8.0, 12.0, 16.0, 24.0, 32.0, 64.0, 128.0]
-        self.rdp_epsilons: Dict[float, float] = {a: 0.0 for a in self.rdp_orders}
+        self.rdp_epsilons: dict[float, float] = dict.fromkeys(self.rdp_orders, 0.0)
         self._lock = threading.Lock()
 
     def record_gaussian(self, sigma: float, sensitivity: float = 1.0) -> None:
@@ -685,7 +687,7 @@ class RDPAccountant:
                 self.rdp_epsilons[alpha] = 0.0
             self.rdp_epsilons[alpha] += rdp_eps
 
-    def get_epsilon(self, delta: Optional[float] = None) -> float:
+    def get_epsilon(self, delta: float | None = None) -> float:
         """转换回经典 (epsilon, delta)-DP 下的最小 epsilon。"""
         d = delta if delta is not None else self.target_delta
         if d <= 0.0:

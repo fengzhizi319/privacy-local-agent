@@ -8,15 +8,20 @@ from __future__ import annotations
 
 import time
 import uuid
-from typing import Any, Callable
+from typing import TYPE_CHECKING, Any
 
 import grpc
-from fastapi import Request, Response
-from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
+from starlette.middleware.base import BaseHTTPMiddleware
 
-from .context import RequestContext, get_request_context, set_request_context
+from .context import RequestContext, set_request_context
 from .logging_config import get_logger
-from .metrics import REQUESTS_TOTAL, REQUEST_DURATION, TRAFFIC_BYTES_TOTAL
+from .metrics import REQUEST_DURATION, REQUESTS_TOTAL, TRAFFIC_BYTES_TOTAL
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from fastapi import Request, Response
+    from starlette.middleware.base import RequestResponseEndpoint
 
 logger = get_logger(__name__)
 
@@ -113,7 +118,7 @@ class ObservabilityMiddleware(BaseHTTPMiddleware):
 
             response.headers[_REQUEST_ID_HEADER] = request_id
             return response
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             duration = time.perf_counter() - start
             REQUESTS_TOTAL.labels(method=method, path=path, status="500").inc()
             REQUEST_DURATION.labels(method=method, path=path).observe(duration)
@@ -134,7 +139,7 @@ def _grpc_status(context: grpc.ServicerContext) -> str:
     code = context.code()
     if code is None:
         return "OK"
-    return code.name
+    return str(code.name)
 
 
 def _message_size(message: Any) -> int:

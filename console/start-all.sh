@@ -29,6 +29,24 @@ AGENT_URL="http://127.0.0.1:8079"
 PY_CONSOLE_URL="http://127.0.0.1:8080"
 GO_CONSOLE_URL="http://127.0.0.1:8081"
 
+# ── 端口占用预检 ───────────────────────────────────────────────────────
+check_port_available() {
+    local port="$1"
+    local name="$2"
+    python3 - <<PY
+import socket, sys
+s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+try:
+    s.bind(("127.0.0.1", $port))
+except OSError:
+    print("错误：端口 " + str($port) + " 已被占用（$name），请先释放或修改环境变量。", file=sys.stderr)
+    sys.exit(1)
+finally:
+    s.close()
+PY
+}
+
 # ── 自动补全缺失的依赖 / 构建产物 ─────────────────────────────────────
 
 # 1. Agent 虚拟环境：缺失或 --rebuild 时自动创建并安装项目依赖
@@ -135,6 +153,11 @@ cleanup() {
     echo "已停止。"
 }
 trap cleanup INT TERM EXIT
+
+check_port_available 8079 "privacy_local_agent REST"
+check_port_available 50051 "privacy_local_agent gRPC"
+check_port_available 8080 "Python REST 代理后端"
+check_port_available 8081 "Go gRPC 代理后端"
 
 # 启动 privacy_local_agent（同时监听 REST 8079 与 gRPC 50051）
 echo "启动 privacy_local_agent (REST: $AGENT_URL, gRPC: 127.0.0.1:50051)..."

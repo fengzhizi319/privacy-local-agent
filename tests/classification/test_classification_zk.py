@@ -24,18 +24,18 @@ import logging
 import pytest
 
 from privacy_local_agent.privacy.classification import ClassificationAPI
-
-
-@pytest.fixture
-def api():
-    """创建默认 ClassificationAPI 实例。"""
-    return ClassificationAPI()
 from privacy_local_agent.privacy.classification.classification_utils import (
     hash_value,
     mask_record_values,
     redact,
     should_log_value,
 )
+
+
+@pytest.fixture
+def api():
+    """创建默认 ClassificationAPI 实例。"""
+    return ClassificationAPI()
 
 
 def test_redact_long_value():

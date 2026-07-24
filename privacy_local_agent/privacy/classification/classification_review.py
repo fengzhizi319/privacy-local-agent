@@ -20,12 +20,12 @@ import sqlite3
 import threading
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from ...observability.logging_config import get_logger
 from ...observability.metrics import CLASSIFICATION_REVIEW_QUEUE_SIZE
 from .classification_models import ReviewEntry, ReviewStatus, SensitivityLevel
-from .classification_utils import hash_value, redact
+from .classification_utils import redact
 
 # Module-level structured logger for review store events
 logger = get_logger(__name__)
@@ -44,14 +44,14 @@ class ReviewStore:
         db_path: SQLite 数据库路径 / SQLite database path.
     """
 
-    def __init__(self, db_path: Optional[str] = None):
+    def __init__(self, db_path: str | None = None):
         """初始化复核存储 / Initialize Review Store.
 
         Args:
             db_path: SQLite 数据库路径 / SQLite database path (None for in-memory mode).
         """
         self.db_path = db_path or os.environ.get("PRIVACY_REVIEW_DB")
-        self._mem: Dict[str, ReviewEntry] = {}
+        self._mem: dict[str, ReviewEntry] = {}
         self._lock = threading.Lock()
         if self.db_path:
             self._init_sqlite()
@@ -67,6 +67,7 @@ class ReviewStore:
             )
 
     def _init_sqlite(self) -> None:
+        assert self.db_path is not None
         with sqlite3.connect(self.db_path, timeout=10.0) as conn:
             conn.execute(
                 "CREATE TABLE IF NOT EXISTS classification_reviews ("
@@ -87,8 +88,8 @@ class ReviewStore:
     def add_from_record(
         self,
         record_result: Any,
-        original_record: Optional[Dict[str, Any]] = None,
-    ) -> List[ReviewEntry]:
+        original_record: dict[str, Any] | None = None,
+    ) -> list[ReviewEntry]:
         """从记录分类结果中自动提取需要人工复核的字段 / Auto-Extract Fields Needing Human Review.
 
         执行步骤 / Execution Steps:
@@ -106,7 +107,7 @@ class ReviewStore:
         Returns:
             新增复核条目列表 / List of new review entries.
         """
-        entries: List[ReviewEntry] = []
+        entries: list[ReviewEntry] = []
         for field_name, field_result in record_result.field_results.items():
             if not field_result.needs_human_review:
                 continue
@@ -188,7 +189,7 @@ class ReviewStore:
             )
             return entry
 
-    def export(self, format: str = "jsonl", mask_input: bool = False) -> str:
+    def export(self, format: str = "jsonl", mask_input: bool = False) -> str:  # noqa: A002
         """导出复核样本 / Export Review Samples.
 
         Args:
@@ -232,7 +233,7 @@ class ReviewStore:
             return output.getvalue()
         raise ValueError(f"unsupported export format: {format}")
 
-    def _build_fine_tuning_text(self, entry: ReviewEntry, value: Optional[str]) -> str:
+    def _build_fine_tuning_text(self, entry: ReviewEntry, value: str | None) -> str:
         """构造 LLM 微调格式文本。"""
         input_text = f"字段名: {entry.field_name}\n字段值: {value if value else ''}"
         predicted = entry.predicted_level.value if entry.predicted_level else "UNKNOWN"
@@ -246,6 +247,7 @@ class ReviewStore:
 
     def _load_sqlite(self) -> None:
         """从 SQLite 加载已有复核记录到内存，保证进程重启后历史复核不丢失。"""
+        assert self.db_path is not None
         with sqlite3.connect(self.db_path, timeout=10.0) as conn:
             rows = conn.execute("SELECT * FROM classification_reviews").fetchall()
         for row in rows:
@@ -269,6 +271,7 @@ class ReviewStore:
         )
 
     def _insert_sqlite(self, entry: ReviewEntry) -> None:
+        assert self.db_path is not None
         with sqlite3.connect(self.db_path, timeout=10.0) as conn:
             conn.execute(
                 "INSERT INTO classification_reviews VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -289,6 +292,7 @@ class ReviewStore:
             )
 
     def _update_sqlite(self, entry: ReviewEntry) -> None:
+        assert self.db_path is not None
         with sqlite3.connect(self.db_path, timeout=10.0) as conn:
             conn.execute(
                 "UPDATE classification_reviews SET corrected_level=?, reviewer=?, comment=?, "

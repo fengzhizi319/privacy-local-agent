@@ -13,14 +13,12 @@ from __future__ import annotations
 import math
 from statistics import mean
 
-import numpy as np
 import pytest
-from hypothesis import given, settings, assume
+from hypothesis import assume, given, settings
 from hypothesis import strategies as st
 
 from privacy_local_agent.privacy.budget import default_registry
 from privacy_local_agent.privacy.dp import DPApi
-
 
 # ---------------------------------------------------------------------------
 # Fixtures / helpers

@@ -47,21 +47,21 @@ import (
 	"github.com/gin-gonic/gin"
 
 	// agent：gRPC 客户端封装，提供到上游 agent 的连接与 RPC 调用能力
-	"github.com/fengzhizi319/privacy-local-agent/frontend/backend-go/internal/agent"
+	"github.com/fengzhizi319/privacy-local-agent/console/backend-go/internal/agent"
 	// config：运行时配置（监听地址、agent 地址、静态目录等）
-	"github.com/fengzhizi319/privacy-local-agent/frontend/backend-go/internal/config"
+	"github.com/fengzhizi319/privacy-local-agent/console/backend-go/internal/config"
 	// fileparse：文件解析工具，支持 CSV/JSON 格式的数据文件解析
-	"github.com/fengzhizi319/privacy-local-agent/frontend/backend-go/internal/fileparse"
+	"github.com/fengzhizi319/privacy-local-agent/console/backend-go/internal/fileparse"
 	// lbtest：负载均衡测试模块，实现 round_robin/random/least_connections 等策略
-	"github.com/fengzhizi319/privacy-local-agent/frontend/backend-go/internal/lbtest"
+	"github.com/fengzhizi319/privacy-local-agent/console/backend-go/internal/lbtest"
 	// mapper：REST → gRPC 路由映射核心模块，根据 path 分发到对应的 gRPC 方法
-	"github.com/fengzhizi319/privacy-local-agent/frontend/backend-go/internal/mapper"
+	"github.com/fengzhizi319/privacy-local-agent/console/backend-go/internal/mapper"
 	// models：与前端共享的 JSON 数据结构定义（请求/响应模型）
-	"github.com/fengzhizi319/privacy-local-agent/frontend/backend-go/internal/models"
+	"github.com/fengzhizi319/privacy-local-agent/console/backend-go/internal/models"
 	// samples：内置的示例 payload 集合，供前端 /api/samples 接口使用
-	"github.com/fengzhizi319/privacy-local-agent/frontend/backend-go/internal/samples"
+	"github.com/fengzhizi319/privacy-local-agent/console/backend-go/internal/samples"
 	// pb：由 proto/privacy.proto 生成的 gRPC 代码，包含所有 RPC 方法与消息类型
-	pb "github.com/fengzhizi319/privacy-local-agent/frontend/backend-go/proto"
+	pb "github.com/fengzhizi319/privacy-local-agent/console/backend-go/proto"
 )
 
 // 本控制台后端的身份标识常量，随每个响应下发给前端。

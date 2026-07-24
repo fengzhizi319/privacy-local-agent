@@ -18,9 +18,7 @@ from privacy_local_agent.privacy.classification import ClassificationAPI
 from privacy_local_agent.privacy.classification.classification_models import (
     EngineLayer,
     FieldClassificationResult,
-    RecordClassificationResult,
     SensitivityLevel,
-    TableClassificationResult,
 )
 
 

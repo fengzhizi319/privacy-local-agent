@@ -5,19 +5,19 @@ from __future__ import annotations
 import pytest
 from prometheus_client import REGISTRY
 
-from privacy_local_agent.privacy.kano_table import (
-    k_anonymize_dataframe,
-    k_anonymize_table,
-)
 from privacy_local_agent.privacy.kano import (
-    QIType,
     GeneralizationStrategy,
+    KAnonymityRecordResult,
+    QIType,
     anonymize_record,
     anonymize_records_batch,
     choose_level,
-    salary_hierarchy,
     education_hierarchy,
-    KAnonymityRecordResult,
+    salary_hierarchy,
+)
+from privacy_local_agent.privacy.kano_table import (
+    k_anonymize_dataframe,
+    k_anonymize_table,
 )
 
 

@@ -20,9 +20,10 @@ Built-in input validation, structured logging, and Prometheus metrics instrument
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Callable, Dict, List, Optional, Union
+from typing import Any
 
 from ..observability.logging_config import get_logger
 from ..observability.metrics import KANO_OPERATIONS_TOTAL
@@ -73,7 +74,7 @@ def _validate_k(k: int) -> None:
         raise ValueError(f"k must be at least 2 for meaningful anonymity, got {k}")
 
 
-def _validate_qi_cols(qi_cols: List[str]) -> None:
+def _validate_qi_cols(qi_cols: list[str]) -> None:
     """校验准标识符列名列表有效性 / Validate QI column list.
 
     Args:
@@ -101,11 +102,11 @@ class KAnonymityRecordResult:
         hierarchies_used: 本次使用的泛化层次函数名称映射。
     """
 
-    value: Dict[str, Any]
+    value: dict[str, Any]
     k: int
-    qi_cols: List[str]
+    qi_cols: list[str]
     applied_level: int = 1
-    hierarchies_used: Dict[str, str] = field(default_factory=dict)
+    hierarchies_used: dict[str, str] = field(default_factory=dict)
 
     def to_arrow(self):
         """将 KAnonymityRecordResult 包装转换为附带 K-匿名 Metadata 的 PyArrow Table。
@@ -117,6 +118,7 @@ class KAnonymityRecordResult:
         4. 替换 Table Schema Metadata 后导出。
         """
         import json
+
         import pyarrow as pa
 
         meta = {
@@ -276,7 +278,7 @@ def education_hierarchy(value: str, level: int) -> str:
 
 
 # 内置准标识符泛化层次结构映射表 / Built-in QI Generalization Hierarchy Registry
-BUILTIN_HIERARCHIES: Dict[str, GeneralizationHierarchy] = {
+BUILTIN_HIERARCHIES: dict[str, GeneralizationHierarchy] = {
     QIType.AGE.value: age_hierarchy,
     QIType.ZIPCODE.value: zipcode_hierarchy,
     QIType.GENDER.value: gender_hierarchy,
@@ -316,12 +318,12 @@ def choose_level(k: int, max_level: int) -> int:
 
 
 def anonymize_record(
-    record: Dict[str, Any],
-    qi_cols: List[str],
-    hierarchies: Dict[str, GeneralizationHierarchy],
+    record: dict[str, Any],
+    qi_cols: list[str],
+    hierarchies: dict[str, GeneralizationHierarchy],
     k: int,
     return_details: bool = False,
-) -> Union[Dict[str, Any], KAnonymityRecordResult]:
+) -> dict[str, Any] | KAnonymityRecordResult:
     """对单条记录按 K-匿名要求进行泛化 / Generalize Single Record for K-Anonymity.
 
     执行步骤 / Execution Steps:
@@ -359,8 +361,8 @@ def anonymize_record(
     KANO_OPERATIONS_TOTAL.labels(operation="record").inc()
     result = dict(record)
     effective_hierarchies = {**BUILTIN_HIERARCHIES, **(hierarchies or {})}
-    applied_levels: Dict[str, int] = {}
-    hierarchies_used: Dict[str, str] = {}
+    applied_levels: dict[str, int] = {}
+    hierarchies_used: dict[str, str] = {}
     for col in qi_cols:
         h = effective_hierarchies.get(col)
         val = result.get(col)
@@ -400,12 +402,12 @@ def anonymize_record(
 
 
 def anonymize_records_batch(
-    records: List[Dict[str, Any]],
-    qi_cols: List[str],
-    hierarchies: Optional[Dict[str, GeneralizationHierarchy]] = None,
+    records: list[dict[str, Any]],
+    qi_cols: list[str],
+    hierarchies: dict[str, GeneralizationHierarchy] | None = None,
     k: int = 5,
     return_details: bool = False,
-) -> Union[List[Dict[str, Any]], KAnonymityRecordResult]:
+) -> list[dict[str, Any]] | KAnonymityRecordResult:
     """批量对多条记录按 K-匿名要求进行泛化 / Batch Generalize Records for K-Anonymity.
 
     执行步骤 / Execution Steps:
@@ -440,9 +442,9 @@ def anonymize_records_batch(
 
     KANO_OPERATIONS_TOTAL.labels(operation="record_batch").inc()
     effective_hierarchies = hierarchies or {}
-    generalized: List[Dict[str, Any]] = []
-    total_levels: List[int] = []
-    all_hierarchies_used: Dict[str, str] = {}
+    generalized: list[dict[str, Any]] = []
+    total_levels: list[int] = []
+    all_hierarchies_used: dict[str, str] = {}
 
     for record in records:
         result = anonymize_record(

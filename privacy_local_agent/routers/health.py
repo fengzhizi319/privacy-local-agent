@@ -47,7 +47,7 @@ def readyz():
             conn.execute("SELECT 1")
             conn.close()
         except sqlite3.Error as e:
-            raise HTTPException(status_code=503, detail=f"Database check failed: {e}")
+            raise HTTPException(status_code=503, detail=f"Database check failed: {e}") from e
 
     return {"status": "ready", "llm_ready": service.classification_api.is_llm_ready()}
 

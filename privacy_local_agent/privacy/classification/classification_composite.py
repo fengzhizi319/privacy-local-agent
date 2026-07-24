@@ -13,7 +13,7 @@ record and upgrades sensitivity levels based on field name combinations.
 from __future__ import annotations
 
 import re
-from typing import Any, Dict, List, Optional
+from typing import Any, ClassVar
 
 from ...observability.logging_config import get_logger
 from ...observability.metrics import CLASSIFICATION_COMPOSITE_HITS_TOTAL
@@ -57,7 +57,7 @@ class CompositeRuleEngine:
         rules: 复合规则列表 / List of composite rules.
     """
 
-    DEFAULT_RULES: List[CompositeRule] = [
+    DEFAULT_RULES: ClassVar[list[CompositeRule]] = [
         CompositeRule(
             name="高敏感个人信息组合",
             field_patterns=[r"^name$", r"id_card|idcard|identity", r"mobile|phone|cell"],
@@ -84,7 +84,7 @@ class CompositeRuleEngine:
         ),
     ]
 
-    def __init__(self, rules: Optional[List[CompositeRule]] = None):
+    def __init__(self, rules: list[CompositeRule] | None = None):
         """初始化复合规则引擎 / Initialize Composite Rule Engine.
 
         Args:
@@ -94,9 +94,9 @@ class CompositeRuleEngine:
 
     def evaluate(
         self,
-        record: Dict[str, Any],
-        field_results: Dict[str, FieldClassificationResult],
-    ) -> List[SecurityTag]:
+        record: dict[str, Any],
+        field_results: dict[str, FieldClassificationResult],
+    ) -> list[SecurityTag]:
         """评估单条记录是否命中复合规则 / Evaluate if Record Matches Composite Rules.
 
         执行步骤 / Execution Steps:
@@ -114,12 +114,12 @@ class CompositeRuleEngine:
         Returns:
             命中的 SecurityTag 列表 / List of matched SecurityTags.
         """
-        tags: List[SecurityTag] = []
-        norm_fields = {_normalize(name): name for name in record.keys()}
+        tags: list[SecurityTag] = []
+        norm_fields = {_normalize(name): name for name in record}
 
         for rule in self.rules:
             matched = 0
-            matched_names: List[str] = []
+            matched_names: list[str] = []
             for pattern in rule.field_patterns:
                 compiled = re.compile(pattern, re.IGNORECASE)
                 for norm_name, original_name in norm_fields.items():
@@ -156,7 +156,7 @@ class CompositeRuleEngine:
 
 def apply_composite_tags(
     record_result,
-    composite_tags: List[SecurityTag],
+    composite_tags: list[SecurityTag],
 ):
     """将复合规则标签合并到记录结果中并升级最终等级 / Merge Composite Tags and Upgrade Level.
 

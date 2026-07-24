@@ -4,6 +4,7 @@ repo_url: https://github.com/your-org/privacy-local-agent
 edit_uri: edit/main/docs/
 
 theme:
+  # Material 主题配合中英双语内容、代码块复制和编辑按钮，适合技术型文档站点。
   name: material
   language: zh
   palette:
@@ -30,6 +31,10 @@ theme:
     - content.action.edit
 
 markdown_extensions:
+  # 这些扩展主要用于让架构/运维文档更易读：
+  # - admonition/details 用于提示、警告和折叠说明
+  # - superfences + mermaid 用于时序图、流程图和嵌套代码块
+  # - tabbed / tasklist / toc / attr_list 用于更结构化的 API 与操作指南
   - admonition
   - pymdownx.details
   - pymdownx.superfences:
@@ -52,6 +57,7 @@ markdown_extensions:
   - md_in_html
 
 plugins:
+  # search：支持中英混合检索；minify：减少生成站点体积。
   - search:
       lang:
         - zh
@@ -62,6 +68,7 @@ plugins:
 docs_dir: docs
 
 nav:
+  # 导航按“学习路径”组织：先看概览，再看设计/示例/运维/测试，方便不同角色快速定位。
   - 首页: index.md
   - 快速开始: quickstart.md
 
@@ -157,6 +164,7 @@ nav:
       - 测试指南: console_web/testing.md
 
   - 生产部署:
+    # 部署部分单独列出，避免把安全、可观测性和安装参数混在一起。
     - 安全 TLS/Auth/Rate Limit:
       - 概览: production_security/README.md
       - 架构设计: production_security/design.md

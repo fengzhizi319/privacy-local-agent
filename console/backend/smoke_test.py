@@ -18,7 +18,7 @@
 from __future__ import annotations
 
 import sys
-from typing import Any, Dict, List, Tuple
+from typing import Any
 
 import httpx
 
@@ -27,11 +27,17 @@ from app.fixtures.samples import get_samples
 BASE = "http://127.0.0.1:8080"
 
 
-def send(method: str, path: str, body: Any = None, raw_b64: str = None, content_type: str = None) -> Tuple[int, Any]:
+def send(
+    method: str,
+    path: str,
+    body: Any = None,
+    raw_b64: str | None = None,
+    content_type: str | None = None,
+) -> tuple[int, Any]:
     """构造代理请求并发送到 ``/api/proxy``，返回（状态码，响应体）。"""
     # 组装 /api/proxy 的请求体：method/path/body 必填，
     # 二进制载荷（raw_payload_b64 / content_type）可为 None。
-    payload: Dict[str, Any] = {
+    payload: dict[str, Any] = {
         "method": method,
         "path": path,
         "body": body,

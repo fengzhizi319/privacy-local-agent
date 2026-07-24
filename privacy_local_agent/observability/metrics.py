@@ -8,11 +8,11 @@ from __future__ import annotations
 from typing import Any
 
 from prometheus_client import (
-    CONTENT_TYPE_LATEST,
     Counter,
     Gauge,
     Histogram,
-    generate_latest,
+)
+from prometheus_client import (
     make_asgi_app as _make_asgi_app,
 )
 

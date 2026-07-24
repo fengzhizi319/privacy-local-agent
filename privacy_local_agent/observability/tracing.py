@@ -9,20 +9,23 @@ from __future__ import annotations
 
 import contextlib
 import os
-from typing import Any, Iterator
+from typing import TYPE_CHECKING, Any
 
 # Optional import: if opentelemetry is not installed, tracing is a no-op.
 try:  # pragma: no cover
     from opentelemetry import trace
+    from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
     from opentelemetry.sdk.resources import Resource
     from opentelemetry.sdk.trace import TracerProvider
     from opentelemetry.sdk.trace.export import BatchSpanProcessor
-    from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 
     _HAS_OTEL = True
 except ImportError:  # pragma: no cover
     _HAS_OTEL = False
     trace = None  # type: ignore[assignment]
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
 
 # Module-level tracer instance. Initialized lazily by init_tracing().
 _tracer: Any = None

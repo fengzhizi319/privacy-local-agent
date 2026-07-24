@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import os
 import threading
-from typing import Any, Dict, Optional
+from typing import Any, cast
 
 import yaml
 
@@ -26,7 +26,7 @@ from ..observability.metrics import PROFILE_RESOLVE_TOTAL
 logger = get_logger(__name__)
 
 
-def default_params(primitive: str) -> Dict[str, Any]:
+def default_params(primitive: str) -> dict[str, Any]:
     """获取指定隐私原语的默认参数 / Get Default Parameters for a Privacy Primitive.
 
     中文说明：
@@ -44,7 +44,7 @@ def default_params(primitive: str) -> Dict[str, Any]:
         对应原语的默认参数字典；若不存在则返回空字典。
         Default parameter dict for the primitive; empty dict if unknown.
     """
-    return {
+    return cast("dict[str, Any]", {
         "dp": {"epsilon": 1.0, "delta": 0.0, "mechanism": "laplace"},
         "k_anonymity": {"k": 5, "l": 2, "t": 0.2, "max_depth": 10},
         "sanitization": {"engine": "mask"},
@@ -93,10 +93,10 @@ def default_params(primitive: str) -> Dict[str, Any]:
             "operational_field_patterns": ["turnover_rate", "device_usage", "inventory"],
             "manual_override": {},
         },
-    }.get(primitive, {})
+    }.get(primitive, {}))
 
 
-def validate(primitive: str, params: Dict[str, Any]) -> None:
+def validate(primitive: str, params: dict[str, Any]) -> None:
     """校验隐私原语参数是否合法 / Validate Privacy Primitive Parameters.
 
     中文说明：
@@ -161,7 +161,7 @@ class ParameterResolver:
         4. 内置 default_params 默认值
     """
 
-    def __init__(self, profile_path: Optional[str] = None):
+    def __init__(self, profile_path: str | None = None):
         """初始化参数解析器 / Initialize Parameter Resolver.
 
         执行步骤 / Execution Steps:
@@ -177,9 +177,9 @@ class ParameterResolver:
                 若提供且文件存在，则加载其内容；否则 profile 为空字典。
                 (If provided and file exists, loads content; otherwise profile is empty dict)
         """
-        self.profile: Dict[str, Any] = {}
+        self.profile: dict[str, Any] = {}
         if profile_path and os.path.exists(profile_path):
-            with open(profile_path, "r", encoding="utf-8") as f:
+            with open(profile_path, encoding="utf-8") as f:
                 self.profile = yaml.safe_load(f) or {}
             logger.info(
                 "profile_loaded",
@@ -189,9 +189,9 @@ class ParameterResolver:
     def resolve(
         self,
         primitive: str,
-        request_params: Optional[Dict[str, Any]] = None,
-        namespace: Optional[str] = None,
-    ) -> Dict[str, Any]:
+        request_params: dict[str, Any] | None = None,
+        namespace: str | None = None,
+    ) -> dict[str, Any]:
         """解析并合并指定隐私原语的参数 / Resolve and Merge Parameters for a Primitive.
 
         执行步骤 / Execution Steps:
@@ -230,7 +230,7 @@ class ParameterResolver:
             if os.path.exists(personalized_path):
                 with _profile_lock:
                     try:
-                        with open(personalized_path, "r", encoding="utf-8") as f:
+                        with open(personalized_path, encoding="utf-8") as f:
                             personalized_data = yaml.safe_load(f) or {}
                         namespace_config = personalized_data.get(namespace, {})
                         primitive_config = namespace_config.get(primitive, {})
@@ -256,11 +256,11 @@ class ParameterResolver:
         return params
 
 
-_resolver_cache: Dict[str, "ParameterResolver"] = {}
+_resolver_cache: dict[str, ParameterResolver] = {}
 _profile_lock = threading.Lock()
 
 
-def get_resolver(profile_path: Optional[str] = None) -> ParameterResolver:
+def get_resolver(profile_path: str | None = None) -> ParameterResolver:
     """获取参数解析器单例/缓存实例 / Get Cached ParameterResolver Instance.
 
     中文说明：
@@ -285,7 +285,7 @@ def get_resolver(profile_path: Optional[str] = None) -> ParameterResolver:
     return _resolver_cache[abs_path]
 
 
-def save_personalized_params(namespace: str, primitive: str, params: Dict[str, Any]) -> None:
+def save_personalized_params(namespace: str, primitive: str, params: dict[str, Any]) -> None:
     """持久化保存推荐的个性化参数 / Persist Personalized Parameters.
 
     中文说明：
@@ -315,10 +315,10 @@ def save_personalized_params(namespace: str, primitive: str, params: Dict[str, A
 
     personalized_path = os.environ.get("PRIVACY_PERSONALIZED_PROFILE", "config/personalized-profiles.yaml")
     with _profile_lock:
-        personalized_data: Dict[str, Any] = {}
+        personalized_data: dict[str, Any] = {}
         if os.path.exists(personalized_path):
             try:
-                with open(personalized_path, "r", encoding="utf-8") as f:
+                with open(personalized_path, encoding="utf-8") as f:
                     personalized_data = yaml.safe_load(f) or {}
             except Exception as e:
                 logger.warning(

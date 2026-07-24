@@ -5,7 +5,9 @@
 
 import os
 import time
+
 import pytest
+
 from privacy_local_agent.privacy.budget import (
     BudgetAccountant,
     BudgetRegistry,

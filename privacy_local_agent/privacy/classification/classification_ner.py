@@ -15,8 +15,7 @@ from __future__ import annotations
 
 import os
 import time
-from abc import ABC, abstractmethod
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, cast
 
 from ...observability.logging_config import get_logger
 from ...observability.metrics import (
@@ -53,8 +52,8 @@ class SimpleChineseBertTokenizer:
         Args:
             vocab_path: vocab.txt 词表文件路径 / Path to vocab.txt vocabulary file.
         """
-        self.vocab: Dict[str, int] = {}
-        with open(vocab_path, "r", encoding="utf-8") as f:
+        self.vocab: dict[str, int] = {}
+        with open(vocab_path, encoding="utf-8") as f:
             for idx, line in enumerate(f):
                 token = line.strip()
                 self.vocab[token] = idx
@@ -64,7 +63,7 @@ class SimpleChineseBertTokenizer:
         self.sep_id = self.vocab.get("[SEP]", 102)
         self.pad_id = self.vocab.get("[PAD]", 0)
 
-    def tokenize(self, text: str) -> List[str]:
+    def tokenize(self, text: str) -> list[str]:
         """对中文进行单字/字符级切分 / Tokenize Chinese Text at Character Level.
 
         中文说明：
@@ -83,7 +82,7 @@ class SimpleChineseBertTokenizer:
         Returns:
             token 列表 / List of tokens.
         """
-        tokens: List[str] = []
+        tokens: list[str] = []
         for char in text:
             # 基础字符处理，如果在词表中直接加入，否则归为 UNK
             if char in self.vocab:
@@ -95,7 +94,7 @@ class SimpleChineseBertTokenizer:
                 tokens.append("[UNK]")
         return tokens
 
-    def encode(self, text: str, max_len: int = 128) -> Tuple[List[int], List[int], List[int]]:
+    def encode(self, text: str, max_len: int = 128) -> tuple[list[int], list[int], list[int]]:
         """将文本编码为 BERT 输入张量数据结构 / Encode Text to BERT Input Tensors.
 
         执行步骤 / Execution Steps:
@@ -115,7 +114,7 @@ class SimpleChineseBertTokenizer:
         Returns:
             (input_ids, attention_mask, token_type_ids) 元组 / Tuple of input tensors.
         """
-        tokens = ["[CLS]"] + self.tokenize(text)[: max_len - 2] + ["[SEP]"]
+        tokens = ["[CLS]", *self.tokenize(text)[:max_len - 2], "[SEP]"]
         input_ids = [self.vocab.get(t, self.unk_id) for t in tokens]
         attention_mask = [1] * len(input_ids)
         token_type_ids = [0] * len(input_ids)
@@ -141,7 +140,7 @@ class ONNXSmallNerEngine(SmallNerEngine):
     with lazy-loading and graceful degradation support.
     """
 
-    def __init__(self, model_path: Optional[str] = None, vocab_path: Optional[str] = None):
+    def __init__(self, model_path: str | None = None, vocab_path: str | None = None):
         """初始化 ONNX NER 引擎 / Initialize ONNX NER Engine.
 
         Args:
@@ -153,10 +152,10 @@ class ONNXSmallNerEngine(SmallNerEngine):
 
         self.model_path = model_path or os.path.join(project_root, ".models", "raner_cmeee.onnx")
         self.vocab_path = vocab_path or os.path.join(project_root, ".models", "vocab.txt")
-        self.session = None
-        self.tokenizer = None
+        self.session: Any | None = None
+        self.tokenizer: SimpleChineseBertTokenizer | None = None
         self._initialized = False
-        self._init_error = None
+        self._init_error: Exception | None = None
 
     def _lazy_init(self):
         """延迟加载模型 / Lazy-Load ONNX Model.
@@ -197,7 +196,7 @@ class ONNXSmallNerEngine(SmallNerEngine):
             )
             raise e
 
-    def _parse_bio_tags(self, tokens: List[str], label_indices: List[int], probs: List[float]) -> List[Dict[str, Any]]:
+    def _parse_bio_tags(self, tokens: list[str], label_indices: list[int], probs: list[float]) -> list[dict[str, Any]]:
         """解析 BIO 序列标注 / Parse BIO Sequence Labels.
 
         中文说明：将相邻的 B- 和 I- 标记合并为完整的命名实体。
@@ -221,13 +220,13 @@ class ONNXSmallNerEngine(SmallNerEngine):
             11: "B-bod", 12: "I-bod",
         }
 
-        entities: List[Dict[str, Any]] = []
-        current_entity: Optional[Dict[str, Any]] = None
+        entities: list[dict[str, Any]] = []
+        current_entity: dict[str, Any] | None = None
 
         # 忽略 index 0 的 [CLS] 以及最后的 [SEP]/[PAD]
         for idx in range(1, len(tokens) - 1):
             token = tokens[idx]
-            if token == "[SEP]" or token == "[PAD]":
+            if token == "[SEP]" or token == "[PAD]":  # noqa: S105 - BERT special tokens, not passwords
                 break
 
             label_idx = label_indices[idx]
@@ -262,7 +261,7 @@ class ONNXSmallNerEngine(SmallNerEngine):
 
         return entities
 
-    def extract(self, text: str) -> List[Dict[str, Any]]:
+    def extract(self, text: str) -> list[dict[str, Any]]:
         """提取输入文本中的医疗实体 / Extract Medical Entities from Text.
 
         执行步骤 / Execution Steps:
@@ -287,6 +286,7 @@ class ONNXSmallNerEngine(SmallNerEngine):
             CLASSIFICATION_NER_TOTAL.labels(status="init_failed").inc()
             return []
 
+        assert self.tokenizer is not None and self.session is not None
         start_time = time.monotonic()
         try:
             # 分词编码
@@ -313,7 +313,7 @@ class ONNXSmallNerEngine(SmallNerEngine):
             label_indices = np.argmax(probs, axis=-1).tolist()
             token_probs = [probs[i, label_indices[i]] for i in range(len(label_indices))]
 
-            tokens = ["[CLS]"] + self.tokenizer.tokenize(text)[: max_len - 2] + ["[SEP]"]
+            tokens = ["[CLS]", *self.tokenizer.tokenize(text)[:max_len - 2], "[SEP]"]
 
             # 解析实体
             entities = self._parse_bio_tags(tokens, label_indices, token_probs)
@@ -378,9 +378,9 @@ class ModelScopeSmallNerEngine(SmallNerEngine):
         project_root = os.path.dirname(os.path.dirname(current_dir))
         local_model_dir = os.path.join(project_root, ".models", "raner_cmeee")
         self.local_model_dir = local_model_dir
-        self.pipeline = None
+        self.pipeline: Any | None = None
         self._initialized = False
-        self._init_error = None
+        self._init_error: Exception | None = None
 
     def _lazy_init(self):
         """延迟加载 ModelScope 管道 / Lazy-Load ModelScope Pipeline.
@@ -411,8 +411,8 @@ class ModelScopeSmallNerEngine(SmallNerEngine):
                 class DummyOnnxConfig:
                     pass
 
-                dummy_onnx.OnnxConfig = DummyOnnxConfig
-                dummy_onnx.OnnxConfigWithPast = DummyOnnxConfig
+                cast("Any", dummy_onnx).OnnxConfig = DummyOnnxConfig
+                cast("Any", dummy_onnx).OnnxConfigWithPast = DummyOnnxConfig
                 sys.modules["transformers.onnx"] = dummy_onnx
 
             # 兼容性适配：有些 ModelScope 模型的自研 Config 未正确初始化 PretrainedConfig 相关的类属性，
@@ -420,13 +420,13 @@ class ModelScopeSmallNerEngine(SmallNerEngine):
             from transformers import PretrainedConfig, PreTrainedModel
             PretrainedConfig.is_decoder = False
             PretrainedConfig.add_cross_attention = False
-            PretrainedConfig.bad_words_ids = None
+            cast("Any", PretrainedConfig).bad_words_ids = None
             PretrainedConfig.chunk_size_feed_forward = 0
             PretrainedConfig.pruned_heads = {}
             PretrainedConfig.tie_word_embeddings = True
 
             # 运行时动态参数修正适配：ModelScope 的 BertModel 推理时会将 torch.device 作为第三位位置参数传入，
-            # 较新版本 transformers 的 get_extended_attention_mask 已经彻底移除了 device 参数（直接由 tensor.device 自动推导），
+            # 较新版本 transformers 的 get_extended_attention_mask 已经彻底移除了 device 参数（直接由 tensor.device 自动推导），  # noqa: E501
             # 并将第三位形参改为了 dtype。我们在此对该方法进行切面拦截，自动丢弃传入的 device 传参。
             orig_get_extended_attention = PreTrainedModel.get_extended_attention_mask
 
@@ -438,7 +438,7 @@ class ModelScopeSmallNerEngine(SmallNerEngine):
                 kwargs.pop("device", None)
                 return orig_get_extended_attention(self, attention_mask, input_shape, *new_args, **kwargs)
 
-            PreTrainedModel.get_extended_attention_mask = patched_get_extended_attention_mask
+            cast("Any", PreTrainedModel).get_extended_attention_mask = patched_get_extended_attention_mask
 
             # 兼容性适配：ModelScope 的 BertModel 未继承 PreTrainedModel，缺失 get_head_mask 方法。
             # 我们在此动态将 PreTrainedModel 的 get_head_mask 绑定至 ModelScope 的 BertModel 类上。
@@ -476,7 +476,7 @@ class ModelScopeSmallNerEngine(SmallNerEngine):
             )
             raise e
 
-    def extract(self, text: str) -> List[Dict[str, Any]]:
+    def extract(self, text: str) -> list[dict[str, Any]]:
         """调用 ModelScope pipeline 提取命名实体 / Extract Entities via ModelScope Pipeline.
 
         执行步骤 / Execution Steps:
@@ -499,6 +499,7 @@ class ModelScopeSmallNerEngine(SmallNerEngine):
             CLASSIFICATION_NER_TOTAL.labels(status="init_failed").inc()
             return []
 
+        assert self.pipeline is not None
         start_time = time.monotonic()
         try:
             # ModelScope 命名实体识别管道输出示例：
@@ -506,7 +507,7 @@ class ModelScopeSmallNerEngine(SmallNerEngine):
             res = self.pipeline(text)
             output = res.get("output", [])
 
-            entities: List[Dict[str, Any]] = []
+            entities: list[dict[str, Any]] = []
             for item in output:
                 raw_label = item.get("type", "")
                 span = item.get("span", "")

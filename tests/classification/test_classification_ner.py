@@ -6,12 +6,13 @@
 import os
 import sys
 from unittest.mock import MagicMock, patch
-import pytest
 
 # 模拟 onnxruntime 模块以在无 onnxruntime 依赖环境下支持单元测试执行
 sys.modules["onnxruntime"] = MagicMock()
 
-from privacy_local_agent.privacy.classification.classification_ner import (
+# The following imports must stay after the onnxruntime mock so the optional
+# dependency is stubbed during test discovery/import.
+from privacy_local_agent.privacy.classification.classification_ner import (  # noqa: E402
     ONNXSmallNerEngine,
     SimpleChineseBertTokenizer,
 )
@@ -115,7 +116,9 @@ def test_ner_fallback_when_uninitialized():
 @patch("privacy_local_agent.privacy.classification.classification_ner.ModelScopeSmallNerEngine._lazy_init")
 def test_modelscope_ner_extract_success(mock_lazy_init):
     """测试 ModelScope NER 引擎在 pipeline 返回数据时的提取与映射逻辑。"""
-    from privacy_local_agent.privacy.classification.classification_ner import ModelScopeSmallNerEngine
+    from privacy_local_agent.privacy.classification.classification_ner import (
+        ModelScopeSmallNerEngine,
+    )
 
     engine = ModelScopeSmallNerEngine()
 

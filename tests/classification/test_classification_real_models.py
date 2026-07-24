@@ -30,7 +30,6 @@ import base64
 import importlib
 import sys
 from pathlib import Path
-from typing import Optional
 
 import pytest
 
@@ -72,7 +71,7 @@ _SKIP_LLM = "需要 Qwen2-VL 模型与 ML 依赖，请先运行 download_model.p
 _SKIP_NER = "需要 NER 模型与 ML 依赖，请先运行 download_ner_model.py"
 
 
-def _image_data_uri(filename: str) -> Optional[str]:
+def _image_data_uri(filename: str) -> str | None:
     """将前端打包的病例图片读取为 base64 Data URI（与前端行为一致）。"""
     path = MEDICAL_IMAGE_DIR / filename
     if not path.exists():
@@ -104,7 +103,9 @@ def ner_engine():
         from privacy_local_agent.privacy.classification.classification_ner import ONNXSmallNerEngine
 
         return ONNXSmallNerEngine()
-    from privacy_local_agent.privacy.classification.classification_ner import ModelScopeSmallNerEngine
+    from privacy_local_agent.privacy.classification.classification_ner import (
+        ModelScopeSmallNerEngine,
+    )
 
     return ModelScopeSmallNerEngine()
 

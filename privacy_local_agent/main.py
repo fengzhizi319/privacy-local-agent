@@ -19,10 +19,12 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from .classification_routes import classification_router
-from .deps import service  # noqa: F401  # 重新导出，保持 ``from privacy_local_agent.main import service`` 可用
+from .deps import (
+    service,  # 重新导出，保持 ``from privacy_local_agent.main import service`` 可用
+)
 from .observability.logging_config import configure_logging
-from .observability.middleware import ObservabilityMiddleware
 from .observability.metrics import make_asgi_app
+from .observability.middleware import ObservabilityMiddleware
 from .observability.tracing import init_tracing
 from .routers import budget, dp, file, health, kano, ldp, mask, profile, qol
 
@@ -89,7 +91,24 @@ app.include_router(file.router)
 
 
 if __name__ == "__main__":
+    import argparse
+
     import uvicorn
 
-    # 直接运行本模块时使用 uvicorn 启动开发服务器，监听 127.0.0.1:8079
-    uvicorn.run(app, host="127.0.0.1", port=8079)
+    parser = argparse.ArgumentParser(
+        prog="privacy_local_agent.main",
+        description="SecretFlow Local Privacy Agent REST server.",
+    )
+    parser.add_argument(
+        "--host",
+        default="127.0.0.1",
+        help="REST server host (default: 127.0.0.1).",
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=8079,
+        help="REST server port (default: 8079).",
+    )
+    args = parser.parse_args()
+    uvicorn.run(app, host=args.host, port=args.port)

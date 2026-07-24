@@ -10,8 +10,8 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/test/bufconn"
 
-	"github.com/fengzhizi319/privacy-local-agent/frontend/backend-go/internal/agent"
-	pb "github.com/fengzhizi319/privacy-local-agent/frontend/backend-go/proto"
+	"github.com/fengzhizi319/privacy-local-agent/console/backend-go/internal/agent"
+	pb "github.com/fengzhizi319/privacy-local-agent/console/backend-go/proto"
 )
 
 // fakePrivacyServer 是一个可注入行为的假 gRPC 服务器。

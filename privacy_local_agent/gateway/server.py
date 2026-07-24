@@ -4,10 +4,14 @@
 与 gRPC 网关服务器。
 """
 
+import argparse
 import asyncio
+import contextlib
 import logging
 import os
 import sys
+from typing import Any
+
 import yaml
 
 from .balancer import LoadBalancer, health_check_loop
@@ -23,13 +27,13 @@ logging.basicConfig(
 logger = logging.getLogger("gateway.server")
 
 
-def load_config() -> dict:
+def load_config() -> dict[str, Any]:
     """从配置文件或环境变量加载网关配置参数。
 
     Returns:
         解析合并后的配置字典。
     """
-    config = {
+    config: dict[str, Any] = {
         "gateway": {
             "rest_host": "0.0.0.0",
             "rest_port": 8000,
@@ -45,7 +49,7 @@ def load_config() -> dict:
     config_path = os.environ.get("PRIVACY_GATEWAY_CONFIG")
     if config_path and os.path.exists(config_path):
         try:
-            with open(config_path, "r", encoding="utf-8") as f:
+            with open(config_path, encoding="utf-8") as f:
                 loaded = yaml.safe_load(f)
                 if loaded:
                     if "gateway" in loaded:
@@ -87,10 +91,25 @@ def load_config() -> dict:
     return config
 
 
-async def async_main():
+async def async_main(
+    rest_host: str | None = None,
+    rest_port: int | None = None,
+    grpc_host: str | None = None,
+    grpc_port: int | None = None,
+):
     """异步主函数，加载配置、初始化节点、启动双协议服务及健康检查后台任务。"""
     config = load_config()
     gw = config["gateway"]
+
+    # 命令行参数覆盖配置
+    if rest_host is not None:
+        gw["rest_host"] = rest_host
+    if rest_port is not None:
+        gw["rest_port"] = rest_port
+    if grpc_host is not None:
+        gw["grpc_host"] = grpc_host
+    if grpc_port is not None:
+        gw["grpc_port"] = grpc_port
 
     # 初始化负载均衡器
     balancer = LoadBalancer(strategy=gw["strategy"])
@@ -130,7 +149,9 @@ async def async_main():
     health_task = asyncio.create_task(health_check_loop(balancer, health_interval))
 
     logger.info(
-        f"Gateway services successfully launched: REST port={gw['rest_port']}, gRPC port={gw['grpc_port']}, strategy={gw['strategy']}"
+        f"Gateway services successfully launched: "
+        f"REST port={gw['rest_port']}, gRPC port={gw['grpc_port']}, "
+        f"strategy={gw['strategy']}"
     )
 
     try:
@@ -150,11 +171,45 @@ async def async_main():
 
 
 def main():
-    """同步入口，启动 asyncio 事件循环。"""
-    try:
-        asyncio.run(async_main())
-    except KeyboardInterrupt:
-        pass
+    """同步入口，解析命令行参数并启动 asyncio 事件循环。"""
+
+    parser = argparse.ArgumentParser(
+        prog="privacy_local_agent.gateway.server",
+        description="Privacy Local Agent REST + gRPC gateway / load balancer.",
+    )
+    parser.add_argument(
+        "--rest-host",
+        default=os.environ.get("GATEWAY_REST_HOST", "0.0.0.0"),
+        help="Gateway REST host (default: 0.0.0.0 or GATEWAY_REST_HOST).",
+    )
+    parser.add_argument(
+        "--rest-port",
+        type=int,
+        default=int(os.environ.get("GATEWAY_REST_PORT", "8000")),
+        help="Gateway REST port (default: 8000 or GATEWAY_REST_PORT).",
+    )
+    parser.add_argument(
+        "--grpc-host",
+        default=os.environ.get("GATEWAY_GRPC_HOST", "0.0.0.0"),
+        help="Gateway gRPC host (default: 0.0.0.0 or GATEWAY_GRPC_HOST).",
+    )
+    parser.add_argument(
+        "--grpc-port",
+        type=int,
+        default=int(os.environ.get("GATEWAY_GRPC_PORT", "50000")),
+        help="Gateway gRPC port (default: 50000 or GATEWAY_GRPC_PORT).",
+    )
+    args = parser.parse_args()
+
+    with contextlib.suppress(KeyboardInterrupt):
+        asyncio.run(
+            async_main(
+                rest_host=args.rest_host,
+                rest_port=args.rest_port,
+                grpc_host=args.grpc_host,
+                grpc_port=args.grpc_port,
+            )
+        )
 
 
 if __name__ == "__main__":

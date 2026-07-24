@@ -37,9 +37,9 @@ import (
 	"google.golang.org/grpc/metadata"
 
 	// config：加载代理后端配置（agent 地址、API Key、TLS 等）
-	"github.com/fengzhizi319/privacy-local-agent/frontend/backend-go/internal/config"
+	"github.com/fengzhizi319/privacy-local-agent/console/backend-go/internal/config"
 	// pb：由 proto/privacy.proto 生成的 gRPC 客户端代码，包含所有 RPC 方法定义
-	pb "github.com/fengzhizi319/privacy-local-agent/frontend/backend-go/proto"
+	pb "github.com/fengzhizi319/privacy-local-agent/console/backend-go/proto"
 )
 
 // Client 封装 gRPC 连接与生成的 PrivacyService 客户端。

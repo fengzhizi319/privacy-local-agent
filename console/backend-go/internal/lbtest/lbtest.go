@@ -21,7 +21,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/fengzhizi319/privacy-local-agent/frontend/backend-go/internal/models"
+	"github.com/fengzhizi319/privacy-local-agent/console/backend-go/internal/models"
 )
 
 // 支持的三种分发策略常量。

@@ -1,8 +1,9 @@
 import asyncio
 import logging
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, HTTPException, Request, Response
+
 import httpx
+from fastapi import FastAPI, HTTPException, Request, Response
 from pydantic import BaseModel
 
 from .balancer import LoadBalancer
@@ -104,8 +105,8 @@ def create_http_gateway_app(balancer: LoadBalancer) -> FastAPI:
 
             if client is None or cached_loop is not current_loop:
                 if client is not None:
-                    # 在后台将已闭合 Event Loop 的旧客户端优雅释放
-                    asyncio.create_task(client.aclose())
+                    # 在后台将已闭合 Event Loop 的旧客户端优雅释放（fire-and-forget）
+                    asyncio.create_task(client.aclose())  # noqa: RUF006
 
                 client = httpx.AsyncClient(
                     timeout=httpx.Timeout(30.0),
@@ -128,7 +129,7 @@ def create_http_gateway_app(balancer: LoadBalancer) -> FastAPI:
                     content=body,
                 )
 
-                
+
                 # 构建并清洗响应 headers
                 resp_headers = {}
                 for k, v in resp.headers.items():
@@ -157,7 +158,7 @@ def create_http_gateway_app(balancer: LoadBalancer) -> FastAPI:
         logger.error(f"HTTP proxy request failed after {max_retries} attempts. Last error: {last_exception}")
         raise HTTPException(
             status_code=502,
-            detail=f"Bad Gateway: All {max_retries} backend retry attempts failed. Last error: {str(last_exception)}",
+            detail=f"Bad Gateway: All {max_retries} backend retry attempts failed. Last error: {last_exception!s}",
         )
 
     return app

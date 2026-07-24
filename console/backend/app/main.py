@@ -22,13 +22,13 @@ import base64
 import random
 import time
 from contextlib import asynccontextmanager
-from typing import Any, Dict, List, Optional
+from typing import Any
 from urllib.parse import urlparse
 
 import httpx
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -56,9 +56,9 @@ class ProxyRequest(BaseModel):
 
     method: str = Field(..., examples=["POST"])
     path: str = Field(..., examples=["/v1/privacy/mask"])
-    body: Optional[Dict[str, Any]] = Field(default=None)
-    raw_payload_b64: Optional[str] = Field(default=None)
-    content_type: Optional[str] = Field(default=None)
+    body: dict[str, Any] | None = Field(default=None)
+    raw_payload_b64: str | None = Field(default=None)
+    content_type: str | None = Field(default=None)
 
 
 class ProxyResponse(BaseModel):
@@ -88,7 +88,7 @@ class BatchRequestItem(BaseModel):
 
     method: str = Field(default="POST")
     path: str
-    body: Optional[Dict[str, Any]] = Field(default=None)
+    body: dict[str, Any] | None = Field(default=None)
 
 
 class BatchRequest(BaseModel):
@@ -98,7 +98,7 @@ class BatchRequest(BaseModel):
     默认工厂为空列表，避免可变默认参数陷阱。
     """
 
-    requests: List[BatchRequestItem] = Field(default_factory=list)
+    requests: list[BatchRequestItem] = Field(default_factory=list)
 
 
 class BatchResultItem(BaseModel):
@@ -113,7 +113,7 @@ class BatchResultItem(BaseModel):
     status: int
     duration_ms: float
     data: Any = None
-    error: Optional[str] = None
+    error: str | None = None
 
 
 class BatchResponse(BaseModel):
@@ -126,7 +126,7 @@ class BatchResponse(BaseModel):
     total: int
     passed: int
     failed: int
-    results: List[BatchResultItem]
+    results: list[BatchResultItem]
     # 同 ProxyResponse：标识处理请求的后端与通信协议。
     via: str = Field(default=BACKEND_VIA)
     protocol: str = Field(default=AGENT_PROTOCOL)
@@ -152,11 +152,11 @@ class LbTestRequest(BaseModel):
         - ``probe_body``：提供时以 ``POST`` 发送 JSON 体，否则用 ``GET``。
     """
 
-    backends: List[LbBackend] = Field(default_factory=list)
+    backends: list[LbBackend] = Field(default_factory=list)
     num_requests: int = Field(default=10, ge=1, le=1000)
     strategy: str = Field(default="round_robin")
     probe_path: str = Field(default="/health")
-    probe_body: Optional[Dict[str, Any]] = Field(default=None)
+    probe_body: dict[str, Any] | None = Field(default=None)
 
 
 class LbDistItem(BaseModel):
@@ -188,7 +188,7 @@ class LbTestResponse(BaseModel):
     success: int
     failed: int
     duration_ms: float
-    distribution: List[LbDistItem]
+    distribution: list[LbDistItem]
 
 
 @asynccontextmanager
@@ -307,7 +307,7 @@ async def proxy(req: ProxyRequest):
     path = req.path
 
     # 默认无二进制载荷（走 JSON 或无请求体分支）。
-    raw_content: Optional[bytes] = None
+    raw_content: bytes | None = None
     if req.raw_payload_b64:
         # 携带二进制载荷（如 Arrow IPC）：先做 base64 解码。
         try:
@@ -329,7 +329,7 @@ async def proxy(req: ProxyRequest):
             raw_content=raw_content,
             content_type=req.content_type,
         )
-    except HTTPException as exc:
+    except HTTPException:
         # client 已把网络错误（502）与 agent 非 2xx（透传状态码）
         # 包装为 HTTPException，这里直接重新抛出交给统一异常处理器。
         raise
@@ -348,7 +348,7 @@ async def batch(req: BatchRequest):
     单个请求失败不会中断整个批次。
     """
     # 收集每个子请求的执行结果。
-    results: List[BatchResultItem] = []
+    results: list[BatchResultItem] = []
     # 顺序逐个转发（非并发），避免给 agent 造成瞬时压力。
     for item in req.requests:
         # 统一方法名为大写。
@@ -383,7 +383,7 @@ async def batch(req: BatchRequest):
                     error=str(exc.detail),
                 )
             )
-        except Exception as exc:  # noqa: BLE001 - 批量执行需吸收单个请求的任何异常
+        except Exception as exc:
             # 其他未预期异常：记为 500，同样不中断批次。
             duration_ms = (time.perf_counter() - start) * 1000
             results.append(
@@ -399,7 +399,12 @@ async def batch(req: BatchRequest):
     # 统计状态码落在 2xx 区间的子请求数为 passed。
     passed = sum(1 for r in results if 200 <= r.status < 300)
     # 汇总为 BatchResponse（total == passed + failed 恒成立）。
-    return BatchResponse(total=len(results), passed=passed, failed=len(results) - passed, results=results)
+    return BatchResponse(
+        total=len(results),
+        passed=passed,
+        failed=len(results) - passed,
+        results=results,
+    )
 
 
 @app.post("/api/upload")
@@ -425,7 +430,13 @@ async def upload(
         )
     # 构造 httpx 的 files 映射：(文件名, 内容, Content-Type)，
     # 文件名缺失时兑底为 upload.bin，类型缺失时兑底为通用二进制流。
-    files = {"file": (file.filename or "upload.bin", content, file.content_type or "application/octet-stream")}
+    files = {
+        "file": (
+            file.filename or "upload.bin",
+            content,
+            file.content_type or "application/octet-stream",
+        ),
+    }
     # 随附的表单字段：操作类型与参数 JSON 字符串。
     data = {"operation": operation, "params": params}
 
@@ -479,7 +490,7 @@ def _validate_lb_url(url: str) -> None:
 _LB_STRATEGIES = ("round_robin", "random", "least_connections")
 
 
-def _lb_pick_backends(strategy: str, n: int, num_backends: int) -> List[int]:
+def _lb_pick_backends(strategy: str, n: int, num_backends: int) -> list[int]:
     """按策略生成 ``n`` 个探测请求对应的后端下标序列。
 
     - ``round_robin``：依次轮询，分发最均匀；
@@ -499,7 +510,7 @@ def _lb_pick_backends(strategy: str, n: int, num_backends: int) -> List[int]:
     if strategy == "least_connections":
         # 最少连接：每次选当前累计命中最少的节点。
         counts = [0] * num_backends          # 各节点当前累计命中数
-        seq: List[int] = []                  # 生成的下标序列
+        seq: list[int] = []                  # 生成的下标序列
         for _ in range(n):
             # 选 (命中数, 下标) 最小者，同数取下标小者，保证确定性。
             idx = min(range(num_backends), key=lambda i: (counts[i], i))
@@ -515,7 +526,7 @@ def _lb_pick_backends(strategy: str, n: int, num_backends: int) -> List[int]:
 
 async def _run_lb_test(
     req: LbTestRequest,
-    transport: Optional[httpx.AsyncBaseTransport] = None,
+    transport: httpx.AsyncBaseTransport | None = None,
 ) -> LbTestResponse:
     """执行负载均衡探测并统计各节点命中与延迟。
 
@@ -534,9 +545,9 @@ async def _run_lb_test(
     # 按策略生成 num_requests 个探测请求对应的后端下标序列。
     seq = _lb_pick_backends(req.strategy, req.num_requests, len(backends))
     # 以下标为键，分别记录各节点的延迟样本 / 成功数 / 失败数。
-    latencies: Dict[int, List[float]] = {i: [] for i in range(len(backends))}
-    success: Dict[int, int] = {i: 0 for i in range(len(backends))}
-    failed: Dict[int, int] = {i: 0 for i in range(len(backends))}
+    latencies: dict[int, list[float]] = {i: [] for i in range(len(backends))}
+    success: dict[int, int] = dict.fromkeys(range(len(backends)), 0)
+    failed: dict[int, int] = dict.fromkeys(range(len(backends)), 0)
 
     # 探测路径兑底为 /health。
     probe_path = req.probe_path or "/health"
@@ -582,7 +593,7 @@ async def _run_lb_test(
     total_ms = (time.perf_counter() - overall_start) * 1000
 
     # 汇总各节点的统计为 distribution（保持 backends 顺序）。
-    distribution: List[LbDistItem] = []
+    distribution: list[LbDistItem] = []
     total_success = 0                         # 全局成功总数
     total_failed = 0                          # 全局失败总数
     for i, backend in enumerate(backends):

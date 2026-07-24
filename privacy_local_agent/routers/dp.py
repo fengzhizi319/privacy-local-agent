@@ -1,6 +1,7 @@
 """差分隐私路由（dp/* 聚合、加噪、分块流式、向量、groupby 与 arrow_ipc）。"""
 
-from typing import Optional
+
+from typing import Any
 
 from fastapi import APIRouter, Request
 
@@ -240,10 +241,10 @@ async def dp_arrow_ipc(
     epsilon: float = 1.0,
     delta: float = 0.0,
     mechanism: str = "laplace",
-    clip_lower: Optional[float] = None,
-    clip_upper: Optional[float] = None,
-    max_norm: Optional[float] = None,
-    column: Optional[str] = None,
+    clip_lower: float | None = None,
+    clip_upper: float | None = None,
+    max_norm: float | None = None,
+    column: str | None = None,
 ):
     """高效二进制 REST 端点：接收 application/vnd.apache.arrow.stream 字节载荷并返回带 DP Metadata 的 Arrow IPC Stream。
 
@@ -261,14 +262,16 @@ async def dp_arrow_ipc(
     """
     try:
         from fastapi.responses import Response
+
         from ..privacy.data_adapters import parse_arrow_ipc_bytes, table_to_arrow_ipc_bytes
-        from ..privacy.dp import DPResult, AggregationType, compute_confidence_interval
+        from ..privacy.dp import AggregationType, DPResult, compute_confidence_interval
 
         # Step 1: Read raw Arrow IPC Stream bytes from request body
         body_bytes = await request.body()
         arr = parse_arrow_ipc_bytes(body_bytes, column=column)
 
         # Step 2: Dispatch to the corresponding DPApi method based on aggregation type
+        dp_res: Any = None
         if aggregation == AggregationType.COUNT:
             dp_res = service.dp_api.count(
                 arr, epsilon=epsilon, delta=delta, mechanism=mechanism,

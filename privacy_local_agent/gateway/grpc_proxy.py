@@ -8,9 +8,11 @@ Python 存根，网关即可自动转发，无需修改本文件。
 """
 
 import logging
+
 import grpc
 
 from privacy_local_agent import privacy_pb2_grpc
+
 from .balancer import LoadBalancer
 
 logger = logging.getLogger("gateway.grpc")
@@ -75,6 +77,7 @@ class GatewayGrpcServicer(privacy_pb2_grpc.PrivacyServiceServicer):
                     "No healthy backend nodes available",
                 )
 
+            assert node is not None
             # 增加活跃连接数计数
             node.active_connections += 1
             try:
@@ -84,7 +87,7 @@ class GatewayGrpcServicer(privacy_pb2_grpc.PrivacyServiceServicer):
                 metadata = None
                 if hasattr(context, "invocation_metadata") and callable(context.invocation_metadata):
                     metadata = context.invocation_metadata()
-                
+
                 # 发起异步转发调用，指定 30 秒超时，返回 Call 对象
                 call = stub_method(request, timeout=30.0, metadata=metadata)
                 response = await call
@@ -92,14 +95,18 @@ class GatewayGrpcServicer(privacy_pb2_grpc.PrivacyServiceServicer):
                 # 将后端的响应头与响应尾元数据透传给客户端
                 try:
                     initial_md = await call.initial_metadata()
-                    if initial_md and hasattr(context, "send_initial_metadata") and callable(context.send_initial_metadata):
+                    if initial_md and hasattr(context, "send_initial_metadata") and callable(
+                        context.send_initial_metadata
+                    ):
                         await context.send_initial_metadata(initial_md)
                 except Exception as e:
                     logger.debug(f"Failed to forward initial metadata for {method_name}: {e}")
 
                 try:
                     trailing_md = await call.trailing_metadata()
-                    if trailing_md and hasattr(context, "set_trailing_metadata") and callable(context.set_trailing_metadata):
+                    if trailing_md and hasattr(context, "set_trailing_metadata") and callable(
+                        context.set_trailing_metadata
+                    ):
                         context.set_trailing_metadata(trailing_md)
                 except Exception as e:
                     logger.debug(f"Failed to forward trailing metadata for {method_name}: {e}")
@@ -110,7 +117,8 @@ class GatewayGrpcServicer(privacy_pb2_grpc.PrivacyServiceServicer):
                 if exc.code() == grpc.StatusCode.UNAVAILABLE:
                     last_exception = exc
                     logger.warning(
-                        f"Attempt {attempt+1}/{max_retries} failed to forward gRPC {method_name} to {node.grpc_address}: UNAVAILABLE. "
+                        f"Attempt {attempt+1}/{max_retries} failed to forward gRPC "
+                        f"{method_name} to {node.grpc_address}: UNAVAILABLE. "
                         f"Marking node as unhealthy and retrying."
                     )
                     node.is_healthy = False
@@ -120,7 +128,8 @@ class GatewayGrpcServicer(privacy_pb2_grpc.PrivacyServiceServicer):
             except Exception as exc:
                 last_exception = exc
                 logger.warning(
-                    f"Attempt {attempt+1}/{max_retries} failed with unexpected exception forwarding gRPC {method_name} to {node.grpc_address}: {exc}. "
+                    f"Attempt {attempt+1}/{max_retries} failed with unexpected "
+                    f"exception forwarding gRPC {method_name} to {node.grpc_address}: {exc}. "
                     f"Marking node as unhealthy and retrying."
                 )
                 node.is_healthy = False

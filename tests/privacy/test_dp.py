@@ -21,7 +21,6 @@ import pytest
 # Import central DP API (DPApi) for aggregate queries and local DP API (LocalDPApi)
 # for per-record randomized response mechanisms.
 from privacy_local_agent.privacy.budget import (
-    BudgetAccountant,
     PrivacyBudgetExhausted,
     default_registry,
 )
@@ -1045,6 +1044,7 @@ class TestAdvancedDPFeatures:
     def test_hmac_budget_audit(self):
         # HMAC-based audit logger: creates a tamper-evident log of budget spends
         import os
+
         from privacy_local_agent.privacy.budget import BudgetAuditLogger
 
         audit_path = "/tmp/test_budget_audit.log"

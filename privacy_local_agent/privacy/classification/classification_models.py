@@ -12,7 +12,7 @@ and abstract base classes for rule engine, Small-NER and LLM classifiers.
 from abc import ABC, abstractmethod
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -117,8 +117,8 @@ class FieldClassificationResult(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     field_name: str = Field(alias="fieldName")
-    field_value: Optional[str] = Field(default=None, alias="fieldValue")
-    tags: List[SecurityTag] = Field(default_factory=list)
+    field_value: str | None = Field(default=None, alias="fieldValue")
+    tags: list[SecurityTag] = Field(default_factory=list)
     final_level: SensitivityLevel = Field(alias="finalLevel")
     confidence: float = Field(ge=0.0, le=1.0, default=0.0)
     engine_layer: EngineLayer = Field(default=EngineLayer.L1_RULE, alias="engineLayer")
@@ -135,10 +135,10 @@ class RecordClassificationResult(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     record_index: int = Field(alias="recordIndex")
-    field_results: Dict[str, FieldClassificationResult] = Field(
+    field_results: dict[str, FieldClassificationResult] = Field(
         default_factory=dict, alias="fieldResults"
     )
-    aggregated_tags: List[SecurityTag] = Field(default_factory=list, alias="aggregatedTags")
+    aggregated_tags: list[SecurityTag] = Field(default_factory=list, alias="aggregatedTags")
     final_level: SensitivityLevel = Field(alias="finalLevel")
     confidence: float = Field(ge=0.0, le=1.0, default=0.0)
     needs_human_review: bool = Field(default=False, alias="needsHumanReview")
@@ -156,8 +156,8 @@ class ShadowDiff(BaseModel):
     record_index: int = Field(default=0, alias="recordIndex")
     current_level: SensitivityLevel = Field(alias="currentLevel")
     shadow_level: SensitivityLevel = Field(alias="shadowLevel")
-    current_tags: List[str] = Field(default_factory=list, alias="currentTags")
-    shadow_tags: List[str] = Field(default_factory=list, alias="shadowTags")
+    current_tags: list[str] = Field(default_factory=list, alias="currentTags")
+    shadow_tags: list[str] = Field(default_factory=list, alias="shadowTags")
 
 
 class ReviewStatus(str, Enum):
@@ -175,15 +175,15 @@ class ReviewEntry(BaseModel):
     review_id: str = Field(alias="reviewId")
     record_index: int = Field(default=0, alias="recordIndex")
     field_name: str = Field(alias="fieldName")
-    field_value: Optional[str] = Field(default=None, alias="fieldValue")
-    predicted_level: Optional[SensitivityLevel] = Field(default=None, alias="predictedLevel")
-    predicted_tags: List[str] = Field(default_factory=list, alias="predictedTags")
-    corrected_level: Optional[str] = Field(default=None, alias="correctedLevel")
+    field_value: str | None = Field(default=None, alias="fieldValue")
+    predicted_level: SensitivityLevel | None = Field(default=None, alias="predictedLevel")
+    predicted_tags: list[str] = Field(default_factory=list, alias="predictedTags")
+    corrected_level: str | None = Field(default=None, alias="correctedLevel")
     reviewer: str = ""
     comment: str = ""
     status: ReviewStatus = ReviewStatus.PENDING
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat(), alias="createdAt")
-    updated_at: Optional[str] = Field(default=None, alias="updatedAt")
+    updated_at: str | None = Field(default=None, alias="updatedAt")
 
 
 class TableClassificationResult(BaseModel):
@@ -194,16 +194,16 @@ class TableClassificationResult(BaseModel):
 
     model_config = ConfigDict(populate_by_name=True)
 
-    schema_: List[str] = Field(default_factory=list, alias="schema")
-    record_results: List[RecordClassificationResult] = Field(
+    schema_: list[str] = Field(default_factory=list, alias="schema")
+    record_results: list[RecordClassificationResult] = Field(
         default_factory=list, alias="recordResults"
     )
-    aggregated_tags: List[SecurityTag] = Field(default_factory=list, alias="aggregatedTags")
+    aggregated_tags: list[SecurityTag] = Field(default_factory=list, alias="aggregatedTags")
     final_level: SensitivityLevel = Field(alias="finalLevel")
     confidence: float = Field(ge=0.0, le=1.0, default=0.0)
     needs_human_review: bool = Field(default=False, alias="needsHumanReview")
-    review_entries: List[ReviewEntry] = Field(default_factory=list, alias="reviewEntries")
-    shadow_diff: List[ShadowDiff] = Field(default_factory=list, alias="shadowDiff")
+    review_entries: list[ReviewEntry] = Field(default_factory=list, alias="reviewEntries")
+    shadow_diff: list[ShadowDiff] = Field(default_factory=list, alias="shadowDiff")
 
 
 class AuditInfo(BaseModel):
@@ -246,10 +246,10 @@ class ClassificationJob(BaseModel):
 
     job_id: str = Field(alias="jobId")
     status: ClassificationJobStatus = ClassificationJobStatus.PENDING
-    result: Optional[ClassificationJobResult] = None
-    error: Optional[str] = None
+    result: ClassificationJobResult | None = None
+    error: str | None = None
     created_at: str = Field(alias="createdAt")
-    finished_at: Optional[str] = Field(default=None, alias="finishedAt")
+    finished_at: str | None = Field(default=None, alias="finishedAt")
 
 
 class CompositeRule(BaseModel):
@@ -262,7 +262,7 @@ class CompositeRule(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     name: str = ""
-    field_patterns: List[str] = Field(alias="fieldPatterns")
+    field_patterns: list[str] = Field(alias="fieldPatterns")
     min_matches: int = Field(alias="minMatches")
     target_level: SensitivityLevel = Field(alias="targetLevel")
     category: str = "COMPOSITE"
@@ -279,7 +279,7 @@ class RuleEngineABC(ABC):
     @abstractmethod
     def evaluate(
         self, field_name: str, value: Any, params: "ClassificationParams"
-    ) -> List["SecurityTag"]:
+    ) -> list["SecurityTag"]:
         """评估单个字段，返回命中的安全标签列表。"""
 
 
@@ -287,14 +287,14 @@ class SmallNerEngine(ABC):
     """Small-NER 引擎抽象接口（Layer 2）。"""
 
     @abstractmethod
-    def extract(self, text: str) -> List[Dict[str, Any]]:
+    def extract(self, text: str) -> list[dict[str, Any]]:
         """从文本中提取实体，返回包含 label、confidence 等字段的字典列表。"""
 
 
 class NoOpSmallNerEngine(SmallNerEngine):
     """默认空实现，不返回任何实体。"""
 
-    def extract(self, text: str) -> List[Dict[str, Any]]:
+    def extract(self, text: str) -> list[dict[str, Any]]:
         return []
 
 
@@ -304,7 +304,7 @@ class LlmClassifier(ABC):
     @abstractmethod
     def classify(
         self, text: str, upstream_level: SensitivityLevel, upstream_confidence: float
-    ) -> Optional[Dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         """基于上游结果对文本进行分类，返回结构化输出或 None。"""
 
 
@@ -313,7 +313,7 @@ class NoOpLlmClassifier(LlmClassifier):
 
     def classify(
         self, text: str, upstream_level: SensitivityLevel, upstream_confidence: float
-    ) -> Optional[Dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         if upstream_confidence < 0.6:
             return {
                 "final_level": upstream_level,
@@ -335,10 +335,10 @@ class ClassificationResult(BaseModel):
 
     model_config = ConfigDict(populate_by_name=True)
 
-    record_result: Optional[RecordClassificationResult] = Field(
+    record_result: RecordClassificationResult | None = Field(
         default=None, alias="recordResult"
     )
-    table_result: Optional[TableClassificationResult] = Field(default=None, alias="tableResult")
+    table_result: TableClassificationResult | None = Field(default=None, alias="tableResult")
     audit_info: AuditInfo = Field(default_factory=AuditInfo, alias="auditInfo")
 
 
@@ -359,7 +359,7 @@ class ClassificationParams(BaseModel):
     llm_confidence_threshold: float = Field(
         default=0.6, ge=0.0, le=1.0, alias="llmConfidenceThreshold"
     )
-    icd10_l4_intervals: List[Dict[str, str]] = Field(
+    icd10_l4_intervals: list[dict[str, str]] = Field(
         default_factory=lambda: [
             {"start": "B20", "end": "B24"},
             {"start": "F20", "end": "F29"},
@@ -367,7 +367,7 @@ class ClassificationParams(BaseModel):
         ],
         alias="icd10L4Intervals",
     )
-    genomic_keywords: List[str] = Field(
+    genomic_keywords: list[str] = Field(
         default_factory=lambda: [
             "brca1",
             "brca2",
@@ -383,23 +383,23 @@ class ClassificationParams(BaseModel):
         ],
         alias="genomicKeywords",
     )
-    public_field_whitelist: List[str] = Field(
+    public_field_whitelist: list[str] = Field(
         default_factory=lambda: ["public_report", "annual_summary", "科普"],
         alias="publicFieldWhitelist",
     )
-    operational_field_patterns: List[str] = Field(
+    operational_field_patterns: list[str] = Field(
         default_factory=lambda: ["turnover_rate", "device_usage", "inventory"],
         alias="operationalFieldPatterns",
     )
-    manual_override: Dict[str, SensitivityLevel] = Field(
+    manual_override: dict[str, SensitivityLevel] = Field(
         default_factory=dict, alias="manualOverride"
     )
-    template: Optional[str] = Field(default=None, alias="template")
+    template: str | None = Field(default=None, alias="template")
     rule_set_version: str = Field(default="1.0.0", alias="ruleSetVersion")
     shadow_mode: bool = Field(default=False, alias="shadowMode")
-    shadow_version: Optional[str] = Field(default=None, alias="shadowVersion")
+    shadow_version: str | None = Field(default=None, alias="shadowVersion")
     return_field_values: bool = Field(default=True, alias="returnFieldValues")
-    composite_rules: List[Any] = Field(default_factory=list, alias="compositeRules")
+    composite_rules: list[Any] = Field(default_factory=list, alias="compositeRules")
     enable_review: bool = Field(default=True, alias="enableReview")
     review_export_mask: bool = Field(default=False, alias="reviewExportMask")
 

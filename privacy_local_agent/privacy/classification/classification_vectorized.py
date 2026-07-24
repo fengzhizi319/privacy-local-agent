@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import re
 import time
-from typing import Any, Dict, List
+from typing import Any
 
 from ...observability.logging_config import get_logger
 from ...observability.metrics import (
@@ -67,7 +67,7 @@ class VectorizedRuleEngine(RuleEngine):
         self._pd = pd
         logger.info("vectorized_rule_engine_initialized", extra={"backend": "pandas"})
 
-    def evaluate(self, field_name: str, value: Any, params: ClassificationParams) -> List[SecurityTag]:
+    def evaluate(self, field_name: str, value: Any, params: ClassificationParams) -> list[SecurityTag]:
         """标量兼容接口 / Scalar Compatibility Interface.
 
         中文说明：单值包装为 Series 后批量评估。
@@ -89,7 +89,7 @@ class VectorizedRuleEngine(RuleEngine):
         field_name: str,
         series: Any,
         params: ClassificationParams,
-    ) -> List[List[SecurityTag]]:
+    ) -> list[list[SecurityTag]]:
         """对整列批量执行 Layer-1 规则 / Batch Execute Layer-1 Rules on Column.
 
         执行步骤 / Execution Steps:
@@ -113,9 +113,8 @@ class VectorizedRuleEngine(RuleEngine):
             长度为 N 的列表，每个元素对应该行的 SecurityTag 列表。
             (List of length N, each element is the SecurityTag list for that row)
         """
-        pd = self._pd
         n = len(series)
-        tags: List[List[SecurityTag]] = [[] for _ in range(n)]
+        tags: list[list[SecurityTag]] = [[] for _ in range(n)]
 
         start_time = time.monotonic()
         CLASSIFICATION_VECTORIZED_BATCH_TOTAL.labels(field_name=field_name).inc()
@@ -215,7 +214,7 @@ class VectorizedRuleEngine(RuleEngine):
                 if not start or not end:
                     continue
                 mask = ~assigned & valid_mask & codes.apply(
-                    lambda c: bool(c is not None and _in_icd10_interval(c, start, end))
+                    lambda c, start=start, end=end: bool(c is not None and _in_icd10_interval(c, start, end))
                 )
                 if mask.any():
                     start_upper = start.upper()
@@ -336,7 +335,7 @@ class VectorizedRuleEngine(RuleEngine):
 
     def _apply_template_field_rules(
         self,
-        tags: List[List[SecurityTag]],
+        tags: list[list[SecurityTag]],
         norm_name: str,
         params: ClassificationParams,
     ) -> None:
@@ -356,53 +355,52 @@ class VectorizedRuleEngine(RuleEngine):
 
         template = str(template).lower()
 
-        if template == "jrt0197":
-            if any(
-                kw in norm_name
-                for kw in ("bankcard", "cardno", "credit", "transaction", "asset", "balance", "account")
-            ):
-                self._add_all(
-                    tags,
-                    level=SensitivityLevel.L4,
-                    category="FINANCE_ACCOUNT",
-                    rule_id="RULE_ID_JRT_001",
-                )
+        if template == "jrt0197" and any(
+            kw in norm_name
+            for kw in ("bankcard", "cardno", "credit", "transaction", "asset", "balance", "account")
+        ):
+            self._add_all(
+                tags,
+                level=SensitivityLevel.L4,
+                category="FINANCE_ACCOUNT",
+                rule_id="RULE_ID_JRT_001",
+            )
 
-        if template in ("gbt35273", "gdpr"):
-            if any(kw in norm_name for kw in ("email", "address", "location", "轨迹")):
-                self._add_all(
+        if template in ("gbt35273", "gdpr") and any(
+            kw in norm_name for kw in ("email", "address", "location", "轨迹")
+        ):
+            self._add_all(
                     tags,
                     level=SensitivityLevel.L3,
                     category="PII_CONTACT_LOCATION",
                     rule_id="RULE_ID_GBT_001",
                 )
 
-        if template == "gdpr":
-            if any(
-                kw in norm_name
-                for kw in (
-                    "biometric",
-                    "fingerprint",
-                    "face",
-                    "health",
-                    "genetic",
-                    "race",
-                    "ethnicity",
-                    "political",
-                    "religion",
-                    "sexual",
-                )
-            ):
-                self._add_all(
-                    tags,
-                    level=SensitivityLevel.L4,
-                    category="GDPR_SPECIAL_CATEGORY",
-                    rule_id="RULE_ID_GDPR_001",
-                )
+        if template == "gdpr" and any(
+            kw in norm_name
+            for kw in (
+                "biometric",
+                "fingerprint",
+                "face",
+                "health",
+                "genetic",
+                "race",
+                "ethnicity",
+                "political",
+                "religion",
+                "sexual",
+            )
+        ):
+            self._add_all(
+                tags,
+                level=SensitivityLevel.L4,
+                category="GDPR_SPECIAL_CATEGORY",
+                rule_id="RULE_ID_GDPR_001",
+            )
 
     def _add_all(
         self,
-        tags: List[List[SecurityTag]],
+        tags: list[list[SecurityTag]],
         level: SensitivityLevel,
         category: str,
         rule_id: str,
@@ -427,7 +425,7 @@ class VectorizedRuleEngine(RuleEngine):
 
     def _add_where(
         self,
-        tags: List[List[SecurityTag]],
+        tags: list[list[SecurityTag]],
         mask: Any,
         level: SensitivityLevel,
         category: str,

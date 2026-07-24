@@ -11,7 +11,7 @@ import numpy as np
 import pytest
 
 from privacy_local_agent.privacy.budget import default_registry
-from privacy_local_agent.privacy.dp import DPApi, calibrate_analytic_gaussian
+from privacy_local_agent.privacy.dp import DPApi
 
 
 @pytest.fixture(autouse=True)

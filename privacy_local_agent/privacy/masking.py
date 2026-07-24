@@ -14,7 +14,9 @@ Supports scalar, batch, DataFrame, and streaming chunked processing modes with
 built-in input validation, structured logging, and Prometheus metrics instrumentation.
 
 扩展能力 / Key Features:
-- 多格式输入适配：参考 DP 模块 `extract_values` 设计，支持 pandas DataFrame、numpy ndarray、PyArrow Table/RecordBatch、Arrow IPC 字节流、Polars、SecretFlow、list of dict 等多种输入格式。
+- 多格式输入适配：参考 DP 模块 `extract_values` 设计，
+  支持 pandas DataFrame、numpy ndarray、PyArrow Table/RecordBatch、Arrow IPC 字节流、
+  Polars、SecretFlow、list of dict 等多种输入格式。
 - 向量化批处理：pandas DataFrame 列级 apply 加速，减少 Python 循环开销。
 - 结构化日志：每次操作记录操作类型、字段数、记录数等上下文信息。
 - 输入校验：统一的参数合法性检查，快速失败并给出清晰错误信息。
@@ -26,19 +28,22 @@ built-in input validation, structured logging, and Prometheus metrics instrument
 # 启用 PEP 563 延迟注解求值，允许在类型注解中引用尚未定义的类（如自引用）
 from __future__ import annotations
 
-import base64      # base64 编解码，用于 HMAC 摘要的可读化输出
-import hashlib     # 提供 SHA-256 等哈希算法，供 HMAC 使用
-import hmac        # HMAC 消息认证码实现，用于加盐哈希
-import re          # 正则表达式（当前模块预留，分类规则引擎使用）
+import base64  # base64 编解码，用于 HMAC 摘要的可读化输出
+import contextlib  # 提供 suppress 等上下文管理工具，用于优雅地忽略预期异常
+import hashlib  # 提供 SHA-256 等哈希算法，供 HMAC 使用
+import hmac  # HMAC 消息认证码实现，用于加盐哈希
 from dataclasses import dataclass, field  # dataclass 装饰器，自动生成 __init__/__repr__ 等
-from enum import Enum                      # 枚举基类，用于 FieldType/MaskingOperation
-from typing import Any, Dict, Iterable, Iterator, List, Optional, Sequence, Union  # 类型注解工具
+from enum import Enum  # 枚举基类，用于 FieldType/MaskingOperation
+from typing import TYPE_CHECKING, Any, cast
 
 import numpy as np  # NumPy 数组支持，用于 ndarray 格式输入的适配转换
 
 # 从可观测性子包导入结构化日志工厂和 Prometheus Counter 指标实例
 from ..observability.logging_config import get_logger
 from ..observability.metrics import MASKING_OPERATIONS_TOTAL
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable, Iterator
 
 # 创建模块级结构化日志记录器，__name__ 自动解析为 "privacy_local_agent.privacy.masking"
 # 所有日志调用（logger.info/debug）均通过此实例发出，支持 JSON 格式输出和上下文 extra 字段
@@ -149,7 +154,7 @@ class MaskingResult:
 
     value: Any                                          # 脱敏后的实际数据（类型取决于调用接口）
     operation: str                                      # 操作标识，对应 MaskingOperation 枚举值
-    masked_fields: List[str] = field(default_factory=list)  # 被脱敏的字段名列表（default_factory 避免可变默认值陷阱）
+    masked_fields: list[str] = field(default_factory=list)  # 被脱敏的字段名列表（default_factory 避免可变默认值陷阱）
     total_masked: int = 1                               # 脱敏计数（单值=1，批量=记录数）
 
     def to_arrow(self):
@@ -161,7 +166,8 @@ class MaskingResult:
         3. 根据 `value` 的类型（字符串/列表/字典/DataFrame）构造对应的 PyArrow Table。
         4. 替换 Table Schema Metadata 后导出。
         """
-        import json       # 延迟导入：仅在实际调用 to_arrow 时才加载，避免模块加载开销
+        import json  # 延迟导入：仅在实际调用 to_arrow 时才加载，避免模块加载开销
+
         import pyarrow as pa  # 延迟导入：PyArrow 为可选依赖，未安装时不影响其他功能
 
         # 构建脱敏元数据字典，全部转为字符串以确保 JSON 可序列化
@@ -324,13 +330,10 @@ def mask_email(value: str) -> str:
         return mask_default(value)
     # rsplit("@", 1)：从右侧分割，最多分 1 次，确保域名中若含 @ 也不会被错误拆分
     local, domain = value.rsplit("@", 1)  # local="alice", domain="example.com"
-    if len(local) <= 2:
-        # 短用户名（如 "ab"）：保留首字 + "***" → "a***"
-        # 空用户名（如 "@test.com"）：直接用 "***"
-        masked_local = local[0] + "***" if local else "***"
-    else:
-        # 长用户名（如 "alice"）：首字 + "***" + 尾字 → "a***e"
-        masked_local = f"{local[0]}***{local[-1]}"
+    masked_local = (
+        (local[0] + "***" if local else "***") if len(local) <= 2
+        else f"{local[0]}***{local[-1]}"
+    )
     # 拼接脱敏后的用户名 + @ + 完整域名（域名保留以确保可路由性）
     return f"{masked_local}@{domain}"
 
@@ -375,7 +378,7 @@ def mask_value(
     value: str,
     context: str = "",
     return_details: bool = False,
-) -> Union[str, MaskingResult]:
+) -> str | MaskingResult:
     """根据字段类型对单个值进行脱敏 / Mask a Single Value by Field Type.
 
     执行步骤 / Execution Steps:
@@ -443,11 +446,11 @@ def mask_value(
 
 
 def mask_value_batch(
-    field_names: List[str],
-    values: List[str],
+    field_names: list[str],
+    values: list[str],
     context: str = "",
     return_details: bool = False,
-) -> Union[List[str], MaskingResult]:
+) -> list[str] | MaskingResult:
     """批量对字段值进行脱敏 / Batch Mask Field Values.
 
     执行步骤 / Execution Steps:
@@ -487,7 +490,10 @@ def mask_value_batch(
 
     # 列表推导式 + zip 配对：逐元素调用 mask_value 完成脱敏
     # zip(field_names, values) 将两个列表按位置配对为 (field_name, value) 元组
-    masked_list = [mask_value(fn, val, context) for fn, val in zip(field_names, values)]
+    masked_list = cast(
+        "list[str]",
+        [mask_value(fn, val, context, return_details=False) for fn, val in zip(field_names, values)],
+    )
 
     # 结构化日志（info 级别，记录批量操作的字段数和上下文）
     logger.info(
@@ -511,7 +517,7 @@ def mask_value_batch(
 # 延迟导入：可选依赖（pyarrow/pandas/polars）均在使用时才 import，未安装不影响其他功能。
 
 
-def _coerce_to_dict(data: Any) -> Dict[str, Any]:
+def _coerce_to_dict(data: Any) -> dict[str, Any]:
     """将多种单行数据格式转换为字典 / Coerce Single-Row Data to Dict.
 
     中文说明：
@@ -539,7 +545,7 @@ def _coerce_to_dict(data: Any) -> Dict[str, Any]:
         table = reader.read_all()  # 读取所有 RecordBatch 合并为 Table
         if table.num_rows == 0:  # 空表守卫：无法提取记录
             raise ValueError("Arrow IPC table is empty, cannot extract record")
-        return table.to_pylist()[0]  # 转为 Python 字典列表后取第一个
+        return cast("list[dict[str, Any]]", table.to_pylist())[0]  # 转为 Python 字典列表后取第一个
 
     # PyArrow Table / RecordBatch: 提取第一行各列值构建字典
     try:
@@ -568,22 +574,20 @@ def _coerce_to_dict(data: Any) -> Dict[str, Any]:
     try:
         import pandas as pd  # 延迟导入
         if isinstance(data, pd.Series):
-            return data.to_dict()  # Series 的 index 为 key，values 为 value
+            return cast("dict[str, Any]", data.to_dict())  # Series 的 index 为 key，values 为 value
     except ImportError:
         pass  # pandas 未安装，跳过
 
     # polars Series：鸭子类型检测（有 to_dict 但无 columns 属性 → 不是 DataFrame）
     if hasattr(data, "to_dict") and not hasattr(data, "columns"):
-        try:
-            return data.to_dict()
-        except Exception:
-            pass  # 转换失败则回退
+        with contextlib.suppress(Exception):
+            return cast("dict[str, Any]", data.to_dict())
 
     # 兜底：无法识别的类型原样返回，由调用方决定是否报错
-    return data
+    return cast("dict[str, Any]", data)
 
 
-def _convert_to_records(data: Any) -> List[Dict[str, Any]]:
+def _convert_to_records(data: Any) -> list[dict[str, Any]]:
     """将多种数据格式转换为记录列表 / Convert Multiple Data Formats to Record List.
 
     中文说明：
@@ -620,16 +624,16 @@ def _convert_to_records(data: Any) -> List[Dict[str, Any]]:
         import pyarrow.ipc as ipc  # 延迟导入
         reader = ipc.RecordBatchStreamReader(data)  # 创建 IPC 流读取器
         table = reader.read_all()  # 合并所有 batch 为完整 Table
-        return table.to_pylist()  # Table → List[Dict]（每行一个字典）
+        return cast("list[dict[str, Any]]", table.to_pylist())  # Table → List[Dict]（每行一个字典）
 
     # Step 2: PyArrow Table / RecordBatch → 直接 to_pylist()
     try:
         import pyarrow as pa
         if isinstance(data, pa.Table):
-            return data.to_pylist()  # 列式存储 → 行式字典列表
+            return cast("list[dict[str, Any]]", data.to_pylist())  # 列式存储 → 行式字典列表
         if isinstance(data, pa.RecordBatch):
             table = pa.Table.from_batches([data])  # 单 batch → Table
-            return table.to_pylist()
+            return cast("list[dict[str, Any]]", table.to_pylist())
     except ImportError:
         pass  # PyArrow 未安装，跳过
 
@@ -647,10 +651,8 @@ def _convert_to_records(data: Any) -> List[Dict[str, Any]]:
     # Step 4: Polars DataFrame → 调用内置 to_dicts() 转换
     # 鸭子类型检测：同时具有 to_dicts 和 columns 属性 → Polars DataFrame
     if hasattr(data, "to_dicts") and hasattr(data, "columns"):
-        try:
-            return data.to_dicts()  # Polars 原生转换，返回 List[Dict]
-        except Exception:
-            pass  # 转换失败则回退到通用适配器
+        with contextlib.suppress(Exception):
+            return cast("list[dict[str, Any]]", data.to_dicts())  # Polars 原生转换，返回 List[Dict]
 
     # Step 5: 兜底回退到共享适配器（处理 pandas/SecretFlow/原生 list of dict）
     from .data_adapters import to_records  # 延迟导入避免循环依赖
@@ -786,10 +788,10 @@ def _mask_arrow_column(col: Any, col_name: str, context: str) -> Any:
 
 def mask_dataframe(
     df: Any,
-    columns: Optional[List[str]] = None,
+    columns: list[str] | None = None,
     context: str = "",
     return_details: bool = False,
-) -> Union[Any, MaskingResult]:
+) -> Any | MaskingResult:
     """对 DataFrame 中的指定列进行脱敏 / Mask Specified Columns in DataFrame.
 
     支持多种输入数据格式（参考 DP 模块 `extract_values` 设计）：
@@ -841,7 +843,7 @@ def mask_dataframe(
             if columns is None:
                 # 未指定列时自动选择所有字符串类型列（dtype==object 或 string dtype）
                 target_cols = [
-                    col for col in df.columns 
+                    col for col in df.columns
                     if df[col].dtype == object or pd.api.types.is_string_dtype(df[col])
                 ]
             result_df = df.copy()  # 深拷贝原始 DataFrame，避免修改调用方数据（不可变原则）
@@ -849,7 +851,7 @@ def mask_dataframe(
                 if col in result_df.columns:  # 防御性检查：确保列存在
                     # 列级 apply：对每个非 NaN 值调用 mask_value 脱敏，NaN 保留原值
                     result_df[col] = result_df[col].apply(
-                        lambda val: mask_value(col, str(val), context) if pd.notna(val) else val
+                        lambda val, col=col: mask_value(col, str(val), context) if pd.notna(val) else val
                     )
             # 结构化日志：记录脱敏完成的上下文信息（行数、列数、列名、上下文）
             logger.info(
@@ -903,7 +905,7 @@ def mask_dataframe(
 
             # 从字典构建新的 PyArrow Table（保持列名与数据的对应关系）
             result_table = pa.table(
-                {name: col for name, col in zip(new_names, new_columns)}
+                dict(zip(new_names, new_columns))
             )
             # 结构化日志：记录 PyArrow 引擎脱敏完成的上下文信息
             logger.info(
@@ -933,13 +935,18 @@ def mask_dataframe(
     if not records:
         # 空数据处理：返回空列表或空 MaskingResult（避免后续索引越界）
         if return_details:
-            return MaskingResult(value=[], operation=MaskingOperation.MASK_DATAFRAME.value, masked_fields=[], total_masked=0)
+            return MaskingResult(
+                value=[],
+                operation=MaskingOperation.MASK_DATAFRAME.value,
+                masked_fields=[],
+                total_masked=0,
+            )
         return []
 
     # Step 3: 确定目标列并对每条记录执行字段级脱敏
     if columns is None:
         # 未指定列时自动选择第一条记录中所有字符串类型的字段
-        target_cols = [k for k in records[0].keys() if isinstance(records[0].get(k), str)]
+        target_cols = [k for k in records[0] if isinstance(records[0].get(k), str)]
 
     masked_records = []  # 存储所有脱敏后的记录
     for record in records:  # 遍历每条记录
@@ -967,7 +974,7 @@ def mask_dataframe(
     return masked_records  # 直接返回脱敏后的记录列表
 
 
-def hash_value(value: str, salt: str, return_details: bool = False) -> Union[str, MaskingResult]:
+def hash_value(value: str, salt: str, return_details: bool = False) -> str | MaskingResult:
     """对字符串进行 HMAC-SHA256 哈希 / HMAC-SHA256 Hash with Salt.
 
     执行步骤 / Execution Steps:
@@ -1002,11 +1009,16 @@ def hash_value(value: str, salt: str, return_details: bool = False) -> Union[str
     logger.debug("hash_value_completed", extra={"value_length": len(value)})
     if return_details:
         # 返回包装结果：包含哈希值 + 操作元数据
-        return MaskingResult(value=hashed, operation=MaskingOperation.HASH_VALUE.value, masked_fields=[], total_masked=1)
+        return MaskingResult(
+            value=hashed,
+            operation=MaskingOperation.HASH_VALUE.value,
+            masked_fields=[],
+            total_masked=1,
+        )
     return hashed  # 直接返回 16 位 base64 哈希字符串
 
 
-def truncate(value: str, keep_prefix: int, return_details: bool = False) -> Union[str, MaskingResult]:
+def truncate(value: str, keep_prefix: int, return_details: bool = False) -> str | MaskingResult:
     """截断字符串 / Truncate String with Masking Suffix.
 
     执行步骤 / Execution Steps:
@@ -1033,12 +1045,7 @@ def truncate(value: str, keep_prefix: int, return_details: bool = False) -> Unio
         raise ValueError(f"keep_prefix must be non-negative, got {keep_prefix}")
     # Prometheus 指标埋点：累加 truncate 操作计数器
     MASKING_OPERATIONS_TOTAL.labels(operation=MaskingOperation.TRUNCATE.value).inc()
-    if len(value) <= keep_prefix:
-        # 字符串长度未超过保留位数，无需截断，原样返回
-        res = value
-    else:
-        # 截取前 keep_prefix 个字符 + "***" 后缀表示后续内容已被截断
-        res = value[:keep_prefix] + "***"
+    res = value if len(value) <= keep_prefix else value[:keep_prefix] + "***"
     if return_details:
         # 返回包装结果：包含截断后字符串 + 操作元数据
         return MaskingResult(value=res, operation=MaskingOperation.TRUNCATE.value, masked_fields=[], total_masked=1)
@@ -1047,7 +1054,7 @@ def truncate(value: str, keep_prefix: int, return_details: bool = False) -> Unio
 
 def mask_record(
     record: Any, context: str = "", return_details: bool = False
-) -> Union[Dict[str, Any], MaskingResult]:
+) -> dict[str, Any] | MaskingResult:
     """对整条记录中的每个字符串值进行脱敏 / Mask All String Fields in Record.
 
     支持多种输入数据格式（参考 DP 模块 `extract_values` 设计）：
@@ -1123,10 +1130,10 @@ def mask_record(
 
 def chunked_mask_records(
     chunks: Iterable[Any],
-    columns: Optional[List[str]] = None,
+    columns: list[str] | None = None,
     context: str = "",
     return_details: bool = False,
-) -> Iterator[Union[List[Dict[str, Any]], MaskingResult]]:
+) -> Iterator[list[dict[str, Any]] | MaskingResult]:
     """分块流式对记录进行脱敏 / Streaming Chunked Record Masking (Generator Interface).
 
     允许调用方以多个 chunk（生成器/迭代器）分批传入记录，
@@ -1171,20 +1178,19 @@ def chunked_mask_records(
     Yields:
         每个 chunk 的脱敏后记录列表，或当 return_details=True 时 yield MaskingResult。
     """
-    chunk_idx = 0  # 块索引计数器，用于日志追踪每个 chunk 的处理顺序
-    for chunk in chunks:  # 情性迭代每个 chunk（生成器模式，不一次性加载全部数据）
+    for chunk_idx, chunk in enumerate(chunks):  # 惰性迭代每个 chunk（生成器模式，不一次性加载全部数据）
         # Prometheus 指标埋点：每个 chunk 累加一次计数器
         MASKING_OPERATIONS_TOTAL.labels(operation=MaskingOperation.CHUNKED_MASK_RECORDS.value).inc()
         # 通过扩展格式适配器将 chunk 转换为记录列表（支持多种数据格式）
         records = _convert_to_records(chunk)
-        masked_chunk: List[Dict[str, Any]] = []  # 当前 chunk 脱敏后的记录列表
-        all_masked_fields: List[str] = []  # 累计所有被脱敏的字段名
+        masked_chunk: list[dict[str, Any]] = []  # 当前 chunk 脱敏后的记录列表
+        all_masked_fields: list[str] = []  # 累计所有被脱敏的字段名
         total_masked = 0  # 累计脱敏字段总次数（字段数 × 记录数）
         for record in records:  # 遍历当前 chunk 中的每条记录
             # 确定目标列：指定了 columns 则用之，否则自动选择所有字符串字段
             target_cols = columns or [k for k, v in record.items() if isinstance(v, str)]
             masked_rec = dict(record)  # 浅拷贝记录（避免修改原始数据）
-            chunk_fields: List[str] = []  # 当前记录被脱敏的字段名
+            chunk_fields: list[str] = []  # 当前记录被脱敏的字段名
             for col in target_cols:  # 遍历每个目标字段
                 val = masked_rec.get(col)  # 获取字段值
                 if isinstance(val, str):  # 仅对字符串值执行脱敏
@@ -1198,7 +1204,6 @@ def chunked_mask_records(
             "chunked_mask_records_chunk_completed",
             extra={"chunk_idx": chunk_idx, "num_records": len(masked_chunk), "total_masked": total_masked},
         )
-        chunk_idx += 1  # 块索引自增
         if return_details:
             # yield 包装结果：包含脱敏后记录列表 + 元数据（set 去重字段名）
             yield MaskingResult(

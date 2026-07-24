@@ -77,7 +77,7 @@ def test_grpc_recommend_params():
     response = servicer.RecommendParams(request, None)
     assert response.status == "success"
     assert response.namespace == "grpc-recommend-ns"
-    
+
     import json
     rec_dict = json.loads(response.recommended_params_json)
     assert "dp" in rec_dict

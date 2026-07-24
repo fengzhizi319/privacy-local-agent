@@ -12,9 +12,9 @@ Tests for core optimization features of privacy-local-agent:
 """
 
 import unittest
+
 from privacy_local_agent.privacy.profile import get_resolver
 from privacy_local_agent.service import PrivacyService
-from privacy_local_agent.privacy.classification import SensitivityLevel
 
 
 class TestAgentOptimizations(unittest.TestCase):

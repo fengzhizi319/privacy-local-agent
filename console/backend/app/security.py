@@ -18,14 +18,16 @@ from __future__ import annotations
 
 import time
 from collections import defaultdict, deque
-from typing import Deque, Dict, Optional
+from typing import TYPE_CHECKING, cast
 
 from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
+if TYPE_CHECKING:
+    from starlette.requests import Request
 
-def _extract_bearer(header_value: Optional[str]) -> Optional[str]:
+
+def _extract_bearer(header_value: str | None) -> str | None:
     """从 Authorization 头中提取 Bearer token，格式不符时返回 None。"""
     if not header_value:
         return None
@@ -44,12 +46,12 @@ class ConsoleSecurityMiddleware(BaseHTTPMiddleware):
         rate_limit: 每分钟每 IP 最大请求数；``<= 0`` 时关闭限流。
     """
 
-    def __init__(self, app, api_key: Optional[str] = None, rate_limit: int = 600) -> None:
+    def __init__(self, app, api_key: str | None = None, rate_limit: int = 600) -> None:
         super().__init__(app)
         self._api_key = api_key
         self._rate_limit = rate_limit
         # 每个客户端 IP 的请求时间戳队列（60 秒滑动窗口）。
-        self._hits: Dict[str, Deque[float]] = defaultdict(deque)
+        self._hits: dict[str, deque[float]] = defaultdict(deque)
 
     @staticmethod
     def _client_ip(request: Request) -> str:
@@ -76,12 +78,12 @@ class ConsoleSecurityMiddleware(BaseHTTPMiddleware):
         """请求入口：按序执行 CORS 预检放行、鉴权、限流。"""
         # CORS 预检请求直接放行，交由 CORSMiddleware 处理。
         if request.method == "OPTIONS":
-            return await call_next(request)
+            return cast("Response", await call_next(request))
 
         path = request.url.path
         # 仅对 /api/* 生效（静态资源等不拦截）；健康检查豁免。
         if not path.startswith("/api/") or path == "/api/health":
-            return await call_next(request)
+            return cast("Response", await call_next(request))
 
         # API Key 鉴权（配置了才校验）。
         if self._api_key is not None:
@@ -99,4 +101,4 @@ class ConsoleSecurityMiddleware(BaseHTTPMiddleware):
                 content={"detail": "Too many requests"},
             )
 
-        return await call_next(request)
+        return cast("Response", await call_next(request))

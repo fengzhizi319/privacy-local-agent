@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import logging
 import sys
-from typing import Any
 
 from .context import get_request_context
 

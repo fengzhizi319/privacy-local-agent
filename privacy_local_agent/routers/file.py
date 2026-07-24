@@ -1,7 +1,7 @@
 """数据文件隐私处理路由（process_file）。"""
 
 import json
-from typing import Any, Dict, List
+from typing import Any, cast
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 
@@ -15,7 +15,7 @@ router = APIRouter()
 _FILE_OPERATIONS = {"mask_dataframe", "k_anonymize", "classify_table"}
 
 
-def _parse_upload_to_records(content: bytes, filename: str) -> List[Dict[str, Any]]:
+def _parse_upload_to_records(content: bytes, filename: str) -> list[dict[str, Any]]:
     """把上传的 CSV/JSON 文件字节解析为 records 列表。
 
     Args:
@@ -51,7 +51,7 @@ def _parse_upload_to_records(content: bytes, filename: str) -> List[Dict[str, An
 
     # 缺失值统一为空字符串，与下游字符串语义保持一致
     df = df.fillna("")
-    return df.to_dict(orient="records")
+    return cast("list[dict[str, Any]]", df.to_dict(orient="records"))
 
 
 @router.post(

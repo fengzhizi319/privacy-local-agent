@@ -20,8 +20,8 @@ Built-in input validation, structured logging, and Prometheus metrics instrument
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Union
+from dataclasses import dataclass
+from typing import Any, cast
 
 from ..observability.logging_config import get_logger
 from ..observability.metrics import KANO_OPERATIONS_TOTAL
@@ -43,7 +43,7 @@ class KAnonymityResult:
 
     value: Any
     k: int
-    qi_cols: List[str]
+    qi_cols: list[str]
     equivalence_classes_count: int = 1
 
     def to_arrow(self):
@@ -56,6 +56,7 @@ class KAnonymityResult:
         4. 替换 Table Schema Metadata 后导出。
         """
         import json
+
         import pyarrow as pa
 
         meta = {
@@ -89,30 +90,31 @@ def _is_numeric(value: Any) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool)
 
 
-def _span(records: List[Dict[str, Any]], col: str) -> float:
+def _span(records: list[dict[str, Any]], col: str) -> float:
     """计算某列的跨度，用于选择分割维度。"""
     values = [r.get(col) for r in records if r.get(col) is not None]
     if not values:
         return 0.0
     if all(_is_numeric(v) for v in values):
-        return float(max(values) - min(values))
-    return float(len(set(str(v) for v in values)) - 1)
+        numeric_values = cast("list[float]", values)
+        return float(max(numeric_values) - min(numeric_values))
+    return float(len({str(v) for v in values}) - 1)
 
 
-def _choose_dimension(records: List[Dict[str, Any]], qi_cols: List[str]) -> str:
+def _choose_dimension(records: list[dict[str, Any]], qi_cols: list[str]) -> str:
     """选择跨度最大的准标识符列作为当前分割维度。"""
     spans = {col: _span(records, col) for col in qi_cols}
     return max(spans, key=spans.get)  # type: ignore[arg-type]
 
 
 def _median_split(
-    records: List[Dict[str, Any]], dim: str, k: int
-) -> Optional[int]:
+    records: list[dict[str, Any]], dim: str, k: int
+) -> int | None:
     """按指定维度的中位数进行分割，并确保左右两部分均不少于 k 条记录。"""
     if len(records) < 2 * k:
         return None
 
-    def _sort_key(record: Dict[str, Any]) -> Any:
+    def _sort_key(record: dict[str, Any]) -> Any:
         value = record.get(dim)
         if _is_numeric(value):
             return value
@@ -127,29 +129,30 @@ def _median_split(
 
 
 def _generalize(
-    records: List[Dict[str, Any]], qi_cols: List[str]
-) -> List[Dict[str, Any]]:
+    records: list[dict[str, Any]], qi_cols: list[str]
+) -> list[dict[str, Any]]:
     """对等价组内的记录进行泛化。"""
     if not records:
         return []
 
-    generalized: List[Dict[str, Any]] = []
+    generalized: list[dict[str, Any]] = []
     for col in qi_cols:
         values = [r.get(col) for r in records if r.get(col) is not None]
         if all(_is_numeric(v) for v in values):
-            low, high = min(values), max(values)
+            numeric_values = cast("list[float]", values)
+            low, high = min(numeric_values), max(numeric_values)
             if low == high:
                 generalized.append({col: low})
             else:
                 generalized.append({col: f"[{low}-{high}]"})
         else:
-            unique = sorted(set(str(v) for v in values))
+            unique = sorted({str(v) for v in values})
             if len(unique) == 1:
                 generalized.append({col: unique[0]})
             else:
                 generalized.append({col: "{" + ",".join(unique) + "}"})
 
-    result: List[Dict[str, Any]] = []
+    result: list[dict[str, Any]] = []
     for record in records:
         new_record = dict(record)
         for item in generalized:
@@ -159,12 +162,12 @@ def _generalize(
 
 
 def k_anonymize_table(
-    rows: List[Dict[str, Any]],
-    qi_cols: List[str],
+    rows: list[dict[str, Any]],
+    qi_cols: list[str],
     k: int = 5,
     max_depth: int = 10,
     return_details: bool = False,
-) -> Union[List[Dict[str, Any]], KAnonymityResult]:
+) -> list[dict[str, Any]] | KAnonymityResult:
     """对整张表执行 Mondrian K-匿名泛化 / Mondrian K-Anonymity on Full Table.
 
     执行步骤 / Execution Steps:
@@ -209,10 +212,10 @@ def k_anonymize_table(
 
     try:
         import pandas as pd
-        
+
         # 使用 Pandas 向量化优化版 Mondrian 算法，避免递归的 Python list sorting 开销
         df = pd.DataFrame(rows)
-        
+
         def _mondrian_pd(sub_df: pd.DataFrame, depth: int) -> pd.DataFrame:
             if len(sub_df) < 2 * k or depth <= 0:
                 # 泛化当前等价组
@@ -245,10 +248,7 @@ def k_anonymize_table(
                 col_vals = sub_df[col].dropna()
                 if not col_vals.empty:
                     is_num = pd.api.types.is_numeric_dtype(col_vals) and not pd.api.types.is_bool_dtype(col_vals)
-                    if is_num:
-                        span = float(col_vals.max() - col_vals.min())
-                    else:
-                        span = float(col_vals.nunique() - 1)
+                    span = float(col_vals.max() - col_vals.min()) if is_num else float(col_vals.nunique() - 1)
                     if span > max_span:
                         max_span = span
                         best_dim = col
@@ -269,7 +269,7 @@ def k_anonymize_table(
             return pd.concat([left, right])
 
         result_df = _mondrian_pd(df, max_depth)
-        res_list = result_df.to_dict(orient="records")
+        res_list = cast("list[dict[str, Any]]", result_df.to_dict(orient="records"))
         eq_count = len(res_list) // max(1, k)
         logger.info(
             "kano_table_completed",
@@ -288,8 +288,8 @@ def k_anonymize_table(
         pass
 
     def _mondrian(
-        records: List[Dict[str, Any]], depth: int
-    ) -> List[Dict[str, Any]]:
+        records: list[dict[str, Any]], depth: int
+    ) -> list[dict[str, Any]]:
         if len(records) < 2 * k or depth <= 0:
             return _generalize(records, qi_cols)
 
@@ -298,10 +298,13 @@ def k_anonymize_table(
         if split_idx is None:
             return _generalize(records, qi_cols)
 
-        sorted_records = sorted(
-            records,
-            key=lambda r: r.get(dim) if _is_numeric(r.get(dim)) else str(r.get(dim)),
-        )
+        def _sort_key(record: dict[str, Any]) -> Any:
+            value = record.get(dim)
+            if _is_numeric(value):
+                return value
+            return str(value)
+
+        sorted_records = sorted(records, key=_sort_key)
         left = _mondrian(sorted_records[:split_idx], depth - 1)
         right = _mondrian(sorted_records[split_idx:], depth - 1)
         return left + right
@@ -325,7 +328,7 @@ def k_anonymize_table(
 
 def k_anonymize_dataframe(
     df: Any,
-    qi_cols: List[str],
+    qi_cols: list[str],
     k: int = 5,
     max_depth: int = 10,
     return_details: bool = False,
@@ -393,10 +396,7 @@ def k_anonymize_dataframe(
                     col_vals = sub_df[col].dropna()
                     if not col_vals.empty:
                         is_num = pd.api.types.is_numeric_dtype(col_vals) and not pd.api.types.is_bool_dtype(col_vals)
-                        if is_num:
-                            span = float(col_vals.max() - col_vals.min())
-                        else:
-                            span = float(col_vals.nunique() - 1)
+                        span = float(col_vals.max() - col_vals.min()) if is_num else float(col_vals.nunique() - 1)
                         if span > max_span:
                             max_span = span
                             best_dim = col
@@ -434,4 +434,5 @@ def k_anonymize_dataframe(
     )
     if return_details:
         return anonymized
+    assert isinstance(anonymized, list)
     return from_records(anonymized, df)

@@ -92,7 +92,8 @@ class TestMaskValue:
         assert mask_value("unknown", "abcdefgh") == "abc**fgh"
 
     def test_mask_value_records_metric(self) -> None:
-        """Verify that mask_value increments the Prometheus masking operations counter.验证 mask_value 调用后 Prometheus 脱敏操作计数器递增。
+        """Verify that mask_value increments the Prometheus masking operations counter.
+        验证 mask_value 调用后 Prometheus 脱敏操作计数器递增。
 
         Execution Steps:
         1. Read the current counter value for the 'mask_value' operation label.

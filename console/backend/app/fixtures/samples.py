@@ -11,7 +11,7 @@
 from __future__ import annotations
 
 import base64
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 
 def _arrow_ipc_payload() -> str:
@@ -22,8 +22,9 @@ def _arrow_ipc_payload() -> str:
     由前端经 ``rawPayloadB64`` 字段传递、后端解码后转发。
     """
     # 延迟导入 pyarrow：仅在生成 Arrow 示例时才引入重量级依赖。
-    import pyarrow as pa
     import io
+
+    import pyarrow as pa
 
     # 构造一个 5 行单列（value）的小表。
     table = pa.table({"value": [1.0, 2.0, 3.0, 4.0, 5.0]})
@@ -56,9 +57,9 @@ class EndpointSample:
         label: str,
         category: str,
         description: str,
-        body: Optional[Dict[str, Any]] = None,
-        content_type: Optional[str] = None,
-        raw_payload_b64: Optional[str] = None,
+        body: dict[str, Any] | None = None,
+        content_type: str | None = None,
+        raw_payload_b64: str | None = None,
         backend: str = "rest",
     ):
         # 逐一保存端点的各项元数据与示例载荷。
@@ -72,7 +73,7 @@ class EndpointSample:
         self.raw_payload_b64 = raw_payload_b64  # 二进制载荷的 base64
         self.backend = backend                # 可用性标识（rest / both）
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         # 转换为前端可直接消费的字典；注意 contentType / rawPayloadB64
         # 使用驼峰命名（与前端 TypeScript 契约一致）。
         return {
@@ -89,7 +90,7 @@ class EndpointSample:
 
 
 # fmt: off
-SAMPLES: List[EndpointSample] = [
+SAMPLES: list[EndpointSample] = [
     # Health
     EndpointSample("GET", "/health", "Health", "Health", "服务健康检查", backend="rest"),
     EndpointSample("GET", "/livez", "Livez", "Health", "存活探针", backend="rest"),
@@ -516,13 +517,13 @@ SAMPLES: List[EndpointSample] = [
 # fmt: on
 
 
-def get_samples() -> List[Dict[str, Any]]:
+def get_samples() -> list[dict[str, Any]]:
     """返回所有端点示例（纯字典列表），供 ``/api/samples`` 接口序列化。"""
     # 把每个 EndpointSample 对象转换为字典。
     return [s.to_dict() for s in SAMPLES]
 
 
-def find_sample(path: str) -> Optional[Dict[str, Any]]:
+def find_sample(path: str) -> dict[str, Any] | None:
     """按端点路径查找示例，未找到时返回 ``None``。"""
     # 线性遍历 SAMPLES，按 path 精确匹配。
     for s in SAMPLES:

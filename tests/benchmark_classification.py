@@ -1,3 +1,4 @@
+# ruff: noqa: E501
 """三层漏斗分类分级系统端到端性能基准测试脚本 (Performance Benchmark)
 
 该脚本针对分类分级系统的三层检测漏斗（规则引擎、Small-NER 实体抽取、Qwen2-VL 大语言模型）进行压测，
@@ -8,7 +9,7 @@
 import os
 import sys
 import time
-from typing import Any, Dict, List
+from typing import Any
 
 import numpy as np
 
@@ -22,10 +23,10 @@ def benchmark_layer(
     api: ClassificationAPI,
     field_name: str,
     text: str,
-    params: Dict[str, Any],
+    params: dict[str, Any],
     runs: int,
     layer_name: str
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """对指定的分类分级漏斗层级进行性能基准测试。
 
     Args:
@@ -40,7 +41,7 @@ def benchmark_layer(
         包含冷启动耗时、热启动平均耗时、P50/P95/P99 及 QPS 等指标的字典。
     """
     print(f"[*] 开始测试: {layer_name} (迭代次数: {runs}) ...")
-    
+
     # 1. 测量冷启动时间 (第一次执行，触发延迟加载 Lazy Loading)
     start_cold = time.perf_counter()
     _ = api.classify_field(field_name, text, params=params)
@@ -76,7 +77,7 @@ def benchmark_layer(
 
 
 def save_report(
-    results: Dict[str, Dict[str, Any]],
+    results: dict[str, dict[str, Any]],
     report_path: str
 ):
     """将性能测试结果生成为 Markdown 运维报告并写入磁盘。"""
@@ -183,7 +184,7 @@ def main():
     current_dir = os.path.dirname(os.path.abspath(__file__))
     project_root = os.path.dirname(current_dir)
     report_path = os.path.join(project_root, "docs", "classification", "performance.md")
-    
+
     save_report(benchmark_results, report_path)
 
     print("\n====================================================")

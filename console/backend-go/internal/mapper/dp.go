@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 
-	pb "github.com/fengzhizi319/privacy-local-agent/frontend/backend-go/proto"
+	pb "github.com/fengzhizi319/privacy-local-agent/console/backend-go/proto"
 )
 
 // ---------------------------------------------------------------------------

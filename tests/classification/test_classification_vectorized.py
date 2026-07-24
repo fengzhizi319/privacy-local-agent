@@ -23,9 +23,13 @@ import pandas as pd
 import pytest
 
 from privacy_local_agent.privacy.classification import ClassificationAPI
-from privacy_local_agent.privacy.classification.classification_models import ClassificationParams, SensitivityLevel
+from privacy_local_agent.privacy.classification.classification_models import (
+    ClassificationParams,
+)
 from privacy_local_agent.privacy.classification.classification_rule_engine import DefaultRuleEngine
-from privacy_local_agent.privacy.classification.classification_vectorized import VectorizedRuleEngine
+from privacy_local_agent.privacy.classification.classification_vectorized import (
+    VectorizedRuleEngine,
+)
 
 
 @pytest.fixture
@@ -81,8 +85,20 @@ def test_classify_table_vectorized_consistency():
     """ClassificationAPI(use_vectorized=True) 与普通 API 对同一张表输出一致。"""
     schema = ["id_card", "mobile", "diagnosis", "brca1_status", "turnover_rate"]
     rows = [
-        {"id_card": "110101199001011237", "mobile": "13800138000", "diagnosis": "B21.1", "brca1_status": "positive", "turnover_rate": "0.85"},
-        {"id_card": "110101199001011234", "mobile": "12800138000", "diagnosis": "J18.9", "brca1_status": "negative", "turnover_rate": "0.12"},
+        {
+            "id_card": "110101199001011237",
+            "mobile": "13800138000",
+            "diagnosis": "B21.1",
+            "brca1_status": "positive",
+            "turnover_rate": "0.85",
+        },
+        {
+            "id_card": "110101199001011234",
+            "mobile": "12800138000",
+            "diagnosis": "J18.9",
+            "brca1_status": "negative",
+            "turnover_rate": "0.12",
+        },
         {"id_card": "", "mobile": "", "diagnosis": "", "brca1_status": "", "turnover_rate": ""},
     ]
 

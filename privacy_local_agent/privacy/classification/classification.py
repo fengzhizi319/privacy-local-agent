@@ -27,7 +27,7 @@ import os
 import re
 import time
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Protocol, cast
 
 from ...observability.logging_config import get_logger
 from ...observability.metrics import (
@@ -36,6 +36,7 @@ from ...observability.metrics import (
     CLASSIFICATION_NER_TOTAL,
     CLASSIFICATION_TOTAL,
 )
+from ..profile import ParameterResolver, get_resolver
 from .classification_composite import CompositeRuleEngine, apply_composite_tags
 from .classification_models import (
     AuditInfo,
@@ -59,8 +60,7 @@ from .classification_models import (
     parse_level,
 )
 from .classification_rule_engine import DefaultRuleEngine, RuleEngine, _unique_tags
-from .classification_utils import classify_secretflow, get_template_params, redact
-from ..profile import ParameterResolver, get_resolver
+from .classification_utils import classify_secretflow, get_template_params
 
 # Module-level structured logger for classification events
 logger = get_logger(__name__)
@@ -72,7 +72,7 @@ _RULE_ENGINE_VERSION = "1.0.0"
 _DATA_URI_RE = re.compile(r"^data:image/[a-zA-Z]+;base64,", re.ASCII)
 
 
-def _summarize_field_value(value: Any) -> Optional[str]:
+def _summarize_field_value(value: Any) -> str | None:
     """将字段值转换为适合返回给前端的摘要字符串。
 
     对于图片类 base64 数据（data URI 或超长纯 base64），不返回原始内容，
@@ -105,23 +105,38 @@ def _summarize_field_value(value: Any) -> Optional[str]:
 
 __all__ = [
     "ClassificationAPI",
-    "RuleEngine",
-    "RuleEngineABC",
     "DefaultRuleEngine",
-    "SmallNerEngine",
-    "NoOpSmallNerEngine",
     "LlmClassifier",
     "NoOpLlmClassifier",
+    "NoOpSmallNerEngine",
+    "RuleEngine",
+    "RuleEngineABC",
+    "SmallNerEngine",
 ]
+
+
+class _SupportsEvaluateSeries(Protocol):
+    """Protocol for rule engines that provide vectorized ``evaluate_series``.
+
+    仅用于向量化表分类路径中的类型断言，避免在顶层引入 pandas 依赖。
+    Used only for type assertions in the vectorized table classification path
+    to avoid importing pandas at the top level.
+    """
+
+    def evaluate_series(
+        self, field_name: str, series: Any, params: ClassificationParams
+    ) -> list[list[SecurityTag]]:
+        ...
+
 
 # ---------------------------------------------------------------------------
 # 参数治理 / Parameter Governance
 # ---------------------------------------------------------------------------
 
 def _resolve_classification_params(
-    resolver: Optional[ParameterResolver] = None,
-    request_params: Optional[Dict[str, Any]] = None,
-) -> Tuple[ClassificationParams, str]:
+    resolver: ParameterResolver | None = None,
+    request_params: dict[str, Any] | None = None,
+) -> tuple[ClassificationParams, str]:
     """合并默认、合规模板、YAML profile、请求参数得到最终分类参数。
 
     Merge defaults, compliance template, YAML profile and request params
@@ -144,7 +159,7 @@ def _resolve_classification_params(
     Returns:
         (ClassificationParams, parameter_source) 元组 / Tuple of params and source indicator.
     """
-    params: Dict[str, Any] = {}
+    params: dict[str, Any] = {}
     source = "default"
 
     # Step 1: Resolve base parameters from YAML profile
@@ -218,16 +233,20 @@ class ClassificationAPI:
         use_vectorized: 是否启用向量化规则引擎 / Whether to enable vectorized rule engine.
     """
 
+    rule_engine: RuleEngineABC
+    small_ner: SmallNerEngine
+    llm: LlmClassifier
+
     def __init__(
         self,
-        profile_path: Optional[str] = None,
-        rule_engine: Optional[RuleEngine] = None,
-        small_ner: Optional[SmallNerEngine] = None,
-        llm: Optional[LlmClassifier] = None,
-        resolver: Optional[ParameterResolver] = None,
-        composite_engine: Optional[CompositeRuleEngine] = None,
-        async_manager: Optional[Any] = None,
-        review_store: Optional[Any] = None,
+        profile_path: str | None = None,
+        rule_engine: RuleEngine | None = None,
+        small_ner: SmallNerEngine | None = None,
+        llm: LlmClassifier | None = None,
+        resolver: ParameterResolver | None = None,
+        composite_engine: CompositeRuleEngine | None = None,
+        async_manager: Any | None = None,
+        review_store: Any | None = None,
         use_vectorized: bool = False,
     ):
         """初始化 ClassificationAPI / Initialize ClassificationAPI.
@@ -336,7 +355,7 @@ class ClassificationAPI:
         self,
         field_name: str,
         value: Any,
-        params: Optional[Dict[str, Any]] = None,
+        params: dict[str, Any] | None = None,
     ) -> FieldClassificationResult:
         """对单个字段进行分类 / Classify a Single Field.
 
@@ -371,8 +390,8 @@ class ClassificationAPI:
         self,
         field_name: str,
         value: Any,
-        params: Optional[Dict[str, Any]] = None,
-        initial_tags: Optional[List[SecurityTag]] = None,
+        params: dict[str, Any] | None = None,
+        initial_tags: list[SecurityTag] | None = None,
     ) -> FieldClassificationResult:
         """对单个字段执行三层漏斗分类 / Execute 3-Layer Funnel Classification for a Field.
 
@@ -407,9 +426,9 @@ class ClassificationAPI:
             FieldClassificationResult / Field classification result.
         """
         # Step 1: Resolve classification parameters
-        cp, source = _resolve_classification_params(self.resolver, params)
+        cp, _source = _resolve_classification_params(self.resolver, params)
 
-        tags: List[SecurityTag] = list(initial_tags) if initial_tags is not None else []
+        tags: list[SecurityTag] = list(initial_tags) if initial_tags is not None else []
         engine_layer = EngineLayer.L1_RULE
         reasoning = ""
 
@@ -456,11 +475,10 @@ class ClassificationAPI:
                 rule_id="MANUAL_001",
                 needs_human_review=False,
             )
-            tags = _unique_tags([manual_tag] + tags)
+            tags = _unique_tags([manual_tag, *tags])
             final_level = overridden_level
             engine_layer = EngineLayer.L1_RULE
             reasoning = f"人工覆盖为 {final_level.value}"
-            source = "manual"
             logger.info(
                 "classification_manual_override_applied",
                 extra={
@@ -498,7 +516,7 @@ class ClassificationAPI:
             needs_human_review=needs_human_review,
         )
 
-    def _run_small_ner(self, field_name: str, value: Any) -> List[SecurityTag]:
+    def _run_small_ner(self, field_name: str, value: Any) -> list[SecurityTag]:
         """执行 Small-NER 实体提取并转换为 SecurityTag / Execute Small-NER and Convert to SecurityTags.
 
         中文说明：
@@ -526,7 +544,7 @@ class ClassificationAPI:
             SecurityTag 列表 / List of SecurityTags.
         """
         entities = self.small_ner.extract(str(value) if value is not None else "")
-        tags: List[SecurityTag] = []
+        tags: list[SecurityTag] = []
 
         # Record NER invocation metrics
         if entities:
@@ -607,8 +625,8 @@ class ClassificationAPI:
 
     def classify_record(
         self,
-        record: Dict[str, Any],
-        params: Optional[Dict[str, Any]] = None,
+        record: dict[str, Any],
+        params: dict[str, Any] | None = None,
         record_index: int = 0,
     ) -> RecordClassificationResult:
         """对单条记录进行分类 / Classify a Single Record.
@@ -637,8 +655,8 @@ class ClassificationAPI:
             RecordClassificationResult / Record classification result.
         """
         start_time = time.monotonic()
-        field_results: Dict[str, FieldClassificationResult] = {}
-        aggregated_tags: List[SecurityTag] = []
+        field_results: dict[str, FieldClassificationResult] = {}
+        aggregated_tags: list[SecurityTag] = []
 
         # Step 1: Classify each field in the record
         for field_name, value in record.items():
@@ -679,7 +697,10 @@ class ClassificationAPI:
             else self.composite_engine
         )
         composite_tags = engine.evaluate(record, field_results)
-        record_result = apply_composite_tags(record_result, composite_tags)
+        record_result = cast(
+            "RecordClassificationResult",
+            apply_composite_tags(record_result, composite_tags),
+        )
 
         # Record metrics for observability
         duration = time.monotonic() - start_time
@@ -689,9 +710,9 @@ class ClassificationAPI:
 
     def classify_table(
         self,
-        schema: List[str],
-        rows: List[Dict[str, Any]],
-        params: Optional[Dict[str, Any]] = None,
+        schema: list[str],
+        rows: list[dict[str, Any]],
+        params: dict[str, Any] | None = None,
     ) -> TableClassificationResult:
         """对整张表进行分类 / Classify an Entire Table.
 
@@ -727,9 +748,9 @@ class ClassificationAPI:
             CLASSIFICATION_DURATION.labels(operation="table").observe(time.monotonic() - start_time)
             return result
 
-        record_results: List[RecordClassificationResult] = []
-        aggregated_tags: List[SecurityTag] = []
-        review_entries: List[Any] = []
+        record_results: list[RecordClassificationResult] = []
+        aggregated_tags: list[SecurityTag] = []
+        review_entries: list[Any] = []
 
         # Step 2: Classify each record and aggregate results
         for idx, row in enumerate(rows):
@@ -756,7 +777,7 @@ class ClassificationAPI:
         )
 
         # Step 3: Shadow mode comparison (optional)
-        shadow_diff: List[ShadowDiff] = []
+        shadow_diff: list[ShadowDiff] = []
         if cp.shadow_mode and cp.shadow_version:
             shadow_keys = {
                 "shadow_mode", "shadowMode", "shadow_version", "shadowVersion",
@@ -794,9 +815,9 @@ class ClassificationAPI:
 
     def _classify_table_vectorized(
         self,
-        schema: List[str],
-        rows: List[Dict[str, Any]],
-        params: Optional[Dict[str, Any]],
+        schema: list[str],
+        rows: list[dict[str, Any]],
+        params: dict[str, Any] | None,
         cp: ClassificationParams,
     ) -> TableClassificationResult:
         """使用向量化规则引擎对整张表进行分类。
@@ -807,9 +828,9 @@ class ClassificationAPI:
         import pandas as pd
 
         df = pd.DataFrame(rows, columns=schema)
-        record_results: List[RecordClassificationResult] = []
-        aggregated_tags: List[SecurityTag] = []
-        review_entries: List[Any] = []
+        record_results: list[RecordClassificationResult] = []
+        aggregated_tags: list[SecurityTag] = []
+        review_entries: list[Any] = []
 
         # 复合规则只解析一次，避免每行循环重复构造引擎
         custom_rules = None
@@ -818,19 +839,20 @@ class ClassificationAPI:
         engine = CompositeRuleEngine(custom_rules) if custom_rules else self.composite_engine
 
         # 批量计算每列的 Layer-1 标签
-        column_tags: Dict[str, List[List[SecurityTag]]] = {}
+        rule_engine = cast("_SupportsEvaluateSeries", self.rule_engine)
+        column_tags: dict[str, list[list[SecurityTag]]] = {}
         if cp.enable_rule_engine:
             for field_name in schema:
-                column_tags[field_name] = self.rule_engine.evaluate_series(
+                column_tags[field_name] = rule_engine.evaluate_series(
                     field_name, df[field_name], cp
                 )
         else:
-            empty: List[List[SecurityTag]] = [[] for _ in range(len(rows))]
+            empty: list[list[SecurityTag]] = [[] for _ in range(len(rows))]
             for field_name in schema:
                 column_tags[field_name] = empty
 
         for idx, row in enumerate(rows):
-            field_results: Dict[str, FieldClassificationResult] = {}
+            field_results: dict[str, FieldClassificationResult] = {}
             for field_name in schema:
                 value = row.get(field_name)
                 initial_tags = column_tags[field_name][idx]
@@ -885,7 +907,7 @@ class ClassificationAPI:
             max(rr.confidence for rr in record_results) if record_results else 0.0
         )
 
-        shadow_diff: List[ShadowDiff] = []
+        shadow_diff: list[ShadowDiff] = []
         if cp.shadow_mode and cp.shadow_version:
             shadow_keys = {
                 "shadow_mode",
@@ -918,11 +940,11 @@ class ClassificationAPI:
 
     def _compute_shadow_diff(
         self,
-        current_results: List[RecordClassificationResult],
-        shadow_results: List[RecordClassificationResult],
-    ) -> List[ShadowDiff]:
+        current_results: list[RecordClassificationResult],
+        shadow_results: list[RecordClassificationResult],
+    ) -> list[ShadowDiff]:
         """计算当前结果与影子结果的差异。"""
-        diffs: List[ShadowDiff] = []
+        diffs: list[ShadowDiff] = []
         for cur, shw in zip(current_results, shadow_results):
             for field_name in set(cur.field_results.keys()) | set(shw.field_results.keys()):
                 cur_field = cur.field_results.get(field_name)
@@ -949,7 +971,7 @@ class ClassificationAPI:
     def classify_json(
         self,
         json_input: Any,
-        params: Optional[Dict[str, Any]] = None,
+        params: dict[str, Any] | None = None,
     ) -> ClassificationResult:
         """解析 JSON 字符串或字典并分类 / Parse JSON Input and Classify.
 
@@ -970,10 +992,7 @@ class ClassificationAPI:
         Raises:
             ValueError: 当输入不是 dict 或 list 时 / When input is not dict or list.
         """
-        if isinstance(json_input, str):
-            data = json.loads(json_input)
-        else:
-            data = json_input
+        data = json.loads(json_input) if isinstance(json_input, str) else json_input
 
         cp, source = _resolve_classification_params(self.resolver, params)
 
@@ -985,7 +1004,7 @@ class ClassificationAPI:
             )
 
         if isinstance(data, list) and data:
-            schema = sorted({col for row in data for col in row.keys()})
+            schema = sorted({col for row in data for col in row})
             table_result = self.classify_table(schema, data, params)
             return ClassificationResult(
                 table_result=table_result,
@@ -1003,7 +1022,7 @@ class ClassificationAPI:
     def classify_dataframe(
         self,
         df: Any,
-        params: Optional[Dict[str, Any]] = None,
+        params: dict[str, Any] | None = None,
     ) -> ClassificationResult:
         """对 pandas DataFrame 进行分类 / Classify a pandas DataFrame.
 
@@ -1036,7 +1055,7 @@ class ClassificationAPI:
     def classify_arrow(
         self,
         table: Any,
-        params: Optional[Dict[str, Any]] = None,
+        params: dict[str, Any] | None = None,
     ) -> ClassificationResult:
         """对 pyarrow Table 进行分类 / Classify a pyarrow Table.
 
@@ -1068,8 +1087,8 @@ class ClassificationAPI:
 
     def classify_sql_result(
         self,
-        result_set: List[Dict[str, Any]],
-        params: Optional[Dict[str, Any]] = None,
+        result_set: list[dict[str, Any]],
+        params: dict[str, Any] | None = None,
     ) -> ClassificationResult:
         """对 SQL 结果集进行分类 / Classify a SQL Result Set.
 
@@ -1088,7 +1107,7 @@ class ClassificationAPI:
                 ),
                 audit_info=_build_audit_info(cp, source),
             )
-        schema = sorted({col for row in result_set for col in row.keys()})
+        schema = sorted({col for row in result_set for col in row})
         table_result = self.classify_table(schema, result_set, params)
         cp, source = _resolve_classification_params(self.resolver, params)
         return ClassificationResult(
@@ -1099,8 +1118,8 @@ class ClassificationAPI:
     def classify_secretflow(
         self,
         sf_data: Any,
-        params: Optional[Dict[str, Any]] = None,
-        party: Optional[str] = None,
+        params: dict[str, Any] | None = None,
+        party: str | None = None,
     ) -> ClassificationResult:
         """对 SecretFlow 联邦数据结构进行分类 / Classify SecretFlow Federated Data.
 
@@ -1121,9 +1140,9 @@ class ClassificationAPI:
 
     def submit_classify_table_async(
         self,
-        schema: List[str],
-        rows: List[Dict[str, Any]],
-        params: Optional[Dict[str, Any]] = None,
+        schema: list[str],
+        rows: list[dict[str, Any]],
+        params: dict[str, Any] | None = None,
     ) -> str:
         """提交异步表分类任务 / Submit Async Table Classification Job.
 
@@ -1230,7 +1249,7 @@ class ClassificationAPI:
         """
         return self.review_store.confirm(review_id, corrected_level, reviewer, comment)
 
-    def export_reviews(self, format: str = "jsonl", mask_input: bool = False) -> str:
+    def export_reviews(self, format: str = "jsonl", mask_input: bool = False) -> str:  # noqa: A002
         """导出复核样本 / Export Review Samples.
 
         Args:

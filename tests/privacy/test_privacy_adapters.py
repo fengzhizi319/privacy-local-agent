@@ -1,4 +1,5 @@
-"""隐私原语统一数据适配器与 PyArrow Metadata 导出测试 / Privacy Primitive Unified Adapters and PyArrow Metadata Export Tests.
+"""隐私原语统一数据适配器与 PyArrow Metadata 导出测试 / Privacy Primitive Unified Adapters
+and PyArrow Metadata Export Tests.
 
 中文说明：
 验证 privacy 模块下各隐私原语（masking, kano_table, qol）的：
@@ -15,12 +16,17 @@ Tests for unified data I/O adapters and PyArrow metadata export across privacy p
 """
 
 import pandas as pd
-import pytest
 
-from privacy_local_agent.privacy.kano import anonymize_record
-from privacy_local_agent.privacy.kano_table import KAnonymityResult, k_anonymize_dataframe, k_anonymize_table
-from privacy_local_agent.privacy.masking import MaskingResult, mask_dataframe, mask_record, mask_value
-from privacy_local_agent.privacy.qol import QoLResult, obfuscate_query, obfuscate_query_batch
+from privacy_local_agent.privacy.kano_table import (
+    KAnonymityResult,
+    k_anonymize_table,
+)
+from privacy_local_agent.privacy.masking import (
+    MaskingResult,
+    mask_dataframe,
+    mask_value,
+)
+from privacy_local_agent.privacy.qol import QoLResult, obfuscate_query
 
 
 class TestMaskingUnifiedAdapters:

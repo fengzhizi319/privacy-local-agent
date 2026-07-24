@@ -17,11 +17,10 @@ from prometheus_client import REGISTRY  # Prometheus 全局默认注册表，用
 
 # 从被测模块导入公开接口和常量
 from privacy_local_agent.privacy.qol import (
-    MEDICAL_DUMMY,           # 内置医疗领域 Dummy 查询词库（用于验证池选择逻辑）
-    ObfuscationDomain,       # 混淆领域枚举（medical/generic）
-    ObfuscationStrategy,     # 混淆策略枚举（slot_filling/length_similarity/hybrid）
-    obfuscate_query,         # 单条查询混淆接口
-    obfuscate_query_batch,   # 批量查询混淆接口
+    ObfuscationDomain,  # 混淆领域枚举（medical/generic）
+    ObfuscationStrategy,  # 混淆策略枚举（slot_filling/length_similarity/hybrid）
+    obfuscate_query,  # 单条查询混淆接口
+    obfuscate_query_batch,  # 批量查询混淆接口
 )
 
 

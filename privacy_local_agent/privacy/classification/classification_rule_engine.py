@@ -15,11 +15,16 @@ tag deduplication, etc.).
 from __future__ import annotations
 
 import re
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 from ...observability.logging_config import get_logger
 from ...observability.metrics import CLASSIFICATION_RULE_HITS_TOTAL
-from .classification_models import ClassificationParams, RuleEngineABC, SecurityTag, SensitivityLevel
+from .classification_models import (
+    ClassificationParams,
+    RuleEngineABC,
+    SecurityTag,
+    SensitivityLevel,
+)
 
 # Module-level structured logger for rule engine events
 logger = get_logger(__name__)
@@ -55,7 +60,7 @@ def _normalize_field_name(name: str) -> str:
     return str(name).lower().replace("_", "").replace(" ", "")
 
 
-def _normalize_icd10(code: str) -> Optional[Tuple[str, int]]:
+def _normalize_icd10(code: str) -> tuple[str, int] | None:
     """解析并归一化 ICD-10 编码 / Parse and Normalize ICD-10 Code.
 
     Args:
@@ -70,7 +75,7 @@ def _normalize_icd10(code: str) -> Optional[Tuple[str, int]]:
     return match.group(1), int(match.group(2))
 
 
-def _in_icd10_interval(code: Tuple[str, int], start: str, end: str) -> bool:
+def _in_icd10_interval(code: tuple[str, int], start: str, end: str) -> bool:
     """判断 ICD-10 编码是否落在闭区间 / Check if ICD-10 Code Falls Within Closed Interval.
 
     Args:
@@ -129,7 +134,7 @@ def _shanghai_medical_card_checksum(value: str) -> bool:
     return digits[8] == expected
 
 
-def _unique_tags(tags: List[SecurityTag]) -> List[SecurityTag]:
+def _unique_tags(tags: list[SecurityTag]) -> list[SecurityTag]:
     """去重安全标签 / Deduplicate Security Tags.
 
     中文说明：以 level+category 为键保留顺序。
@@ -142,7 +147,7 @@ def _unique_tags(tags: List[SecurityTag]) -> List[SecurityTag]:
         去重后的标签列表 / Deduplicated tag list.
     """
     seen: set = set()
-    result: List[SecurityTag] = []
+    result: list[SecurityTag] = []
     for tag in tags:
         key = (tag.level.value, tag.category)
         if key in seen:
@@ -178,7 +183,7 @@ class DefaultRuleEngine(RuleEngine):
 
     def evaluate(
         self, field_name: str, value: Any, params: ClassificationParams
-    ) -> List[SecurityTag]:
+    ) -> list[SecurityTag]:
         """按字段名与字段值评估规则并收集标签 / Evaluate Rules by Field Name and Value.
 
         执行步骤 / Execution Steps:
@@ -203,7 +208,7 @@ class DefaultRuleEngine(RuleEngine):
         Returns:
             命中的 SecurityTag 列表 / List of matched SecurityTags.
         """
-        tags: List[SecurityTag] = []
+        tags: list[SecurityTag] = []
         norm_name = _normalize_field_name(field_name)
         str_value = str(value) if value is not None else ""
 
@@ -407,7 +412,7 @@ class DefaultRuleEngine(RuleEngine):
 
     def _apply_template_field_rules(
         self, norm_name: str, params: ClassificationParams
-    ) -> List[SecurityTag]:
+    ) -> list[SecurityTag]:
         """根据合规模板扩展字段名规则 / Apply Compliance Template Extension Field Rules.
 
         中文说明：根据激活的合规模板（JR/T 0197、GB/T 35273、GDPR）添加额外的字段名规则。
@@ -420,47 +425,55 @@ class DefaultRuleEngine(RuleEngine):
         Returns:
             命中的 SecurityTag 列表 / List of matched SecurityTags.
         """
-        tags: List[SecurityTag] = []
+        tags: list[SecurityTag] = []
         template = params.template
         if not template:
             return tags
 
         template = str(template).lower()
 
-        if template == "jrt0197":
-            if any(kw in norm_name for kw in ("bankcard", "bankcard", "cardno", "credit", "transaction", "asset", "balance", "account")):
-                tags.append(
-                    SecurityTag(
-                        level=SensitivityLevel.L4,
-                        category="FINANCE_ACCOUNT",
-                        source_engine="RULE",
-                        rule_id="RULE_ID_JRT_001",
-                    )
+        if template == "jrt0197" and any(
+            kw in norm_name
+            for kw in ("bankcard", "cardno", "credit", "transaction", "asset", "balance", "account")
+        ):
+            tags.append(
+                SecurityTag(
+                    level=SensitivityLevel.L4,
+                    category="FINANCE_ACCOUNT",
+                    source_engine="RULE",
+                    rule_id="RULE_ID_JRT_001",
                 )
+            )
 
-        if template in ("gbt35273", "gdpr"):
-            if any(kw in norm_name for kw in ("email", "address", "location", "轨迹")):
-                tags.append(
-                    SecurityTag(
-                        level=SensitivityLevel.L3,
-                        category="PII_CONTACT_LOCATION",
-                        source_engine="RULE",
-                        rule_id="RULE_ID_GBT_001",
-                    )
+        if template in ("gbt35273", "gdpr") and any(
+            kw in norm_name for kw in ("email", "address", "location", "轨迹")
+        ):
+            tags.append(
+                SecurityTag(
+                    level=SensitivityLevel.L3,
+                    category="PII_CONTACT_LOCATION",
+                    source_engine="RULE",
+                    rule_id="RULE_ID_GBT_001",
                 )
+            )
 
-        if template == "gdpr":
-            if any(kw in norm_name for kw in ("biometric", "fingerprint", "face", "health", "genetic", "race", "ethnicity", "political", "religion", "sexual")):
-                tags.append(
-                    SecurityTag(
-                        level=SensitivityLevel.L4,
-                        category="GDPR_SPECIAL_CATEGORY",
-                        source_engine="RULE",
-                        rule_id="RULE_ID_GDPR_001",
-                    )
+        if template == "gdpr" and any(
+            kw in norm_name
+            for kw in (
+                "biometric", "fingerprint", "face", "health", "genetic",
+                "race", "ethnicity", "political", "religion", "sexual",
+            )
+        ):
+            tags.append(
+                SecurityTag(
+                    level=SensitivityLevel.L4,
+                    category="GDPR_SPECIAL_CATEGORY",
+                    source_engine="RULE",
+                    rule_id="RULE_ID_GDPR_001",
                 )
+            )
 
         return tags
 
 
-__all__ = ["RuleEngine", "DefaultRuleEngine", "_unique_tags"]
+__all__ = ["DefaultRuleEngine", "RuleEngine", "_unique_tags"]

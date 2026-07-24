@@ -7,7 +7,6 @@ import asyncio
 import logging
 import random
 import threading
-from typing import List, Optional
 
 import grpc
 import httpx
@@ -69,7 +68,7 @@ class LoadBalancer:
             strategy: 负载均衡策略 ("round_robin", "random", "least_connections")。
         """
         self.strategy = strategy.lower()
-        self.nodes: List[BackendNode] = []
+        self.nodes: list[BackendNode] = []
         self.rr_index = 0
         self.lock = asyncio.Lock()
         self.modify_lock = threading.Lock()
@@ -85,7 +84,7 @@ class LoadBalancer:
                     node.active_connections = 0
                     logger.info(f"Updated existing backend node: HTTP={http_url}, gRPC={grpc_address}")
                     return
-            
+
             node = BackendNode(http_url, grpc_address, weight)
             self.nodes.append(node)
             logger.info(f"Added backend node: HTTP={http_url}, gRPC={grpc_address}")
@@ -98,8 +97,8 @@ class LoadBalancer:
             removed = False
             for node in self.nodes:
                 if node.http_url == clean_url and node.grpc_address == grpc_address:
-                    # 异步关闭该节点的通道
-                    asyncio.create_task(node.close())
+                    # 异步关闭该节点的通道（fire-and-forget，无需等待）
+                    asyncio.create_task(node.close())  # noqa: RUF006
                     removed = True
                 else:
                     new_nodes.append(node)
@@ -108,11 +107,11 @@ class LoadBalancer:
                 logger.info(f"Removed backend node: HTTP={http_url}, gRPC={grpc_address}")
 
 
-    def get_healthy_nodes(self) -> List[BackendNode]:
+    def get_healthy_nodes(self) -> list[BackendNode]:
         """获取当前健康的节点列表。"""
         return [node for node in self.nodes if node.is_healthy]
 
-    async def select_node(self) -> Optional[BackendNode]:
+    async def select_node(self) -> BackendNode | None:
         """按策略选择一个健康的后端节点（协程安全）。
 
         Returns:

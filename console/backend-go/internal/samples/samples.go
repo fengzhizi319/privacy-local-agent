@@ -9,7 +9,7 @@ package samples
 import (
 	"encoding/json"
 
-	"github.com/fengzhizi319/privacy-local-agent/frontend/backend-go/internal/models"
+	"github.com/fengzhizi319/privacy-local-agent/console/backend-go/internal/models"
 )
 
 // raw is a small helper that converts a string literal to json.RawMessage.
