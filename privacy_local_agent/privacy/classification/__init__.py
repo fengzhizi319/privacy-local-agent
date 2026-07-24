@@ -17,7 +17,14 @@
 - classification_utils.py：工具函数
 """
 
+# 从主分类模块导入 ClassificationAPI，这是三层分类漏斗的唯一对外入口类。
+# 外部代码通过 `from privacy_local_agent.privacy.classification import ClassificationAPI` 使用。
 from .classification import ClassificationAPI  # noqa: F401
+
+# 从数据模型模块导入核心公共类型：
+# - ClassificationParams：分类请求参数模型（含规则开关、阈值、模板等配置）
+# - EngineLayer：分类引擎层级枚举（L1_RULE / L2_SMALL_NER / L3_LLM）
+# - SensitivityLevel：敏感度等级枚举（L1~L5，从公开到极敏感）
 from .classification_models import (  # noqa: F401
     ClassificationParams,
     EngineLayer,
