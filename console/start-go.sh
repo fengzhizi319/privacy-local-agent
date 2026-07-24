@@ -20,22 +20,84 @@ AGENT_VENV="$PROJECT_ROOT/.venv"
 AGENT_URL="http://127.0.0.1:8079"
 CONSOLE_URL="http://127.0.0.1:8081"
 
-# ── 端口占用预检 ───────────────────────────────────────────────────────
+# ── 端口占用预检（冲突时自动诊断并提供 kill 选项）────────────────────
 check_port_available() {
     local port="$1"
     local name="$2"
-    python3 - <<PY
+
+    # 快速检测端口是否可用
+    if python3 -c "
 import socket, sys
 s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 try:
-    s.bind(("127.0.0.1", $port))
+    s.bind(('127.0.0.1', $port))
 except OSError:
-    print("错误：端口 " + str($port) + " 已被占用（$name），请先释放或修改环境变量。", file=sys.stderr)
     sys.exit(1)
 finally:
     s.close()
-PY
+" 2>/dev/null; then
+        return 0
+    fi
+
+    # 端口被占用 —— 诊断占用进程
+    echo ""
+    echo "⚠️  端口 $port 已被占用（$name）"
+    echo "────────────────────────────────────────"
+
+    local pids=""
+    if command -v lsof >/dev/null 2>&1; then
+        echo "诊断信息（lsof -i :$port）："
+        lsof -i :"$port" 2>/dev/null || true
+        echo ""
+        pids=$(lsof -t -i :"$port" 2>/dev/null | sort -u | tr '\n' ' ')
+    elif command -v fuser >/dev/null 2>&1; then
+        pids=$(fuser "$port"/tcp 2>/dev/null | tr -s ' ')
+        echo "占用进程 PID：$pids"
+        echo ""
+    fi
+
+    if [[ -z "$pids" ]]; then
+        echo "错误：无法定位占用端口 $port 的进程，请手动排查："
+        echo "  lsof -i :$port"
+        echo "  或 ss -tlnp | grep $port"
+        exit 1
+    fi
+
+    echo "占用端口 $port 的进程 PID：$pids"
+    echo ""
+    read -rp "是否自动终止上述进程以释放端口？[y/N] " answer
+    case "$answer" in
+        [yY]|[yY][eE][sS])
+            for pid in $pids; do
+                echo "  → kill -9 $pid"
+                kill -9 "$pid" 2>/dev/null || true
+            done
+            sleep 1
+            # 再次验证端口已释放
+            if python3 -c "
+import socket, sys
+s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+try:
+    s.bind(('127.0.0.1', $port))
+except OSError:
+    sys.exit(1)
+finally:
+    s.close()
+" 2>/dev/null; then
+                echo "✅ 端口 $port 已释放"
+            else
+                echo "错误：端口 $port 仍被占用，请手动排查。"
+                exit 1
+            fi
+            ;;
+        *)
+            echo "已取消。请手动释放端口 $port 后重试："
+            echo "  kill -9 $pids"
+            exit 1
+            ;;
+    esac
 }
 
 # ── 自动补全缺失的依赖 / 构建产物 ─────────────────────────────────────
