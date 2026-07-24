@@ -12,10 +12,13 @@
 
 两个代理后端各自维护一套 `docs/` 文档（设计 / 接口 / 测试 / 运维）：
 
+- `docs/modes.md` - 开发模式 vs 商业化产品模式的整条链路总览：前端、后端、agent 与服务器配置差异
+- `docs/vite.md` - Vite 原理、项目结构、配置方式，以及在 `console/web` 中的实际用法
 - `backend/docs/` - Python REST 代理后端：[design](backend/docs/design.md) · [api](backend/docs/api.md) · [test](backend/docs/test.md) · [ops](backend/docs/ops.md)
 - `backend-go/docs/` - Go gRPC 代理后端：[design](backend-go/docs/design.md) · [api](backend-go/docs/api.md) · [test](backend-go/docs/test.md) · [ops](backend-go/docs/ops.md)
 
 其中 **ops 运维文档** 说明了开发模式与生产模式的区别、环境变量配置、跨域（CORS）解决方案、启停脚本与常见问题排查，部署前建议先阅读。
+如果你想先看“整条 console 链路在开发模式和商业化产品模式下怎么组合”，建议先读 `docs/modes.md`，再按需要查看各组件的 `ops.md`。
 
 ## 快速开始
 
