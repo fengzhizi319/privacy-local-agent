@@ -156,3 +156,42 @@ async def proxy_http(path: str, request: Request): ...
 - 健康检查动态增删节点测试。
 - 分布式共享预算一致性测试。
 - 网关转发延迟与异常处理测试。
+
+## 12. 工业化评分 / Industrialization Scorecard
+
+> **工业化软件 = 功能正确 + 性能稳定 + 安全可靠 + 可维护 + 可观测 + 可快速迭代**
+>
+> 评估框架参考 ISO/IEC 25010 与 Google SRE 实践，采用 6 维度加权评分（1–10 分）。
+
+### 12.1 加权评分表
+
+| 维度 | 权重 | 得分 | 说明 |
+|------|------|------|------|
+| 功能完整性 | 20% | 8/10 | 三种 LB 策略；HTTP/gRPC 双协议代理；健康检查自愈；分布式预算记账（SQLite/内存） |
+| 性能 | 15% | 8/10 | 全异步 I/O（FastAPI + grpc.aio）；连接池复用；事件循环感知重建 |
+| 可靠性 | 20% | 7/10 | 健康检查自动排除故障节点；503/UNAVAILABLE 保护；缺少重试与熔断器 |
+| 安全性 | 15% | 6/10 | 预算超扣 ROLLBACK 保护；缺少网关层 TLS 终结与认证（依赖后端） |
+| 可维护性 | 15% | 5/10 | 使用 `logging.getLogger` 而非 `get_logger(__name__)`；无 `from __future__`；无结构化 extra；无双语 docstring |
+| 工程化 | 15% | 4/10 | 无 Prometheus 指标埋点；无结构化日志；无延迟监控；无 Tracing |
+| **总分** | **100%** | **6.60** | |
+
+### 12.2 结论
+
+**有条件通过（Conditional）**——需补齐可观测性与代码规范后复审。
+
+### 12.3 亮点
+
+- gRPC 泛化转发（自动绑定所有 RPC 方法，新增接口无需手写代理）。
+- 事件循环感知机制解决 `Event loop is closed` 问题。
+- 分布式预算记账支持 SQLite `BEGIN IMMEDIATE` 强一致性。
+
+### 12.4 改进建议（必须修复）
+
+| 优先级 | 建议 | 影响维度 |
+|--------|------|----------|
+| **P0** | 添加 Prometheus 指标：`privacy_gateway_requests_total`、`privacy_gateway_latency_seconds`、`privacy_gateway_healthy_nodes` | 工程化 +3 |
+| **P0** | 将 `logging.getLogger` 替换为 `get_logger(__name__)` + `extra={}` 结构化日志 | 可维护性 +2 |
+| P1 | 添加 `from __future__ import annotations` + 双语 docstring | 可维护性 +1 |
+| P1 | 添加网关层 TLS 终结与认证透传 | 安全性 +1.5 |
+| P2 | 添加重试策略与熔断器（连续失败 N 次后暫停转发） | 可靠性 +1 |
+| P2 | 添加 OpenTelemetry span（网关入口 → 后端节点） | 工程化 +1 |

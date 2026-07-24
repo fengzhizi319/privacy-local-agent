@@ -17,12 +17,15 @@ import grpc
 from fastapi import Depends, HTTPException, Request
 from limits import RateLimitItemPerSecond, storage, strategies
 
+from ..observability.logging_config import get_logger
 from ..observability.middleware import record_auth_denial
 from .config import SecuritySettings, get_security_settings
 from .identity import Identity, is_health_path_or_method
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+
+logger = get_logger(__name__)
 
 
 class Limiter:
@@ -110,6 +113,10 @@ async def rate_limit_dependency(request: Request) -> None:
 
     if not get_limiter().is_allowed(identity, path):
         record_auth_denial("rate_limited")
+        logger.warning(
+            "Rate limit exceeded",
+            extra={"path": path, "identity_type": identity.service_type, "identity_name": identity.name},
+        )
         raise HTTPException(status_code=429, detail="Rate limit exceeded")
 
 
@@ -126,6 +133,10 @@ def rate_limit_for_path(path: str) -> Any:
         if identity is None:
             identity = Identity("external", "anonymous", [])
         if not get_limiter().is_allowed(identity, path):
+            logger.warning(
+                "Rate limit exceeded",
+                extra={"path": path, "identity_type": identity.service_type, "identity_name": identity.name},
+            )
             raise HTTPException(status_code=429, detail="Rate limit exceeded")
 
     return Depends(_checker)
@@ -154,6 +165,10 @@ class RateLimitInterceptor(grpc.ServerInterceptor):
         identity = get_identity_from_grpc_context(context, method)
         if not get_limiter().is_allowed(identity, method):
             record_auth_denial("rate_limited")
+            logger.warning(
+                "gRPC rate limit exceeded",
+                extra={"method": method, "identity_type": identity.service_type, "identity_name": identity.name},
+            )
             context.abort(grpc.StatusCode.RESOURCE_EXHAUSTED, "Rate limit exceeded")
 
     def intercept_service(

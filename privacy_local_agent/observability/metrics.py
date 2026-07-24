@@ -213,6 +213,82 @@ DATA_EXTRACTION_TOTAL = Counter(
     ["format", "status"],
 )
 
+# ---------------------------------------------------------------------------
+# Gateway metrics (P0: 网关可观测性)
+# ---------------------------------------------------------------------------
+
+# Gateway proxy request counter.
+GATEWAY_REQUESTS_TOTAL = Counter(
+    "privacy_gateway_requests_total",
+    "Total number of requests proxied by the gateway.",
+    ["protocol", "method", "status"],
+)
+
+# Gateway proxy latency histogram.
+GATEWAY_LATENCY = Histogram(
+    "privacy_gateway_latency_seconds",
+    "Gateway proxy latency in seconds (time spent forwarding to backend).",
+    ["protocol"],
+    buckets=[0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0],
+)
+
+# Gateway healthy backend nodes gauge.
+GATEWAY_HEALTHY_NODES = Gauge(
+    "privacy_gateway_healthy_nodes",
+    "Current number of healthy backend nodes in the gateway pool.",
+)
+
+# Gateway retry counter.
+GATEWAY_RETRIES_TOTAL = Counter(
+    "privacy_gateway_retries_total",
+    "Total number of gateway retry attempts.",
+    ["protocol", "reason"],
+)
+
+# ---------------------------------------------------------------------------
+# Module-level duration histograms (P1: 全局延迟指标)
+# ---------------------------------------------------------------------------
+
+# Masking operation duration histogram.
+MASKING_DURATION = Histogram(
+    "privacy_masking_duration_seconds",
+    "Masking operation latency in seconds.",
+    ["operation"],
+    buckets=[0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0],
+)
+
+# K-anonymity operation duration histogram.
+KANO_DURATION = Histogram(
+    "privacy_kano_duration_seconds",
+    "K-anonymity operation latency in seconds.",
+    ["operation"],
+    buckets=[0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0],
+)
+
+# Differential privacy query duration histogram.
+DP_DURATION = Histogram(
+    "privacy_dp_duration_seconds",
+    "Differential privacy query latency in seconds.",
+    ["aggregation", "mechanism"],
+    buckets=[0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0],
+)
+
+# Query obfuscation duration histogram.
+QOL_DURATION = Histogram(
+    "privacy_qol_duration_seconds",
+    "Query obfuscation operation latency in seconds.",
+    ["domain"],
+    buckets=[0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0],
+)
+
+# Security auth/rate-limit operation duration histogram.
+AUTH_DURATION = Histogram(
+    "privacy_auth_duration_seconds",
+    "Authentication and authorization check latency in seconds.",
+    ["result"],
+    buckets=[0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1],
+)
+
 
 def make_asgi_app() -> Any:
     """Return the Prometheus metrics ASGI application to mount on FastAPI."""

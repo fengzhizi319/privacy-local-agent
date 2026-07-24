@@ -20,16 +20,22 @@ Built-in input validation, structured logging, and Prometheus metrics instrument
 
 from __future__ import annotations
 
+import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
 
 from ..observability.logging_config import get_logger
-from ..observability.metrics import KANO_OPERATIONS_TOTAL
+from ..observability.metrics import KANO_DURATION, KANO_OPERATIONS_TOTAL
 
 # Module-level structured logger for K-anonymity operations
 logger = get_logger(__name__)
+
+# 大数据集超时保护阈值（秒）/ Large dataset timeout threshold (seconds)
+DEFAULT_BATCH_TIMEOUT_SECONDS = 60.0
+# 大数据集记录数阈值 / Large dataset record count threshold
+LARGE_DATASET_THRESHOLD = 10000
 
 
 class QIType(str, Enum):
@@ -407,6 +413,7 @@ def anonymize_records_batch(
     hierarchies: dict[str, GeneralizationHierarchy] | None = None,
     k: int = 5,
     return_details: bool = False,
+    timeout_seconds: float | None = None,
 ) -> list[dict[str, Any]] | KAnonymityRecordResult:
     """批量对多条记录按 K-匿名要求进行泛化 / Batch Generalize Records for K-Anonymity.
 
@@ -415,8 +422,8 @@ def anonymize_records_batch(
        (Validate k, qi_cols, and records parameters)
     2. 增加 `KANO_OPERATIONS_TOTAL` 操作指标计数。
        (Increment KANO_OPERATIONS_TOTAL metrics counter)
-    3. 遍历每条记录调用 `anonymize_record` 执行泛化。
-       (Iterate records and apply anonymize_record per record)
+    3. 遍历每条记录调用 `anonymize_record` 执行泛化，支持超时保护。
+       (Iterate records and apply anonymize_record per record with timeout protection)
     4. 记录结构化日志并返回泛化后的记录列表或封装结果。
        (Emit structured log and return generalized records or result)
 
@@ -426,12 +433,14 @@ def anonymize_records_batch(
         hierarchies: 可选自定义泛化层次函数映射 / Optional custom hierarchy mapping.
         k: K-匿名阈值参数 / K-anonymity threshold parameter.
         return_details: 是否返回 KAnonymityRecordResult / Whether to return result struct.
+        timeout_seconds: 超时保护阈值（秒），None 表示使用默认值 / Timeout threshold (seconds), None for default.
 
     Returns:
         泛化后的记录列表或 KAnonymityRecordResult / Generalized records or result struct.
 
     Raises:
         ValueError: 当 records 为空或 k < 2 时 / When records is empty or k < 2.
+        TimeoutError: 当处理时间超过超时阈值时 / When processing exceeds timeout threshold.
     """
     _validate_k(k)
     _validate_qi_cols(qi_cols)
@@ -440,13 +449,40 @@ def anonymize_records_batch(
     if not isinstance(records, list):
         raise ValueError(f"records must be a list, got {type(records).__name__}")
 
+    # 超时保护：大数据集使用更严格的超时 / Timeout protection for large datasets
+    effective_timeout = timeout_seconds if timeout_seconds is not None else DEFAULT_BATCH_TIMEOUT_SECONDS
+    if len(records) > LARGE_DATASET_THRESHOLD:
+        logger.warning(
+            "Processing large dataset, timeout protection enabled",
+            extra={"num_records": len(records), "timeout_seconds": effective_timeout},
+        )
+
+    start_time = time.perf_counter()
     KANO_OPERATIONS_TOTAL.labels(operation="record_batch").inc()
     effective_hierarchies = hierarchies or {}
     generalized: list[dict[str, Any]] = []
     total_levels: list[int] = []
     all_hierarchies_used: dict[str, str] = {}
 
-    for record in records:
+    for i, record in enumerate(records):
+        # 超时检查 / Timeout check
+        elapsed = time.perf_counter() - start_time
+        if elapsed > effective_timeout:
+            KANO_DURATION.labels(operation="record_batch_timeout").observe(elapsed)
+            logger.error(
+                "Batch anonymization timeout",
+                extra={
+                    "processed_records": i,
+                    "total_records": len(records),
+                    "elapsed_seconds": elapsed,
+                    "timeout_seconds": effective_timeout,
+                },
+            )
+            raise TimeoutError(
+                f"Batch anonymization timed out after {elapsed:.2f}s "
+                f"(processed {i}/{len(records)} records, timeout={effective_timeout}s)"
+            )
+
         result = anonymize_record(
             record, qi_cols, effective_hierarchies, k, return_details=True
         )
@@ -457,6 +493,9 @@ def anonymize_records_batch(
         else:
             generalized.append(result)
 
+    duration = time.perf_counter() - start_time
+    KANO_DURATION.labels(operation="record_batch").observe(duration)
+
     logger.info(
         "kano_anonymize_records_batch_completed",
         extra={
@@ -464,6 +503,7 @@ def anonymize_records_batch(
             "qi_cols": qi_cols,
             "num_records": len(records),
             "avg_level": sum(total_levels) // max(1, len(total_levels)),
+            "duration_seconds": round(duration, 4),
         },
     )
 

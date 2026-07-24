@@ -2,33 +2,40 @@
 
 读取配置文件与环境变量，初始化负载均衡器，并在同一 Event Loop 内异步运行 REST (Uvicorn)
 与 gRPC 网关服务器。
+
+Gateway unified entrypoint module.
+
+Reads configuration from file and environment variables, initializes the load
+balancer, and runs REST (Uvicorn) + gRPC gateway servers in the same event loop.
 """
+
+from __future__ import annotations
 
 import argparse
 import asyncio
 import contextlib
-import logging
 import os
 import sys
 from typing import Any
 
 import yaml
 
+from privacy_local_agent.observability.logging_config import configure_logging, get_logger
+
 from .balancer import LoadBalancer, health_check_loop
 from .grpc_proxy import start_grpc_gateway
 from .http_proxy import create_http_gateway_app
 
-# 配置基础日志格式与级别
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    handlers=[logging.StreamHandler(sys.stdout)],
+# 配置结构化日志 / Configure structured logging
+configure_logging(
+    log_level=os.environ.get("PRIVACY_LOG_LEVEL", "INFO"),
+    json_format=os.environ.get("PRIVACY_LOG_FORMAT", "text").lower() == "json",
 )
-logger = logging.getLogger("gateway.server")
+logger = get_logger(__name__)
 
 
 def load_config() -> dict[str, Any]:
-    """从配置文件或环境变量加载网关配置参数。
+    """从配置文件或环境变量加载网关配置参数 / Load gateway config from file or env.
 
     Returns:
         解析合并后的配置字典。
@@ -41,6 +48,11 @@ def load_config() -> dict[str, Any]:
             "grpc_port": 50000,
             "strategy": "round_robin",
             "health_check_interval": 5.0,
+            # TLS 终结配置 / TLS termination config
+            "tls_enabled": False,
+            "tls_cert_file": "",
+            "tls_key_file": "",
+            "tls_ca_file": "",  # 用于 mTLS 客户端证书验证
         },
         "backends": [],
     }
@@ -56,9 +68,9 @@ def load_config() -> dict[str, Any]:
                         config["gateway"].update(loaded["gateway"])
                     if "backends" in loaded:
                         config["backends"] = loaded["backends"]
-            logger.info(f"Loaded config from yaml: {config_path}")
+            logger.info("Loaded config from yaml", extra={"config_path": config_path})
         except Exception as e:
-            logger.error(f"Failed to load config file: {e}")
+            logger.error("Failed to load config file", extra={"error": str(e)})
 
     # 2. 尝试使用环境变量进行覆盖/补充
     gw = config["gateway"]
@@ -70,6 +82,11 @@ def load_config() -> dict[str, Any]:
     gw["health_check_interval"] = float(
         os.environ.get("GATEWAY_HEALTH_INTERVAL", str(gw["health_check_interval"]))
     )
+    # TLS 终结环境变量 / TLS termination env vars
+    gw["tls_enabled"] = os.environ.get("GATEWAY_TLS_ENABLED", str(gw["tls_enabled"])).lower() == "true"
+    gw["tls_cert_file"] = os.environ.get("GATEWAY_TLS_CERT", gw["tls_cert_file"])
+    gw["tls_key_file"] = os.environ.get("GATEWAY_TLS_KEY", gw["tls_key_file"])
+    gw["tls_ca_file"] = os.environ.get("GATEWAY_TLS_CA", gw["tls_ca_file"])
 
     env_backends = os.environ.get("GATEWAY_BACKENDS")
     if env_backends:
@@ -125,14 +142,18 @@ async def async_main(
             weight=node_cfg.get("weight", 1),
         )
 
-    # 1. 启动异步 gRPC 网关服务器
+    # 1. 启动异步 gRPC 网关服务器（支持 TLS 终结）
     grpc_server = await start_grpc_gateway(
         host=gw["grpc_host"],
         port=gw["grpc_port"],
         balancer=balancer,
+        tls_enabled=gw.get("tls_enabled", False),
+        tls_cert_file=gw.get("tls_cert_file", ""),
+        tls_key_file=gw.get("tls_key_file", ""),
+        tls_ca_file=gw.get("tls_ca_file", ""),
     )
 
-    # 2. 启动 HTTP 网关 FastAPI + Uvicorn 服务器
+    # 2. 启动 HTTP 网关 FastAPI + Uvicorn 服务器（支持 TLS 终结）
     http_app = create_http_gateway_app(balancer)
     import uvicorn
 
@@ -141,6 +162,9 @@ async def async_main(
         host=gw["rest_host"],
         port=gw["rest_port"],
         log_level="info",
+        ssl_certfile=gw["tls_cert_file"] if gw.get("tls_enabled") else None,
+        ssl_keyfile=gw["tls_key_file"] if gw.get("tls_enabled") else None,
+        ssl_ca_certs=gw["tls_ca_file"] if gw.get("tls_enabled") and gw.get("tls_ca_file") else None,
     )
     uv_server = uvicorn.Server(uv_config)
 
@@ -149,9 +173,8 @@ async def async_main(
     health_task = asyncio.create_task(health_check_loop(balancer, health_interval))
 
     logger.info(
-        f"Gateway services successfully launched: "
-        f"REST port={gw['rest_port']}, gRPC port={gw['grpc_port']}, "
-        f"strategy={gw['strategy']}"
+        "Gateway services successfully launched",
+        extra={"rest_port": gw["rest_port"], "grpc_port": gw["grpc_port"], "strategy": gw["strategy"]},
     )
 
     try:

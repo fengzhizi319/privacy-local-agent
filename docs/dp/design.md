@@ -2297,21 +2297,38 @@ $$\boxed{95.7 / 100}$$
 
 ## 13. 工业化评分 / Industrialization Scorecard
 
-评分标准（5 维度，每项 0-5 分，满分 25 分）：
+> **工业化软件 = 功能正确 + 性能稳定 + 安全可靠 + 可维护 + 可观测 + 可快速迭代**
+>
+> 评估框架参考 ISO/IEC 25010 与 Google SRE 实践，采用 6 维度加权评分（1–10 分）。
 
-| 维度 | 说明 |
-|------|------|
-| 结构化日志 | 使用 `get_logger(__name__)` + `extra={}` 结构化字段 |
-| Prometheus 指标 | Counter/Histogram/Gauge 埋点覆盖关键路径 |
-| 双语文档 | 中英文 docstring + 执行步骤 (Execution Steps) |
-| 输入校验 | 参数合法性检查，快速失败 + 清晰错误信息 |
-| 代码规范 | type hints、`from __future__ import annotations`、枚举/dataclass |
+### 13.1 加权评分表
 
-| 文件 | 日志 | 指标 | 文档 | 校验 | 规范 | 总分 | 状态 |
-|------|------|------|------|------|------|------|------|
-| `dp.py` | 5 | 5 | 5 | 5 | 5 | **25/25** | ✅ 标杆 |
-| `budget.py` | 5 | 5 | 4 | 4 | 5 | **23/25** | ✅ 达标 |
-| `profile.py` | 5 | 5 | 5 | 5 | 5 | **25/25** | ✅ 已补齐 |
-| `data_adapters.py` | 5 | 5 | 5 | 5 | 5 | **25/25** | ✅ 已补齐 |
+| 维度 | 权重 | 得分 | 说明 |
+|------|------|------|------|
+| 功能完整性 | 20% | 9/10 | Laplace/Gaussian/Discrete Laplace；count/sum/mean/histogram/vector/SQL；RDP accountant；多格式适配 |
+| 性能 | 15% | 8/10 | PyArrow/NumPy 向量化，scipy.sparse 优化；clip 在 seeing data 前确定敏感度 |
+| 可靠性 | 20% | 8/10 | 预算耗尽保护（PrivacyBudgetExhausted）；HMAC-SHA256 防篡改审计；输入校验完备 |
+| 安全性 | 15% | 9/10 | 校准噪声注入；显式 clip 约束敏感度；HMAC 审计日志；预算不可超支 |
+| 可维护性 | 15% | 7/10 | 双语文档完整，枚举/dataclass 齐全；但 dp.py 达 2824 行，建议按域拆分 |
+| 工程化 | 15% | 8/10 | Counter 指标 + 结构化日志 + 完整 CI；缺少延迟 Histogram |
+| **总分** | **100%** | **8.25** | |
 
-> 达标线：20/25。所有文件均已达标。
+### 13.2 结论
+
+**通过（Pass）**——满足工业化要求，可进入主线。
+
+### 13.3 亮点
+
+- Rényi DP accountant (RDP) 提供严格的隐私会计。
+- HMAC-SHA256 防篡改审计日志，可追溯每次查询。
+- 支持 6+ 种聚合类型，覆盖常见分析场景。
+- 多格式输入适配（PyArrow/NumPy/sparse/SecretFlow）。
+
+### 13.4 改进建议
+
+| 优先级 | 建议 | 影响维度 |
+|--------|------|----------|
+| P1 | 将 dp.py (2824行) 拆分为 dp_mechanisms.py / dp_accountant.py / dp_adapters.py | 可维护性 +1.5 |
+| P1 | 添加 `privacy_dp_duration_seconds` Histogram 指标 | 工程化 +0.5 |
+| P2 | 添加 OpenTelemetry span 埋点 | 工程化 +0.5 |
+| P3 | 补充差分隐私保证的形式化证明文档 | 安全性 +0.5 |

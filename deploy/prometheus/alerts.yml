@@ -1,0 +1,169 @@
+# Privacy Local Agent - Prometheus Alert Rules
+# 隐私本地代理 - Prometheus 告警规则
+#
+# 使用方法 / Usage:
+#   将此文件挂载到 Prometheus 的 rules 目录，并在 prometheus.yml 中引用：
+#   Mount this file to Prometheus rules directory and reference in prometheus.yml:
+#
+#   rule_files:
+#     - /etc/prometheus/rules/privacy-local-agent-alerts.yml
+
+groups:
+  - name: privacy-local-agent.availability
+    rules:
+      # 网关无健康后端节点 / Gateway has no healthy backend nodes
+      - alert: GatewayNoHealthyNodes
+        expr: privacy_gateway_healthy_nodes == 0
+        for: 1m
+        labels:
+          severity: critical
+          service: privacy-local-agent
+        annotations:
+          summary: "Gateway has no healthy backend nodes"
+          description: "The privacy-local-agent gateway has 0 healthy backend nodes for more than 1 minute. All requests will fail."
+          runbook_url: "https://github.com/your-org/privacy-local-agent/docs/gateway_balancer/ops.md"
+
+      # 网关健康节点数低于预期 / Gateway healthy nodes below expected
+      - alert: GatewayDegradedCapacity
+        expr: privacy_gateway_healthy_nodes < 2
+        for: 5m
+        labels:
+          severity: warning
+          service: privacy-local-agent
+        annotations:
+          summary: "Gateway running with degraded capacity"
+          description: "The privacy-local-agent gateway has fewer than 2 healthy backend nodes for more than 5 minutes."
+
+  - name: privacy-local-agent.latency
+    rules:
+      # REST 请求 P95 延迟过高 / REST request P95 latency too high
+      - alert: HighRequestLatencyP95
+        expr: histogram_quantile(0.95, sum(rate(privacy_request_duration_seconds_bucket[5m])) by (le)) > 1
+        for: 5m
+        labels:
+          severity: warning
+          service: privacy-local-agent
+        annotations:
+          summary: "High request latency (P95 > 1s)"
+          description: "The P95 request latency for privacy-local-agent is above 1 second for more than 5 minutes."
+
+      # 网关代理延迟过高 / Gateway proxy latency too high
+      - alert: HighGatewayLatencyP95
+        expr: histogram_quantile(0.95, sum(rate(privacy_gateway_latency_seconds_bucket[5m])) by (le)) > 2
+        for: 5m
+        labels:
+          severity: warning
+          service: privacy-local-agent
+        annotations:
+          summary: "High gateway proxy latency (P95 > 2s)"
+          description: "The P95 gateway proxy latency is above 2 seconds for more than 5 minutes."
+
+      # 分类操作延迟过高 / Classification operation latency too high
+      - alert: HighClassificationLatency
+        expr: histogram_quantile(0.95, sum(rate(privacy_classification_duration_seconds_bucket[5m])) by (le, operation)) > 5
+        for: 5m
+        labels:
+          severity: warning
+          service: privacy-local-agent
+        annotations:
+          summary: "High classification latency (P95 > 5s)"
+          description: "The P95 classification operation latency is above 5 seconds for more than 5 minutes."
+
+  - name: privacy-local-agent.errors
+    rules:
+      # 网关 5xx 错误率过高 / Gateway 5xx error rate too high
+      - alert: HighGatewayErrorRate
+        expr: |
+          sum(rate(privacy_gateway_requests_total{status=~"5.."}[5m]))
+          /
+          sum(rate(privacy_gateway_requests_total[5m]))
+          > 0.05
+        for: 5m
+        labels:
+          severity: critical
+          service: privacy-local-agent
+        annotations:
+          summary: "High gateway 5xx error rate (> 5%)"
+          description: "The gateway 5xx error rate is above 5% for more than 5 minutes."
+
+      # 认证拒绝率过高 / Authentication denial rate too high
+      - alert: HighAuthDenialRate
+        expr: |
+          sum(rate(privacy_auth_denials_total[5m]))
+          /
+          sum(rate(privacy_requests_total[5m]))
+          > 0.1
+        for: 5m
+        labels:
+          severity: warning
+          service: privacy-local-agent
+        annotations:
+          summary: "High authentication denial rate (> 10%)"
+          description: "The authentication denial rate is above 10% for more than 5 minutes. This may indicate an attack or misconfigured clients."
+
+      # 网关重试率过高 / Gateway retry rate too high
+      - alert: HighGatewayRetryRate
+        expr: |
+          sum(rate(privacy_gateway_retries_total[5m]))
+          /
+          sum(rate(privacy_gateway_requests_total[5m]))
+          > 0.1
+        for: 5m
+        labels:
+          severity: warning
+          service: privacy-local-agent
+        annotations:
+          summary: "High gateway retry rate (> 10%)"
+          description: "The gateway retry rate is above 10% for more than 5 minutes. Backend nodes may be unhealthy."
+
+  - name: privacy-local-agent.privacy
+    rules:
+      # 隐私预算即将耗尽 / Privacy budget nearly exhausted
+      - alert: PrivacyBudgetNearlyExhausted
+        expr: privacy_budget_remaining < 0.1
+        for: 1m
+        labels:
+          severity: warning
+          service: privacy-local-agent
+        annotations:
+          summary: "Privacy budget nearly exhausted"
+          description: "The privacy budget for namespace {{ $labels.namespace }} ({{ $labels.budget_type }}) is below 0.1. Consider resetting or increasing the budget."
+
+      # 隐私预算已耗尽 / Privacy budget exhausted
+      - alert: PrivacyBudgetExhausted
+        expr: privacy_budget_remaining <= 0
+        for: 1m
+        labels:
+          severity: critical
+          service: privacy-local-agent
+        annotations:
+          summary: "Privacy budget exhausted"
+          description: "The privacy budget for namespace {{ $labels.namespace }} ({{ $labels.budget_type }}) is exhausted. All DP queries will be rejected."
+
+  - name: privacy-local-agent.classification
+    rules:
+      # 分类审核队列积压 / Classification review queue backlog
+      - alert: ClassificationReviewQueueBacklog
+        expr: privacy_classification_review_queue_size > 100
+        for: 10m
+        labels:
+          severity: warning
+          service: privacy-local-agent
+        annotations:
+          summary: "Classification review queue backlog"
+          description: "The classification human-review queue has more than 100 pending entries for more than 10 minutes."
+
+      # LLM 分类器错误率过高 / LLM classifier error rate too high
+      - alert: HighLLMClassifierErrorRate
+        expr: |
+          sum(rate(privacy_classification_llm_total{status="error"}[5m]))
+          /
+          sum(rate(privacy_classification_llm_total[5m]))
+          > 0.1
+        for: 5m
+        labels:
+          severity: warning
+          service: privacy-local-agent
+        annotations:
+          summary: "High LLM classifier error rate (> 10%)"
+          description: "The LLM classifier error rate is above 10% for more than 5 minutes."

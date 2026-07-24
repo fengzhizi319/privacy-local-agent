@@ -12,12 +12,15 @@ per-method permission checks.
 
 from __future__ import annotations
 
+import time
 from typing import TYPE_CHECKING, Any
 
 import grpc
 from fastapi import Depends, HTTPException, Request
 
+from ..observability.logging_config import get_logger
 from ..observability.middleware import record_auth_denial
+from ..observability.metrics import AUTH_DURATION
 from .config import SecuritySettings, get_security_settings
 from .identity import (
     ANONYMOUS_IDENTITY,
@@ -29,6 +32,8 @@ from .identity import (
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+
+logger = get_logger(__name__)
 
 
 def _extract_bearer_token(header_value: str | None) -> str | None:
@@ -113,27 +118,45 @@ async def get_current_identity(request: Request) -> Identity:
     code can treat every request uniformly. Health endpoints are exempt when
     configured.
     """
+    start = time.perf_counter()
     settings = get_security_settings()
     if not settings.auth_enabled:
+        AUTH_DURATION.labels(result="disabled").observe(time.perf_counter() - start)
         return ANONYMOUS_IDENTITY
 
     path = request.url.path
     if is_health_path_or_method(path) and settings.health_no_auth:
+        AUTH_DURATION.labels(result="exempt").observe(time.perf_counter() - start)
         return Identity("internal", "health-probe", ["*"])
 
     token = _extract_bearer_token(request.headers.get("authorization"))
     if not token:
         record_auth_denial("unauthenticated")
+        AUTH_DURATION.labels(result="denied").observe(time.perf_counter() - start)
+        logger.warning(
+            "Authentication failed: missing credentials",
+            extra={"path": path, "reason": "missing_token"},
+        )
         raise HTTPException(status_code=401, detail="Unauthorized: missing credentials")
 
     identity = _authenticate_api_key(settings, token)
     if identity is None:
         record_auth_denial("unauthenticated")
+        AUTH_DURATION.labels(result="denied").observe(time.perf_counter() - start)
+        logger.warning(
+            "Authentication failed: invalid credentials",
+            extra={"path": path, "reason": "invalid_token"},
+        )
         raise HTTPException(status_code=401, detail="Unauthorized: invalid credentials")
 
     # Stash identity on request.state so rate limiting can reuse it without
     # re-authenticating.
     request.state.identity = identity
+    AUTH_DURATION.labels(result="success").observe(time.perf_counter() - start)
+    logger.debug(
+        "Authentication successful",
+        extra={"path": path, "identity_type": identity.service_type, "identity_name": identity.name},
+    )
     return identity
 
 
@@ -147,6 +170,10 @@ def require_permission(permission: str) -> Any:
     async def _checker(identity: Identity = Depends(get_current_identity)) -> None:
         if not identity.has_permission(permission):
             record_auth_denial("forbidden")
+            logger.warning(
+                "Authorization failed: insufficient scope",
+                extra={"required_permission": permission, "identity_name": identity.name},
+            )
             raise HTTPException(status_code=403, detail="Forbidden: insufficient scope")
 
     return Depends(_checker)
